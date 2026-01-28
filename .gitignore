@@ -10,6 +10,7 @@ backup/
 *.png
 nul
 docx/
+.vscode/
 
 # Nine1Bot
 .nine1bot/
