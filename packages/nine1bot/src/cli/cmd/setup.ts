@@ -1,6 +1,6 @@
 import * as prompts from '@clack/prompts'
 import { UI } from '../ui'
-import { saveConfig, configExists, getDefaultConfigPath } from '../../config/loader'
+import { saveConfig, configExists, getDefaultConfigPath, isInPath, addToPath, getInstallDir } from '../../config/loader'
 import type { Nine1BotConfig } from '../../config/schema'
 
 /**
@@ -40,6 +40,33 @@ export async function runSetup(): Promise<void> {
     server: { port: 4096, hostname: '127.0.0.1', openBrowser: true },
     auth: { enabled: false },
     tunnel: { enabled: false, provider: 'ngrok' },
+  }
+
+  // Step 0: PATH 设置（仅在未添加时询问）
+  let pathResult: { success: boolean; message: string; shellRc?: string } | null = null
+
+  if (!isInPath()) {
+    const addToPathChoice = await prompts.confirm({
+      message: 'Add nine1bot to PATH? (recommended - allows running from any directory)',
+      initialValue: true,
+    })
+
+    if (prompts.isCancel(addToPathChoice)) {
+      throw new UI.CancelledError()
+    }
+
+    if (addToPathChoice) {
+      const spinner = prompts.spinner()
+      spinner.start('Adding to PATH...')
+
+      pathResult = await addToPath()
+
+      if (pathResult.success) {
+        spinner.stop(pathResult.message)
+      } else {
+        spinner.stop(`Failed to add to PATH: ${pathResult.message}`)
+      }
+    }
   }
 
   // Step 1: Server 配置
@@ -217,6 +244,16 @@ export async function runSetup(): Promise<void> {
   }
 
   UI.empty()
+
+  // 显示完成信息
+  if (pathResult?.success && pathResult.shellRc) {
+    prompts.log.info(`Run 'source ${pathResult.shellRc}' or restart your terminal`)
+    prompts.log.info("Then use 'nine1bot' from anywhere")
+  } else if (pathResult?.success && process.platform === 'win32') {
+    prompts.log.info('Please restart your terminal for PATH changes to take effect')
+    prompts.log.info("Then use 'nine1bot' from anywhere")
+  }
+
   prompts.outro("Setup complete! Run 'nine1bot' to start.")
 }
 

@@ -17,3 +17,7 @@ docx/
 natapp
 natapp.exe
 *.natapp
+
+# Build artifacts
+build/
+runtime/

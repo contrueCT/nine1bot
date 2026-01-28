@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v1.0.0)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: arm64
+          - os: macos-13
+            platform: darwin
+            arch: x64
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+          - os: windows-latest
+            platform: windows
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.platform }}-${{ matrix.arch }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies (opencode)
+        run: |
+          cd opencode
+          bun install --frozen-lockfile || bun install
+
+      - name: Install dependencies (nine1bot)
+        run: |
+          cd packages/nine1bot
+          bun install --frozen-lockfile || bun install
+
+      - name: Install dependencies (web)
+        run: |
+          cd web
+          bun install --frozen-lockfile || bun install
+
+      - name: Build web frontend
+        run: |
+          cd web
+          bun run build
+
+      - name: Download Bun runtime
+        shell: bash
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/download-bun.sh ${{ matrix.platform }} ${{ matrix.arch }} build/runtime
+
+      - name: Package release
+        shell: bash
+        run: |
+          # 移动 runtime 到正确位置
+          mkdir -p runtime
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            cp build/runtime/bun.exe runtime/
+          else
+            cp build/runtime/bun runtime/
+          fi
+          ./scripts/package.sh ${{ matrix.platform }} ${{ matrix.arch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nine1bot-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/nine1bot-*
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          find artifacts -type f -ls
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Nine1Bot ${{ github.event.inputs.tag || github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          files: |
+            artifacts/nine1bot-*/*
+          body: |
+            ## Nine1Bot Release
+
+            ### Downloads
+
+            | Platform | Architecture | Download |
+            |----------|--------------|----------|
+            | Linux | x64 | `nine1bot-linux-x64-*.tar.gz` |
+            | Linux | ARM64 | `nine1bot-linux-arm64-*.tar.gz` |
+            | macOS | Intel | `nine1bot-darwin-x64-*.tar.gz` |
+            | macOS | Apple Silicon | `nine1bot-darwin-arm64-*.tar.gz` |
+            | Windows | x64 | `nine1bot-windows-x64-*.zip` |
+
+            ### Installation
+
+            ```bash
+            # Linux/macOS
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/nine1bot-linux-x64-${{ github.ref_name }}.tar.gz | tar -xz
+            cd nine1bot-linux-x64
+            ./nine1bot
+            ```
+
+            ### What's Changed
+
+            See the [commits](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for details.
