@@ -30,7 +30,8 @@ export function useSession() {
       const session = await api.createSession(directory)
       currentSession.value = session
       messages.value = []
-      await loadSessions(directory)
+      // 重新加载所有会话，不过滤目录
+      await loadSessions()
       return session
     } catch (error) {
       console.error('Failed to create session:', error)
@@ -56,7 +57,7 @@ export function useSession() {
   // 用于防止用户消息重复
   const seenUserMessageIds = new Set<string>()
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, model?: { providerID: string; modelID: string }) {
     if (!currentSession.value || isStreaming.value) return
 
     isStreaming.value = true
@@ -72,7 +73,8 @@ export function useSession() {
         (error) => {
           console.error('Stream error:', error)
           isStreaming.value = false
-        }
+        },
+        model
       )
     } finally {
       isStreaming.value = false
@@ -89,22 +91,24 @@ export function useSession() {
         if (properties.message) {
           const msg = properties.message as Message
           streamingMessage.value = msg
+          const msgId = msg.info.id
+          const msgRole = msg.info.role
 
-          if (msg.role === 'user') {
+          if (msgRole === 'user') {
             // 使用消息 ID 去重
-            if (seenUserMessageIds.has(msg.id)) {
+            if (seenUserMessageIds.has(msgId)) {
               return
             }
-            seenUserMessageIds.add(msg.id)
+            seenUserMessageIds.add(msgId)
 
             // 检查是否已存在相同 ID 的消息
-            const existingIndex = messages.value.findIndex(m => m.id === msg.id)
+            const existingIndex = messages.value.findIndex(m => m.info.id === msgId)
             if (existingIndex === -1) {
               messages.value.push(msg)
             }
           } else {
             // assistant 消息
-            const existingIndex = messages.value.findIndex(m => m.id === msg.id)
+            const existingIndex = messages.value.findIndex(m => m.info.id === msgId)
             if (existingIndex !== -1) {
               // 合并 parts
               const existingParts = messages.value[existingIndex].parts
@@ -123,12 +127,11 @@ export function useSession() {
         // 消息更新 - 仅更新已存在的消息
         if (properties.info) {
           const info = properties.info
-          const index = messages.value.findIndex(m => m.id === info.id)
+          const index = messages.value.findIndex(m => m.info.id === info.id)
           if (index !== -1) {
             messages.value[index] = {
               ...messages.value[index],
-              ...info,
-              parts: messages.value[index].parts
+              info: { ...messages.value[index].info, ...info }
             }
           }
           // 注意：不再在 message.updated 中创建新消息，避免重复
@@ -141,16 +144,18 @@ export function useSession() {
           const part = properties.part as MessagePart
           const messageID = part.messageID
           if (messageID) {
-            let messageIndex = messages.value.findIndex(m => m.id === messageID)
+            let messageIndex = messages.value.findIndex(m => m.info.id === messageID)
 
             // 如果消息不存在，创建一个新的 assistant 消息
             if (messageIndex === -1) {
               const newMessage: Message = {
-                id: messageID,
-                sessionID: part.sessionID || currentSession.value?.id || '',
-                role: 'assistant',
-                parts: [],
-                createdAt: new Date().toISOString()
+                info: {
+                  id: messageID,
+                  sessionID: part.sessionID || currentSession.value?.id || '',
+                  role: 'assistant',
+                  time: { created: Date.now() }
+                },
+                parts: []
               }
               messages.value.push(newMessage)
               messageIndex = messages.value.length - 1
@@ -194,7 +199,9 @@ export function useSession() {
 
     eventSource = api.subscribeEvents((event: SSEEvent) => {
       // 只处理当前会话的事件
-      const sessionID = event.properties?.sessionID || event.properties?.message?.sessionID || event.properties?.part?.sessionID
+      const sessionID = event.properties?.sessionID
+        || event.properties?.message?.info?.sessionID
+        || event.properties?.part?.sessionID
       if (sessionID && currentSession.value && sessionID !== currentSession.value.id) {
         return
       }
@@ -202,7 +209,7 @@ export function useSession() {
       // 在流式响应期间，跳过用户消息事件（由 POST 响应处理）
       if (isStreaming.value && event.type === 'message.created') {
         const msg = event.properties?.message
-        if (msg?.role === 'user') {
+        if (msg?.info?.role === 'user') {
           return
         }
       }

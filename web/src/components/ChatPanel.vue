@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
+import { MessagesSquare } from 'lucide-vue-next'
 import type { Message } from '../api/client'
 import MessageItem from './MessageItem.vue'
 
@@ -11,129 +12,119 @@ const props = defineProps<{
 
 const scrollContainer = ref<HTMLDivElement>()
 
-// 自动滚动到底部
 watch(() => props.messages, async () => {
   await nextTick()
-  if (scrollContainer.value) {
-    scrollContainer.value.scrollTo({
-      top: scrollContainer.value.scrollHeight,
-      behavior: 'smooth'
-    })
-  }
+  scrollToBottom()
 }, { deep: true })
 
-// 流式消息更新时也滚动
 watch(() => props.isStreaming, async (streaming) => {
   if (streaming) {
     await nextTick()
-    if (scrollContainer.value) {
-      scrollContainer.value.scrollTo({
+    scrollToBottom()
+  }
+})
+
+function scrollToBottom() {
+  if (scrollContainer.value) {
+    // Check if user is already near bottom to avoid annoying auto-scroll if they are reading history
+    const isNearBottom = scrollContainer.value.scrollHeight - scrollContainer.value.scrollTop - scrollContainer.value.clientHeight < 100
+    
+    if (isNearBottom || props.messages.length <= 1) { 
+       // Always scroll on simple cases
+       scrollContainer.value.scrollTo({
         top: scrollContainer.value.scrollHeight,
         behavior: 'smooth'
       })
     }
   }
-})
+}
 </script>
 
 <template>
-  <div class="chat-panel" ref="scrollContainer">
-    <div v-if="messages.length === 0 && !isLoading" class="empty-state">
-      <div class="empty-icon">💬</div>
-      <div class="empty-text">开始一个新对话</div>
-      <div class="empty-hint">输入消息与 Nine1Bot 交互</div>
+  <div class="chat-messages custom-scrollbar" ref="scrollContainer">
+    <!-- Empty State -->
+    <div v-if="messages.length === 0 && !isLoading" class="chat-empty">
+      <div class="empty-state-icon glass-icon">
+        <MessagesSquare :size="48" stroke-width="1.5" />
+      </div>
+      <p class="empty-state-title">Hello, I'm Nine1Bot</p>
+      <p class="empty-state-description">How can I help you today?</p>
     </div>
 
-    <div v-else class="messages">
+    <!-- Messages -->
+    <div class="messages-container" v-else>
       <MessageItem
         v-for="message in messages"
-        :key="message.id"
+        :key="message.info.id"
         :message="message"
       />
 
-      <div v-if="isStreaming" class="streaming-placeholder">
-        <div class="typing-indicator">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
-      </div>
+      <!-- Streaming Indicator is handled inside the last Agent message usually, or as a typing bubble -->
+      <!-- Added extra space at bottom for scrolling past the input box -->
+      <div class="bottom-spacer"></div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.chat-panel {
+.chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 0;
+  scroll-behavior: smooth;
 }
 
-.empty-state {
+.messages-container {
+  padding: 24px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-empty {
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100%;
+  padding: 20px;
   text-align: center;
+  animation: fade-in 0.8s ease;
 }
 
-.empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-}
-
-.empty-text {
-  font-size: 18px;
-  font-weight: 500;
-  color: var(--text-primary);
-  margin-bottom: 8px;
-}
-
-.empty-hint {
-  font-size: 14px;
-  color: var(--text-muted);
-}
-
-.messages {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.streaming-placeholder {
+.glass-icon {
+  width: 96px;
+  height: 96px;
+  background: var(--bg-tertiary);
+  border-radius: 24px;
   display: flex;
   align-items: center;
-  padding: 12px 16px;
+  justify-content: center;
+  margin-bottom: 24px;
+  color: var(--accent);
+  box-shadow: var(--shadow-glow);
 }
 
-.typing-indicator {
-  display: flex;
-  gap: 4px;
+.empty-state-title {
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
-.typing-indicator span {
-  width: 8px;
-  height: 8px;
-  background: var(--text-muted);
-  border-radius: 50%;
-  animation: bounce 1.4s infinite ease-in-out both;
+.empty-state-description {
+  color: var(--text-secondary);
+  font-size: 16px;
 }
 
-.typing-indicator span:nth-child(1) {
-  animation-delay: -0.32s;
+.bottom-spacer {
+  height: 48px;
 }
 
-.typing-indicator span:nth-child(2) {
-  animation-delay: -0.16s;
-}
-
-@keyframes bounce {
-  0%, 80%, 100% {
-    transform: scale(0);
-  }
-  40% {
-    transform: scale(1);
-  }
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 </style>
+

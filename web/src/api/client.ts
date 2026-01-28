@@ -2,26 +2,60 @@ const BASE_URL = ''  // 使用相对路径，由 vite proxy 或同源处理
 
 export interface Session {
   id: string
-  title?: string
+  slug?: string
+  title: string
   directory: string
-  createdAt: string
+  projectID?: string
+  parentID?: string
+  time: {
+    created: number
+    updated: number
+    archived?: number
+  }
+  // Computed field for display
+  createdAt?: string
 }
 
+// 后端返回格式: { info: MessageInfo, parts: Part[] }
 export interface Message {
+  info: MessageInfo
+  parts: MessagePart[]
+}
+
+export interface MessageInfo {
   id: string
   sessionID: string
   role: 'user' | 'assistant'
-  parts: MessagePart[]
-  createdAt: string
+  time: {
+    created: number
+    completed?: number
+  }
+  // user message fields
+  agent?: string
+  model?: { providerID: string; modelID: string }
+  // assistant message fields
+  parentID?: string
+  modelID?: string
+  providerID?: string
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: { read: number; write: number }
+  }
+  error?: any
 }
 
 export interface MessagePart {
   id: string
-  sessionID?: string
-  messageID?: string
-  type: 'text' | 'tool' | 'step-start' | 'step-finish' | 'reasoning'
+  sessionID: string
+  messageID: string
+  type: 'text' | 'tool' | 'step-start' | 'step-finish' | 'reasoning' | 'file' | 'snapshot' | 'patch' | 'agent' | 'retry' | 'compaction' | 'subtask'
   // text part
   text?: string
+  synthetic?: boolean
+  ignored?: boolean
   // tool part
   tool?: string
   callID?: string
@@ -31,18 +65,21 @@ export interface MessagePart {
   reason?: string
   cost?: number
   tokens?: any
-  // reasoning
+  // reasoning / text time
   time?: { start?: number; end?: number }
+  metadata?: Record<string, any>
 }
 
 export interface ToolState {
   status: 'pending' | 'running' | 'completed' | 'error'
   input?: Record<string, any>
-  output?: any
+  raw?: string
+  output?: string
   title?: string
   error?: string
-  time?: { start?: number; end?: number }
+  time?: { start?: number; end?: number; compacted?: number }
   metadata?: Record<string, any>
+  attachments?: any[]
 }
 
 export interface FileItem {
@@ -65,21 +102,31 @@ export const api = {
     if (directory) params.set('directory', directory)
     const res = await fetch(`${BASE_URL}/session?${params}`)
     const data = await res.json()
-    return Array.isArray(data) ? data : (data.data || [])
+    const sessions = Array.isArray(data) ? data : (data.data || [])
+    // 添加 createdAt 字段用于显示
+    return sessions.map((s: Session) => ({
+      ...s,
+      createdAt: s.time ? new Date(s.time.created).toISOString() : undefined
+    }))
   },
 
   // 创建会话
-  async createSession(directory: string): Promise<Session> {
+  async createSession(directory?: string): Promise<Session> {
     const res = await fetch(`${BASE_URL}/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ directory })
+      body: JSON.stringify(directory ? { directory } : {})
     })
     const data = await res.json()
-    return data.data || data
+    const session = data.data || data
+    return {
+      ...session,
+      createdAt: session.time ? new Date(session.time.created).toISOString() : undefined
+    }
   },
 
   // 获取消息历史
+  // 后端返回 { info: MessageInfo, parts: Part[] }[]
   async getMessages(sessionId: string): Promise<Message[]> {
     const res = await fetch(`${BASE_URL}/session/${sessionId}/message`)
     const data = await res.json()
@@ -91,15 +138,21 @@ export const api = {
     sessionId: string,
     content: string,
     onEvent: (event: SSEEvent) => void,
-    onError?: (error: Error) => void
+    onError?: (error: Error) => void,
+    model?: { providerID: string; modelID: string }
   ): Promise<void> {
     try {
+      const body: Record<string, any> = {
+        parts: [{ type: 'text', text: content }]
+      }
+      // 如果指定了模型，添加到请求体
+      if (model) {
+        body.model = model
+      }
       const res = await fetch(`${BASE_URL}/session/${sessionId}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          parts: [{ type: 'text', text: content }]
-        })
+        body: JSON.stringify(body)
       })
 
       if (!res.ok) {
@@ -134,16 +187,12 @@ export const api = {
           }
         }
       } else {
-        // 处理普通 JSON 响应
+        // 处理普通 JSON 响应 - 后端返回 { info, parts }
         const data = await res.json()
         if (data.info) {
-          // 构造消息事件
           const message: Message = {
-            id: data.info.id,
-            sessionID: data.info.sessionID,
-            role: data.info.role,
-            parts: data.parts || [],
-            createdAt: new Date(data.info.time?.created || Date.now()).toISOString()
+            info: data.info,
+            parts: data.parts || []
           }
           onEvent({ type: 'message.created', properties: { message } })
           onEvent({ type: 'message.completed', properties: { message } })
@@ -203,4 +252,224 @@ export const api = {
 export interface SSEEvent {
   type: string
   properties: Record<string, any>
+}
+
+// === MCP Types ===
+export interface McpServer {
+  name: string
+  // 后端状态: connected, disabled, failed, needs_auth, needs_client_registration
+  status: 'connected' | 'disabled' | 'failed' | 'needs_auth' | 'needs_client_registration' | 'connecting'
+  error?: string
+  tools?: McpTool[]
+  resources?: McpResource[]
+}
+
+export interface McpTool {
+  name: string
+  description?: string
+  inputSchema?: Record<string, any>
+}
+
+export interface McpResource {
+  uri: string
+  name?: string
+  description?: string
+  mimeType?: string
+}
+
+// === Provider Types ===
+export interface Provider {
+  id: string
+  name: string
+  models: Model[]
+  authenticated: boolean
+  authMethods?: AuthMethod[]
+}
+
+export interface Model {
+  id: string
+  name: string
+  contextWindow?: number
+  maxOutputTokens?: number
+}
+
+export interface AuthMethod {
+  type: 'oauth' | 'apiKey'
+  name?: string
+}
+
+// === Skill Types ===
+export interface Skill {
+  name: string
+  description?: string
+  source: 'builtin' | 'plugin'
+}
+
+// === Config Types ===
+export interface Config {
+  // model 格式: "provider/model", 如 "anthropic/claude-2"
+  model?: string
+  directory?: string
+  [key: string]: any
+}
+
+// === Extended API ===
+export const mcpApi = {
+  // 获取所有 MCP 服务器状态
+  // 后端返回 Record<string, MCP.Status>，转换为数组
+  async list(): Promise<McpServer[]> {
+    const res = await fetch(`${BASE_URL}/mcp`)
+    const data = await res.json()
+    // 后端返回 { serverName: { status, tools, ... }, ... }
+    if (typeof data === 'object' && !Array.isArray(data)) {
+      return Object.entries(data).map(([name, info]: [string, any]) => ({
+        name,
+        status: info.status || 'disconnected',
+        error: info.error,
+        tools: info.tools || [],
+        resources: info.resources || []
+      }))
+    }
+    return []
+  },
+
+  // 添加新 MCP 服务器
+  async add(config: { name: string; command?: string; args?: string[]; env?: Record<string, string> }): Promise<McpServer> {
+    const res = await fetch(`${BASE_URL}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: config.name, config })
+    })
+    const data = await res.json()
+    return data
+  },
+
+  // 连接 MCP 服务器
+  async connect(name: string): Promise<void> {
+    await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}/connect`, {
+      method: 'POST'
+    })
+  },
+
+  // 断开 MCP 服务器
+  async disconnect(name: string): Promise<void> {
+    await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}/disconnect`, {
+      method: 'POST'
+    })
+  },
+
+  // 启动 OAuth 认证
+  async startAuth(name: string): Promise<{ url: string }> {
+    const res = await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}/auth`, {
+      method: 'POST'
+    })
+    const data = await res.json()
+    return { url: data.authorizationUrl || data.url }
+  }
+}
+
+export const skillApi = {
+  // 获取所有可用技能
+  async list(): Promise<Skill[]> {
+    const res = await fetch(`${BASE_URL}/skill`)
+    const data = await res.json()
+    return Array.isArray(data) ? data : (data.data || [])
+  }
+}
+
+export const providerApi = {
+  // 获取所有提供者和模型
+  // 后端返回 { all: Provider[], default: Record<string, string>, connected: string[] }
+  async list(): Promise<{ providers: Provider[]; defaults: Record<string, string>; connected: string[] }> {
+    const res = await fetch(`${BASE_URL}/provider`)
+    const data = await res.json()
+    // 后端返回 { all: [...], default: {...}, connected: [...] }
+    const providerList = data.all || data
+    const connected = data.connected || []
+    const defaults = data.default || {}
+    const connectedSet = new Set(connected)
+
+    const providers = Array.isArray(providerList)
+      ? providerList.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          models: Object.values(p.models || {}).map((m: any) => ({
+            id: m.id,
+            name: m.name || m.id,
+            contextWindow: m.context,
+            maxOutputTokens: m.maxOutput
+          })),
+          authenticated: connectedSet.has(p.id)
+        }))
+      : []
+
+    return { providers, defaults, connected }
+  },
+
+  // 获取认证方法
+  // 后端返回 Record<string, AuthMethod[]>
+  async getAuthMethods(): Promise<Record<string, AuthMethod[]>> {
+    const res = await fetch(`${BASE_URL}/provider/auth`)
+    const data = await res.json()
+    return data
+  },
+
+  // 启动 OAuth - 需要 method index
+  async startOAuth(providerId: string, methodIndex: number = 0): Promise<{ url: string }> {
+    const res = await fetch(`${BASE_URL}/provider/${encodeURIComponent(providerId)}/oauth/authorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method: methodIndex })
+    })
+    const data = await res.json()
+    return { url: data.url || data.authorizationUrl }
+  },
+
+  // 完成 OAuth 回调
+  async completeOAuth(providerId: string, code: string, methodIndex: number = 0): Promise<void> {
+    await fetch(`${BASE_URL}/provider/${encodeURIComponent(providerId)}/oauth/callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method: methodIndex, code })
+    })
+  }
+}
+
+export const configApi = {
+  // 获取当前配置
+  async get(): Promise<Config> {
+    const res = await fetch(`${BASE_URL}/config`)
+    const data = await res.json()
+    return data
+  },
+
+  // 更新配置
+  async update(config: Partial<Config>): Promise<Config> {
+    const res = await fetch(`${BASE_URL}/config`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    })
+    const data = await res.json()
+    return data
+  }
+}
+
+export const authApi = {
+  // 设置 API Key
+  // 后端期望 Auth.Info 格式: { type: 'api', key: string }
+  async setApiKey(providerId: string, apiKey: string): Promise<void> {
+    await fetch(`${BASE_URL}/auth/${encodeURIComponent(providerId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'api', key: apiKey })
+    })
+  },
+
+  // 移除认证
+  async remove(providerId: string): Promise<void> {
+    await fetch(`${BASE_URL}/auth/${encodeURIComponent(providerId)}`, {
+      method: 'DELETE'
+    })
+  }
 }

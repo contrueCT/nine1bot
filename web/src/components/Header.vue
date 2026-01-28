@@ -1,169 +1,325 @@
 <script setup lang="ts">
+import { ref, onMounted, onUnmounted } from 'vue'
+import { Sun, Moon, Settings, Plus, Square, Cpu, ChevronDown, PanelLeftOpen, Check } from 'lucide-vue-next'
 import type { Session } from '../api/client'
+import { useSettings } from '../composables/useSettings'
+import { useTheme } from '../composables/useTheme'
 
 defineProps<{
   session: Session | null
   directory: string
   isStreaming: boolean
+  sidebarCollapsed: boolean
 }>()
 
 const emit = defineEmits<{
   'toggle-sidebar': []
   'new-session': []
   'abort': []
+  'open-settings': []
 }>()
+
+const {
+  providers,
+  currentProvider,
+  currentModel,
+  loadProviders,
+  loadConfig,
+  selectModel: settingsSelectModel
+} = useSettings()
+
+const { theme, toggleTheme } = useTheme()
+
+const showModelDropdown = ref(false)
+const dropdownRef = ref<HTMLElement>()
+
+onMounted(async () => {
+  // 先加载 providers（包含 connected 和 defaults），再加载配置
+  await loadProviders()
+  await loadConfig()
+  document.addEventListener('click', handleClickOutside)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutside)
+})
+
+function handleClickOutside(e: MouseEvent) {
+  if (dropdownRef.value && !dropdownRef.value.contains(e.target as Node)) {
+    showModelDropdown.value = false
+  }
+}
+
+async function selectModel(providerId: string, modelId: string) {
+  await settingsSelectModel(providerId, modelId)
+  showModelDropdown.value = false
+}
+
+function getCurrentModelName(): string {
+  // 先根据 currentProvider 找到对应的 provider
+  if (currentProvider.value) {
+    const provider = providers.value.find(p => p.id === currentProvider.value)
+    if (provider) {
+      const model = provider.models.find(m => m.id === currentModel.value)
+      if (model) return model.name || model.id
+    }
+  }
+  // 如果没有匹配的，尝试在所有 provider 中查找
+  for (const provider of providers.value) {
+    const model = provider.models.find(m => m.id === currentModel.value)
+    if (model) return model.name || model.id
+  }
+  return currentModel.value || '选择模型'
+}
 </script>
 
 <template>
-  <header class="header">
+  <header class="header glass-header">
     <div class="header-left">
-      <button class="icon-btn" @click="emit('toggle-sidebar')" title="切换侧边栏">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 12h18M3 6h18M3 18h18"/>
-        </svg>
+      <button
+        v-if="sidebarCollapsed"
+        class="btn btn-ghost btn-icon"
+        @click="emit('toggle-sidebar')"
+        title="展开侧边栏"
+      >
+        <PanelLeftOpen :size="20" />
       </button>
-      <div class="logo">
-        <span class="logo-text">Nine1Bot</span>
+
+      <div class="session-info" v-if="session">
+        <span class="session-title">{{ session.title || '新会话' }}</span>
+        <span class="session-dir text-muted text-xs">{{ directory }}</span>
       </div>
     </div>
 
     <div class="header-center">
-      <span class="directory mono" v-if="directory">{{ directory }}</span>
-      <span class="session-title" v-if="session?.title">/ {{ session.title }}</span>
+      <!-- Model Selector -->
+      <div class="dropdown" ref="dropdownRef">
+        <button class="dropdown-trigger model-trigger" @click="showModelDropdown = !showModelDropdown">
+          <Cpu :size="16" class="model-icon" />
+          <span class="model-name">{{ getCurrentModelName() }}</span>
+          <ChevronDown :size="14" class="chevron" :class="{ open: showModelDropdown }" />
+        </button>
+        <div class="dropdown-menu dropdown-menu-scrollable glass-dropdown" v-if="showModelDropdown">
+          <template v-for="provider in providers.filter(p => p.authenticated)" :key="provider.id">
+            <div class="dropdown-label">{{ provider.name }}</div>
+            <div
+              v-for="model in provider.models"
+              :key="model.id"
+              class="dropdown-item"
+              :class="{ active: currentProvider === provider.id && currentModel === model.id }"
+              @click="selectModel(provider.id, model.id)"
+            >
+              <div class="dropdown-item-text">
+                <span class="model-id">{{ model.name || model.id }}</span>
+              </div>
+              <Check v-if="currentProvider === provider.id && currentModel === model.id" :size="14" class="check-icon" />
+            </div>
+          </template>
+          <div v-if="providers.filter(p => p.authenticated).length === 0" class="dropdown-item text-muted">
+            暂无已认证的模型
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="header-right">
-      <span v-if="isStreaming" class="streaming-indicator">
-        <span class="dot"></span>
-        运行中
-      </span>
+      <!-- Streaming Indicator -->
+      <div v-if="isStreaming" class="streaming-badge">
+        <span class="streaming-dot"></span>
+        <span class="streaming-text">生成中</span>
+      </div>
+
+      <!-- Abort Button -->
       <button
         v-if="isStreaming"
-        class="abort-btn"
+        class="btn btn-ghost abort-btn"
         @click="emit('abort')"
-        title="停止"
       >
-        停止
+        <Square :size="14" fill="currentColor" />
+        <span>停止</span>
       </button>
-      <button class="new-session-btn" @click="emit('new-session')" title="新建会话">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 5v14M5 12h14"/>
-        </svg>
-        新建
+
+       <!-- Theme Toggle -->
+       <button class="btn btn-ghost btn-icon" @click="toggleTheme" :title="theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'">
+        <Sun v-if="theme === 'dark'" :size="20" />
+        <Moon v-else :size="20" />
+      </button>
+
+      <!-- Settings Button -->
+      <button class="btn btn-ghost btn-icon" @click="emit('open-settings')" title="设置">
+        <Settings :size="20" />
+      </button>
+
+      <!-- New Session Button -->
+      <button class="btn btn-primary new-btn" @click="emit('new-session')">
+        <Plus :size="18" />
+        <span>新建</span>
       </button>
     </div>
   </header>
 </template>
 
 <style scoped>
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
-  height: 48px;
+.glass-header {
+  background: var(--bg-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-glass);
+  z-index: 10;
 }
 
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.icon-btn {
-  padding: 6px;
-  border-radius: 6px;
-  color: var(--text-secondary);
-  transition: all 0.15s;
-}
-
-.icon-btn:hover {
+.model-trigger {
   background: var(--bg-tertiary);
-  color: var(--text-primary);
-}
-
-.logo {
+  border: 1px solid var(--border-default);
+  padding: 6px 16px;
+  border-radius: var(--radius-full);
   display: flex;
   align-items: center;
   gap: 8px;
+  transition: all var(--transition-fast);
 }
 
-.logo-text {
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
+.model-trigger:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-sm);
 }
 
-.header-center {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.model-name {
+  font-weight: 500;
   font-size: 13px;
-  color: var(--text-secondary);
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.directory {
-  font-size: 12px;
+.chevron {
+  opacity: 0.5;
+  transition: transform var(--transition-fast);
+}
+
+.chevron.open {
+  transform: rotate(180deg);
+}
+
+.glass-dropdown {
+  background: var(--bg-elevated); /* Solid fallback for complex dropdowns or high opacity */
+  background: var(--bg-glass-strong);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-default);
+  box-shadow: var(--shadow-lg);
+  border-radius: var(--radius-lg);
+  padding: 6px;
+  margin-top: 8px;
+  min-width: 240px;
+}
+
+.dropdown-item {
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-bottom: 2px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dropdown-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.dropdown-item.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.session-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
 .session-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.session-dir {
+  font-family: var(--font-mono);
+  opacity: 0.7;
+}
+
+.dropdown-label {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 700;
   color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
 }
 
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.dropdown-label:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
 }
 
-.streaming-indicator {
+.streaming-badge {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--accent-subtle);
+  border-radius: var(--radius-full);
   font-size: 12px;
-  color: var(--accent-blue);
+  font-weight: 600;
+  color: var(--accent);
+  box-shadow: 0 0 10px var(--accent-subtle);
 }
 
-.dot {
-  width: 6px;
-  height: 6px;
-  background: var(--accent-blue);
+.streaming-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
   border-radius: 50%;
-  animation: pulse 1s infinite;
+  animation: pulse 1.5s infinite;
+  box-shadow: 0 0 8px var(--accent);
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
 }
 
 .abort-btn {
-  padding: 4px 10px;
-  font-size: 12px;
-  background: var(--accent-red);
-  color: white;
-  border-radius: 4px;
-  transition: opacity 0.15s;
+  color: var(--error);
+  font-size: 13px;
+  gap: 6px;
 }
 
 .abort-btn:hover {
-  opacity: 0.9;
+  background: var(--error-subtle);
 }
 
-.new-session-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  font-size: 13px;
-  background: var(--bg-tertiary);
-  border-radius: 6px;
-  transition: background 0.15s;
+.dropdown-menu-scrollable {
+  max-height: 400px;
+  overflow-y: auto;
 }
 
-.new-session-btn:hover {
-  background: var(--border-color);
+.new-btn {
+  border-radius: var(--radius-full);
+  padding-left: 16px;
+  padding-right: 20px;
+  box-shadow: 0 4px 12px var(--accent-glow);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  border: none;
+}
+
+.new-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px var(--accent-glow);
 }
 </style>
+

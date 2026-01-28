@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { Send, Square } from 'lucide-vue-next'
 
 const props = defineProps<{
   disabled: boolean
@@ -21,7 +22,6 @@ function handleSend() {
   emit('send', content)
   input.value = ''
 
-  // 重置高度
   if (textareaRef.value) {
     textareaRef.value.style.height = 'auto'
   }
@@ -38,7 +38,6 @@ function handleKeydown(e: KeyboardEvent) {
   }
 }
 
-// 自动调整高度
 function adjustHeight() {
   if (textareaRef.value) {
     textareaRef.value.style.height = 'auto'
@@ -50,118 +49,138 @@ watch(input, adjustHeight)
 </script>
 
 <template>
-  <div class="input-box">
-    <div class="input-container">
-      <textarea
-        ref="textareaRef"
-        v-model="input"
-        :disabled="disabled && !isStreaming"
-        :placeholder="isStreaming ? '按 Enter 停止...' : '输入消息... (Shift+Enter 换行)'"
-        rows="1"
-        @keydown="handleKeydown"
-      ></textarea>
-      <button
-        class="send-btn"
-        :class="{ abort: isStreaming }"
-        :disabled="disabled && !isStreaming"
-        @click="isStreaming ? emit('abort') : handleSend()"
-      >
-        <template v-if="isStreaming">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="6" y="6" width="12" height="12" rx="2"/>
-          </svg>
-        </template>
-        <template v-else>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-          </svg>
-        </template>
-      </button>
+  <div class="input-container">
+    <div class="input-glass-wrapper">
+      <div class="input-box glass-input">
+        <textarea
+          ref="textareaRef"
+          v-model="input"
+          :disabled="disabled && !isStreaming"
+          :placeholder="isStreaming ? '按 Enter 停止响应...' : 'Message Nine1Bot...'"
+          rows="1"
+          @keydown="handleKeydown"
+          class="custom-textarea"
+        ></textarea>
+        <div class="input-actions">
+          <button
+            class="action-btn"
+            :class="isStreaming ? 'abort-btn' : 'send-btn'"
+            :disabled="(!input.trim() && !isStreaming) || (disabled && !isStreaming)"
+            @click="isStreaming ? emit('abort') : handleSend()"
+            :title="isStreaming ? '停止' : '发送'"
+          >
+            <Square v-if="isStreaming" :size="16" fill="currentColor" />
+            <Send v-else :size="18" />
+          </button>
+        </div>
+      </div>
     </div>
-    <div class="input-hint">
-      <span v-if="isStreaming" class="streaming-hint">Agent 正在响应...</span>
-      <span v-else class="shortcut-hint">Enter 发送 · Shift+Enter 换行</span>
+    <div class="input-footer">
+      <div class="input-hint text-xs text-muted">
+        Nine1Bot may display inaccurate info, including about people, so double-check its responses.
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.input-box {
-  padding: 16px 20px;
-  background: var(--bg-secondary);
-  border-top: 1px solid var(--border-color);
+.input-container {
+  width: 100%;
+  max-width: 800px; /* Limit width for better readability on large screens */
+  margin: 0 auto;
+  position: relative;
+  padding: 0 var(--space-md);
 }
 
-.input-container {
+.input-glass-wrapper {
+  position: relative;
+  border-radius: 24px; /* More capsule-like */
+  background: var(--bg-tertiary); /* Fallback */
+  background: var(--bg-glass-strong);
+  box-shadow: var(--shadow-lg);
+  transition: all var(--transition-normal);
+  border: 1px solid var(--border-default);
+}
+
+.input-glass-wrapper:focus-within {
+  border-color: var(--accent-glow);
+  box-shadow: 0 0 24px -4px var(--accent-subtle); /* Softer glow */
+  transform: translateY(-2px);
+}
+
+.glass-input {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 8px 12px;
-  transition: border-color 0.15s;
+  padding: 12px 16px;
+  gap: 12px;
 }
 
-.input-container:focus-within {
-  border-color: var(--accent-blue);
-}
-
-textarea {
+.custom-textarea {
   flex: 1;
   background: transparent;
   border: none;
+  outline: none;
   resize: none;
-  font-size: 14px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 15px;
   line-height: 1.5;
   max-height: 200px;
+  min-height: 32px;
   padding: 4px 0;
 }
 
-textarea::placeholder {
+.custom-textarea::placeholder {
   color: var(--text-muted);
 }
 
-textarea:focus {
-  outline: none;
-}
-
-.send-btn {
+.action-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  background: var(--accent-blue);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.send-btn {
+  background: var(--accent);
   color: white;
-  border-radius: 6px;
-  flex-shrink: 0;
-  transition: all 0.15s;
 }
 
 .send-btn:hover:not(:disabled) {
-  opacity: 0.9;
-  transform: scale(1.02);
+  background: var(--accent-hover);
+  transform: scale(1.05);
 }
 
 .send-btn:disabled {
   background: var(--bg-tertiary);
   color: var(--text-muted);
+  cursor: not-allowed;
 }
 
-.send-btn.abort {
-  background: var(--accent-red);
+.abort-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--error);
+  color: var(--error);
+}
+
+.abort-btn:hover {
+  background: var(--error);
+  color: white;
+}
+
+.input-footer {
+  text-align: center;
+  margin-top: 8px;
 }
 
 .input-hint {
-  display: flex;
-  justify-content: center;
-  margin-top: 8px;
   font-size: 11px;
-  color: var(--text-muted);
-}
-
-.streaming-hint {
-  color: var(--accent-blue);
+  opacity: 0.6;
 }
 </style>
+

@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { marked } from 'marked'
+import { Bot, User, Brain, ChevronDown } from 'lucide-vue-next'
 import type { Message, MessagePart } from '../api/client'
 import ToolCall from './ToolCall.vue'
 
@@ -7,7 +9,13 @@ const props = defineProps<{
   message: Message
 }>()
 
-// 获取所有需要显示的部分，按顺序排列
+// Configure marked
+marked.setOptions({
+  breaks: true,
+  gfm: true
+})
+
+// Get all parts to display
 const displayParts = computed(() => {
   const result: Array<{ type: string; part: MessagePart; index: number }> = []
   props.message.parts.forEach((part, index) => {
@@ -16,208 +24,309 @@ const displayParts = computed(() => {
     } else if (part.type === 'tool') {
       result.push({ type: 'tool', part, index })
     } else if (part.type === 'reasoning') {
-      // 始终显示 reasoning 部分（即使文本为空，也显示 "Thinking" 标题）
       result.push({ type: 'reasoning', part, index })
     }
   })
   return result
 })
 
-const roleLabel = computed(() => {
-  return props.message.role === 'user' ? '你' : 'Agent'
-})
+// Thinking block state
+const thinkingExpanded = ref(false)
+
+// Format text with marked
+function formatText(text: string): string {
+  try {
+    return marked.parse(text) as string
+  } catch (e) {
+    console.error('Markdown parse error:', e)
+    return text
+  }
+}
 </script>
 
 <template>
-  <div class="message" :class="message.role">
-    <div class="message-header">
-      <span class="role-label">{{ roleLabel }}</span>
+  <div class="message-row" :class="{ 'user-row': message.info.role === 'user', 'agent-row': message.info.role !== 'user' }">
+    <div class="avatar shadow-sm">
+      <User v-if="message.info.role === 'user'" :size="18" />
+      <Bot v-else :size="18" />
     </div>
+    
+    <div class="message-bubble" :class="{ 'user-bubble': message.info.role === 'user', 'agent-bubble glass': message.info.role !== 'user' }">
+      
+      <div class="message-sender-name" v-if="message.info.role !== 'user'">
+        {{ message.info.model?.modelID || 'Nine1Bot' }}
+      </div>
 
-    <div class="message-content">
-      <!-- 按顺序显示所有部分 -->
-      <template v-for="item in displayParts" :key="item.part.id || item.index">
-        <!-- 思考过程 -->
-        <div v-if="item.type === 'reasoning'" class="reasoning-content">
-          <div class="reasoning-header">Thinking</div>
-          <div v-if="item.part.text" class="reasoning-text">{{ item.part.text }}</div>
-          <div v-else class="reasoning-text thinking-dots">
-            <span></span><span></span><span></span>
+      <div class="message-content">
+        <template v-for="item in displayParts" :key="item.part.id || item.index">
+          <!-- Thinking/Reasoning -->
+          <div v-if="item.type === 'reasoning'" class="thinking-block">
+            <div class="thinking-header" @click="thinkingExpanded = !thinkingExpanded">
+              <Brain :size="14" class="thinking-icon" />
+              <span class="thinking-label">Reasoning Process</span>
+              <ChevronDown 
+                :size="14" 
+                class="thinking-chevron" 
+                :class="{ expanded: thinkingExpanded }" 
+              />
+            </div>
+            <div v-if="thinkingExpanded || !item.part.text" class="thinking-body">
+              <div v-if="item.part.text" class="thinking-text">{{ item.part.text }}</div>
+              <div v-else class="loading-wave">
+                <span>.</span><span>.</span><span>.</span>
+              </div>
+            </div>
           </div>
-        </div>
 
-        <!-- 工具调用 -->
-        <ToolCall
-          v-else-if="item.type === 'tool'"
-          :tool="item.part"
-        />
+          <!-- Tool Call -->
+          <ToolCall
+            v-else-if="item.type === 'tool'"
+            :tool="item.part"
+          />
 
-        <!-- 文本内容 -->
-        <div v-else-if="item.type === 'text'" class="text-content" v-html="formatText(item.part.text || '')"></div>
-      </template>
+          <!-- Text Content with Markdown -->
+          <div
+            v-else-if="item.type === 'text'"
+            class="markdown-content"
+            v-html="formatText(item.part.text || '')"
+          ></div>
+        </template>
+      </div>
     </div>
   </div>
 </template>
 
-<script lang="ts">
-// 格式化文本，简单处理换行和代码块
-function formatText(text: string): string {
-  // 转义 HTML
-  let html = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-
-  // 代码块
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    return `<pre class="code-block"><code class="language-${lang}">${code.trim()}</code></pre>`
-  })
-
-  // 行内代码
-  html = html.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
-
-  // 换行
-  html = html.replace(/\n/g, '<br>')
-
-  return html
-}
-</script>
-
 <style scoped>
-.message {
-  padding: 14px 18px;
-  border-radius: 12px;
-  background: var(--bg-secondary);
-  animation: fadeIn 0.2s ease-out;
-  box-shadow: var(--shadow-sm);
+.message-row {
+  display: flex;
+  gap: 16px;
+  padding: 16px var(--space-lg);
+  width: 100%;
+  opacity: 0;
+  animation: fade-up 0.4s ease forwards;
 }
 
-.message.user {
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.user-row {
+  flex-direction: row-reverse;
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.user-row .avatar {
   background: var(--bg-tertiary);
-  margin-left: 48px;
+  color: var(--text-secondary);
+}
+
+.agent-row .avatar {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: white;
+  box-shadow: 0 4px 12px var(--accent-glow);
+}
+
+.message-bubble {
+  max-width: 80%;
+  width: fit-content;
+  padding: 10px 14px; /* Reduced padding further */
+  border-radius: 16px; /* Slightly reduced radius */
+  position: relative;
+  box-shadow: var(--shadow-sm);
+  line-height: 1.5; /* Tighter line height */
+}
+
+.user-bubble {
+  background: var(--bg-tertiary);
+  border-bottom-right-radius: 2px; /* Sharper tail */
+  color: var(--text-primary);
+  /* margin-left: auto; Removed unnecessary margin */
+}
+
+.agent-bubble {
+  background: var(--bg-glass-strong);
   border: 1px solid var(--border-subtle);
+  border-top-left-radius: 4px;
 }
 
-.message.assistant {
-  margin-right: 48px;
-  border: 1px solid var(--border-color);
+.message-sender-name {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.5;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* Thinking Block */
+.thinking-block {
+  margin: 8px 0 16px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
-.message-header {
+.thinking-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
-}
-
-.role-label {
+  padding: 8px 12px;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(0,0,0,0.02);
 }
 
-.message-content {
-  font-size: 14px;
-  line-height: 1.6;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.thinking-header:hover {
+  background: rgba(0,0,0,0.04);
 }
 
-.text-content {
-  white-space: pre-wrap;
-  word-break: break-word;
+.thinking-label {
+  flex: 1;
 }
 
-.text-content :deep(.code-block) {
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
+.thinking-chevron {
+  transition: transform 0.2s;
+}
+
+.thinking-chevron.expanded {
+  transform: rotate(180deg);
+}
+
+.thinking-body {
   padding: 12px;
-  margin: 8px 0;
-  overflow-x: auto;
-  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-tertiary);
   font-size: 13px;
-}
-
-.text-content :deep(.inline-code) {
-  background: var(--bg-primary);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
-  font-size: 13px;
-}
-
-.reasoning-content {
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 8px 12px;
-  font-size: 13px;
-}
-
-.reasoning-header {
-  font-size: 11px;
-  font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 4px;
+  font-style: italic;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
-.reasoning-text {
-  color: var(--text-secondary);
-  font-style: italic;
+.thinking-text {
   white-space: pre-wrap;
 }
 
-.thinking-dots {
-  display: flex;
-  gap: 4px;
-  padding: 4px 0;
+/* Loading Dots */
+.loading-wave span {
+  animation: wave 1.2s infinite ease-in-out;
+  display: inline-block;
+  margin: 0 1px;
+  font-size: 20px;
+  line-height: 10px;
+}
+.loading-wave span:nth-child(2) { animation-delay: 0.1s; }
+.loading-wave span:nth-child(3) { animation-delay: 0.2s; }
+
+@keyframes wave {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50% { transform: translateY(-4px); opacity: 1; }
 }
 
-.thinking-dots span {
-  width: 6px;
-  height: 6px;
-  background: var(--text-muted);
-  border-radius: 50%;
-  animation: dotPulse 1.4s infinite ease-in-out both;
+/* Prose / Markdown Styling */
+.markdown-content {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text-primary);
 }
 
-.thinking-dots span:nth-child(1) {
-  animation-delay: -0.32s;
+.markdown-content :deep(p) {
+  margin-bottom: 1em;
+}
+.markdown-content :deep(p:last-child) {
+  margin-bottom: 0;
 }
 
-.thinking-dots span:nth-child(2) {
-  animation-delay: -0.16s;
+.markdown-content :deep(h1),
+.markdown-content :deep(h2),
+.markdown-content :deep(h3) {
+  margin-top: 1.5em;
+  margin-bottom: 0.75em;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
 }
 
-.thinking-dots span:nth-child(3) {
-  animation-delay: 0s;
+.markdown-content :deep(code) {
+  background: var(--bg-tertiary);
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--accent);
 }
 
-@keyframes dotPulse {
-  0%, 80%, 100% {
-    transform: scale(0.6);
-    opacity: 0.4;
-  }
-  40% {
-    transform: scale(1);
-    opacity: 1;
-  }
+.markdown-content :deep(pre) {
+  background: #1e1e1e; /* Always dark for code blocks usually looks better */
+  padding: 16px;
+  border-radius: var(--radius-md);
+  margin: 1em 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-default);
+}
+
+/* Adjust code block if light mode is strictly required everywhere, 
+   but usually high contrast dark code blocks are preferred even in light mode.
+   Let's check theme.
+*/
+:root[data-theme='light'] .markdown-content :deep(pre) {
+  background: #fafafa;
+  border: 1px solid #e4e4e7;
+  color: #27272a;
+}
+:root[data-theme='light'] .markdown-content :deep(code) {
+  color: #7c3aed; /* darker accent */
+  background: #f4f4f5;
+}
+
+.markdown-content :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: 13px;
+  border: none;
+}
+
+.markdown-content :deep(ul), 
+.markdown-content :deep(ol) {
+  margin-bottom: 1em;
+  padding-left: 1.5em;
+}
+
+.markdown-content :deep(li) {
+  margin-bottom: 0.25em;
+}
+
+.markdown-content :deep(a) {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-subtle);
+  text-underline-offset: 2px;
+}
+.markdown-content :deep(a:hover) {
+  text-decoration-color: var(--accent);
+}
+
+.markdown-content :deep(blockquote) {
+  border-left: 3px solid var(--accent);
+  margin: 1em 0;
+  padding-left: 1em;
+  font-style: italic;
+  color: var(--text-muted);
 }
 </style>
+

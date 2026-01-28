@@ -2,10 +2,12 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useSession } from './composables/useSession'
 import { useFiles } from './composables/useFiles'
+import { useSettings } from './composables/useSettings'
 import Header from './components/Header.vue'
-import FileTree from './components/FileTree.vue'
+import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import InputBox from './components/InputBox.vue'
+import SettingsPanel from './components/SettingsPanel.vue'
 
 const {
   sessions,
@@ -30,23 +32,23 @@ const {
   toggleDirectory
 } = useFiles()
 
-const showSidebar = ref(true)
+const { showSettings, openSettings, closeSettings, currentProvider, currentModel } = useSettings()
+
+const sidebarCollapsed = ref(false)
+const sidebarTab = ref<'sessions' | 'files'>('sessions')
 
 onMounted(async () => {
-  // 订阅事件流以获取实时更新
   subscribeToEvents()
 
-  // 默认加载当前目录的会话
-  const defaultDir = '.'
-  await loadSessions(defaultDir)
-  await loadFiles(defaultDir)
+  // 不传 directory 参数以加载所有会话
+  await loadSessions()
+  await loadFiles('.')
 
-  // 如果有会话，选择最新的一个
   if (sessions.value.length > 0) {
     await selectSession(sessions.value[0])
   } else {
-    // 创建新会话
-    await createSession(defaultDir)
+    // 创建新会话时使用当前工作目录
+    await createSession('.')
   }
 })
 
@@ -54,17 +56,19 @@ onUnmounted(() => {
   unsubscribe()
 })
 
-watch(currentDirectory, async (newDir) => {
-  if (newDir) {
-    await loadFiles(newDir)
-  }
-})
+// 注意：currentDirectory 可能是绝对路径，但文件 API 只接受相对路径
+// 所以这里不再监听 currentDirectory 的变化来重新加载文件
+// 文件浏览始终显示项目根目录的内容
 
 async function handleSend(content: string) {
   if (!currentSession.value) {
     await createSession(currentDirectory.value || '.')
   }
-  await sendMessage(content)
+  // 如果选择了模型，传递给 sendMessage
+  const model = currentProvider.value && currentModel.value
+    ? { providerID: currentProvider.value, modelID: currentModel.value }
+    : undefined
+  await sendMessage(content, model)
 }
 
 function handleNewSession() {
@@ -72,34 +76,43 @@ function handleNewSession() {
 }
 
 function toggleSidebar() {
-  showSidebar.value = !showSidebar.value
+  sidebarCollapsed.value = !sidebarCollapsed.value
 }
 </script>
 
 <template>
-  <div class="app">
-    <Header
-      :session="currentSession"
-      :directory="currentDirectory"
-      :isStreaming="isStreaming"
-      @toggle-sidebar="toggleSidebar"
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <Sidebar
+      :collapsed="sidebarCollapsed"
+      :sessions="sessions"
+      :currentSession="currentSession"
+      :files="files"
+      :filesLoading="filesLoading"
+      :activeTab="sidebarTab"
+      @toggle-collapse="toggleSidebar"
+      @select-session="selectSession"
       @new-session="handleNewSession"
-      @abort="abortCurrentSession"
+      @toggle-directory="toggleDirectory"
+      @change-tab="(tab) => sidebarTab = tab"
     />
 
-    <main class="main-content">
-      <aside v-show="showSidebar" class="sidebar">
-        <div class="sidebar-header">
-          <span>文件</span>
-        </div>
-        <FileTree
-          :files="files"
-          :isLoading="filesLoading"
-          @toggle="toggleDirectory"
-        />
-      </aside>
+    <!-- Main Content -->
+    <div class="main-content">
+      <!-- Header -->
+      <Header
+        :session="currentSession"
+        :directory="currentDirectory"
+        :isStreaming="isStreaming"
+        :sidebarCollapsed="sidebarCollapsed"
+        @toggle-sidebar="toggleSidebar"
+        @new-session="handleNewSession"
+        @abort="abortCurrentSession"
+        @open-settings="openSettings"
+      />
 
-      <section class="chat-section">
+      <!-- Chat Area -->
+      <div class="chat-panel">
         <ChatPanel
           :messages="messages"
           :isLoading="isLoading"
@@ -111,49 +124,17 @@ function toggleSidebar() {
           @send="handleSend"
           @abort="abortCurrentSession"
         />
-      </section>
-    </main>
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <SettingsPanel
+      v-if="showSettings"
+      @close="closeSettings"
+    />
   </div>
 </template>
 
 <style scoped>
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
-}
-
-.main-content {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-}
-
-.sidebar {
-  width: 260px;
-  min-width: 200px;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.sidebar-header {
-  padding: 12px 16px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.chat-section {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
+/* Layout uses global styles from style.css */
 </style>
