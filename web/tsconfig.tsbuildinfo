@@ -1,0 +1,1 @@
+{"root":["./src/main.ts","./src/vite-env.d.ts","./src/api/client.ts","./src/composables/usefiles.ts","./src/composables/usesession.ts","./src/app.vue","./src/components/chatpanel.vue","./src/components/filetree.vue","./src/components/header.vue","./src/components/inputbox.vue","./src/components/messageitem.vue","./src/components/toolcall.vue"],"version":"5.6.3"}

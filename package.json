@@ -1,0 +1,12 @@
+{
+  "name": "nine1bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --cwd opencode dev",
+    "build:web": "cd web && npm run build",
+    "start": "npm run build:web && npm run dev",
+    "serve": "bun run --cwd opencode/packages/opencode src/index.ts serve"
+  }
+}
