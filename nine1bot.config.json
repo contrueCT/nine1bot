@@ -1,0 +1,20 @@
+{
+  "$schema": "https://nine1bot.com/config.schema.json",
+
+  "server": {
+    "port": 4096,
+    "hostname": "127.0.0.1",
+    "openBrowser": true
+  },
+
+  "auth": {
+    "enabled": false
+  },
+
+  "tunnel": {
+    "enabled": false,
+    "provider": "ngrok"
+  },
+
+  "model": "anthropic/claude-3-5-sonnet-20241022"
+}

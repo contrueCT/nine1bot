@@ -9,3 +9,10 @@ backup/
 .claude/
 *.png
 nul
+docx/
+
+# Nine1Bot
+.nine1bot/
+natapp
+natapp.exe
+*.natapp

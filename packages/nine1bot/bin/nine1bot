@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+
+// Check if running with Bun
+const isBun = typeof Bun !== 'undefined';
+
+if (isBun) {
+  // Running with Bun - import directly
+  import('../src/index.ts');
+} else {
+  // Running with Node.js - need to use tsx or similar
+  console.error('Nine1Bot requires Bun runtime.');
+  console.error('Install Bun: https://bun.sh');
+  console.error('Then run: bun nine1bot');
+  process.exit(1);
+}
