@@ -21,3 +21,4 @@ natapp.exe
 # Build artifacts
 build/
 runtime/
+web/tsconfig.tsbuildinfo
