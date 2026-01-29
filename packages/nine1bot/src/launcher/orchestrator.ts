@@ -30,8 +30,8 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
     configPath = await findConfigPath() || getDefaultConfigPath()
   }
 
-  // 加载配置
-  const config = await loadConfig()
+  // 加载配置（使用指定的配置路径）
+  const config = await loadConfig(configPath)
 
   // 合并命令行选项
   const serverConfig = {
@@ -47,6 +47,7 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
     server: serverConfig,
     auth: config.auth,
     configPath,
+    fullConfig: config,
   })
 
   const localUrl = server.url || `http://${serverConfig.hostname}:${serverConfig.port}`
@@ -61,6 +62,15 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
       publicUrl = await tunnel.start(serverConfig.port)
     } catch (error: any) {
       console.warn(`Failed to create tunnel: ${error.message}`)
+      // 清理可能已部分初始化的隧道资源
+      if (tunnel) {
+        try {
+          await tunnel.stop()
+        } catch {
+          // 忽略清理错误
+        }
+        tunnel = undefined
+      }
     }
   }
 
@@ -109,12 +119,22 @@ export async function shutdown(result: LaunchResult): Promise<void> {
  * 优雅退出处理
  */
 export function setupGracefulShutdown(result: LaunchResult): void {
-  const handleExit = async () => {
-    console.log('\nShutting down...')
-    await shutdown(result)
+  let isShuttingDown = false
+
+  const handleExit = async (signal?: string) => {
+    if (isShuttingDown) return
+    isShuttingDown = true
+
+    console.log(`\nShutting down${signal ? ` (${signal})` : ''}...`)
+    try {
+      await shutdown(result)
+    } catch (error: any) {
+      console.error('Error during shutdown:', error.message)
+    }
     process.exit(0)
   }
 
-  process.on('SIGINT', handleExit)
-  process.on('SIGTERM', handleExit)
+  process.on('SIGINT', () => handleExit('SIGINT'))
+  process.on('SIGTERM', () => handleExit('SIGTERM'))
+  process.on('SIGHUP', () => handleExit('SIGHUP'))
 }

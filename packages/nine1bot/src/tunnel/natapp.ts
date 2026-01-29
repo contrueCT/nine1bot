@@ -58,6 +58,34 @@ export class NatappTunnel implements TunnelManager {
 
       let output = ''
       let resolved = false
+      let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+      // 清理函数
+      const cleanup = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          timeoutId = null
+        }
+        this.process?.stdout?.removeAllListeners('data')
+        this.process?.stderr?.removeAllListeners('data')
+        this.process?.removeAllListeners('error')
+        this.process?.removeAllListeners('close')
+      }
+
+      // 杀死进程并拒绝 Promise
+      const killAndReject = (error: Error) => {
+        if (!resolved) {
+          resolved = true
+          cleanup()
+          try {
+            this.process?.kill('SIGTERM')
+          } catch {
+            // 忽略杀死进程时的错误
+          }
+          this.process = null
+          reject(error)
+        }
+      }
 
       const handleData = (data: Buffer) => {
         output += data.toString()
@@ -75,6 +103,7 @@ export class NatappTunnel implements TunnelManager {
           const match = output.match(pattern)
           if (match && !resolved) {
             resolved = true
+            cleanup()
             this.url = match[1]
             resolve(this.url)
             return
@@ -86,15 +115,13 @@ export class NatappTunnel implements TunnelManager {
       this.process.stderr?.on('data', handleData)
 
       this.process.on('error', (error) => {
-        if (!resolved) {
-          resolved = true
-          reject(new Error(`Failed to start NATAPP: ${error.message}`))
-        }
+        killAndReject(new Error(`Failed to start NATAPP: ${error.message}`))
       })
 
       this.process.on('close', (code) => {
         if (!resolved) {
           resolved = true
+          cleanup()
           if (code !== 0) {
             reject(new Error(`NATAPP exited with code ${code}. Output: ${output}`))
           }
@@ -102,11 +129,8 @@ export class NatappTunnel implements TunnelManager {
       })
 
       // 超时处理
-      setTimeout(() => {
-        if (!resolved) {
-          resolved = true
-          reject(new Error(`Timeout waiting for NATAPP tunnel. Output: ${output}`))
-        }
+      timeoutId = setTimeout(() => {
+        killAndReject(new Error(`Timeout waiting for NATAPP tunnel. Output: ${output}`))
       }, 30000)
     })
   }

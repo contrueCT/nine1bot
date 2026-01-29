@@ -253,6 +253,8 @@ export namespace SessionPrompt {
     }
     delete s[sessionID]
     SessionStatus.set(sessionID, { type: "idle" })
+    // Reset doom loop counter when session ends
+    SessionProcessor.resetDoomLoopCount(sessionID)
     return
   }
 
@@ -311,7 +313,27 @@ export namespace SessionPrompt {
           history: msgs,
         })
 
-      const model = await Provider.getModel(lastUser.model.providerID, lastUser.model.modelID)
+      // 获取模型，如果模型不存在则发布错误事件并退出循环（不崩溃）
+      let model
+      try {
+        model = await Provider.getModel(lastUser.model.providerID, lastUser.model.modelID)
+      } catch (e) {
+        if (Provider.ModelNotFoundError.isInstance(e)) {
+          const { providerID, modelID, suggestions } = e.data
+          const hint = suggestions?.length ? ` Did you mean: ${suggestions.join(", ")}?` : ""
+          Bus.publish(Session.Event.Error, {
+            sessionID,
+            error: new NamedError.Unknown({
+              message: `Model not found: ${providerID}/${modelID}.${hint} Please configure a valid model in settings.`
+            }).toObject(),
+          })
+          // 设置会话为空闲状态，而不是崩溃
+          SessionStatus.set(sessionID, { type: "idle" })
+          log.error("model not found, exiting loop gracefully", { providerID, modelID })
+          break
+        }
+        throw e
+      }
       const task = tasks.pop()
 
       // pending subtask

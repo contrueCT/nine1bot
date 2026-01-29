@@ -18,7 +18,41 @@ import { Question } from "@/question"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
+  const DOOM_LOOP_FORCE_ASK_THRESHOLD = 3
   const log = Log.create({ service: "session.processor" })
+
+  // Session-level doom loop counter (persists across processor instances)
+  const sessionDoomLoopCounts: Map<string, number> = new Map()
+
+  export function getDoomLoopCount(sessionID: string): number {
+    return sessionDoomLoopCounts.get(sessionID) || 0
+  }
+
+  export function incrementDoomLoopCount(sessionID: string): number {
+    const count = getDoomLoopCount(sessionID) + 1
+    sessionDoomLoopCounts.set(sessionID, count)
+    return count
+  }
+
+  export function resetDoomLoopCount(sessionID: string): void {
+    sessionDoomLoopCounts.delete(sessionID)
+  }
+
+  // Random hints to help LLM break out of doom loops
+  const DOOM_LOOP_HINTS = [
+    "You've tried this approach multiple times without success. Consider a completely different strategy.",
+    "The same tool call has been repeated. Try analyzing the problem from a different angle.",
+    "This approach isn't working. What alternative methods could solve this problem?",
+    "Step back and reconsider: is there a simpler or different way to achieve this goal?",
+    "The repeated attempts suggest the current approach has limitations. What other options exist?",
+    "You seem to be stuck in a loop. Try breaking out by using a completely different tool or approach.",
+    "Multiple identical attempts have failed. Consider whether the task requirements need clarification from the user.",
+    "The same action keeps failing. Perhaps the underlying assumption is wrong - what else could you try?",
+  ]
+
+  function getRandomHint(): string {
+    return DOOM_LOOP_HINTS[Math.floor(Math.random() * DOOM_LOOP_HINTS.length)]
+  }
 
   export type Info = Awaited<ReturnType<typeof create>>
   export type Result = Awaited<ReturnType<Info["process"]>>
@@ -153,16 +187,52 @@ export namespace SessionProcessor {
                           JSON.stringify(p.state.input) === JSON.stringify(value.input),
                       )
                     ) {
+                      const doomLoopCount = incrementDoomLoopCount(input.sessionID)
                       const config = await Config.get()
                       const agent = await Agent.get(input.assistantMessage.agent)
 
-                      // In autonomous mode with allowDoomLoop, skip asking and let the LLM try alternative approaches
+                      // In autonomous mode with allowDoomLoop, handle doom loops progressively
                       if (config.autonomous?.enabled !== false && config.autonomous?.allowDoomLoop !== false) {
-                        log.info("doom_loop auto-allowed in autonomous mode", {
-                          tool: value.toolName,
-                          input: value.input,
-                        })
-                        // Continue without blocking - the LLM will see the repeated pattern and try something else
+                        if (doomLoopCount >= DOOM_LOOP_FORCE_ASK_THRESHOLD) {
+                          // After 3 doom loops, force the LLM to ask the user
+                          log.info("doom_loop forcing question after multiple attempts", {
+                            tool: value.toolName,
+                            count: doomLoopCount,
+                          })
+                          // Inject a system hint that forces asking the user
+                          await Session.updatePart({
+                            id: Identifier.ascending("part"),
+                            messageID: input.assistantMessage.id,
+                            sessionID: input.assistantMessage.sessionID,
+                            type: "text",
+                            text: `<system-hint priority="critical">
+IMPORTANT: You have attempted the same approach ${doomLoopCount} times without success.
+You MUST now use the question tool to ask the user for guidance.
+Do not attempt to solve this on your own - ask the user what they want you to do differently.
+Possible questions to ask:
+- What alternative approach should I try?
+- Is there something I'm missing about this task?
+- Should I skip this step and move on?
+</system-hint>`,
+                            time: { start: Date.now(), end: Date.now() },
+                          })
+                        } else {
+                          // Before 3 doom loops, inject a random hint to help LLM adjust
+                          const hint = getRandomHint()
+                          log.info("doom_loop injecting hint in autonomous mode", {
+                            tool: value.toolName,
+                            count: doomLoopCount,
+                            hint,
+                          })
+                          await Session.updatePart({
+                            id: Identifier.ascending("part"),
+                            messageID: input.assistantMessage.id,
+                            sessionID: input.assistantMessage.sessionID,
+                            type: "text",
+                            text: `<system-hint>${hint}</system-hint>`,
+                            time: { start: Date.now(), end: Date.now() },
+                          })
+                        }
                       } else {
                         await PermissionNext.ask({
                           permission: "doom_loop",

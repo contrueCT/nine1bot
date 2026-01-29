@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { api, type Session, type Message, type SSEEvent, type MessagePart } from '../api/client'
+import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, questionApi, permissionApi } from '../api/client'
 
 export function useSession() {
   const sessions = ref<Session[]>([])
@@ -11,6 +11,13 @@ export function useSession() {
 
   // 当前正在流式接收的消息
   const streamingMessage = ref<Message | null>(null)
+
+  // 待处理的问题和权限请求
+  const pendingQuestions = ref<QuestionRequest[]>([])
+  const pendingPermissions = ref<PermissionRequest[]>([])
+
+  // 会话错误（如模型不可用）
+  const sessionError = ref<{ message: string; dismissable?: boolean } | null>(null)
 
   // 事件源订阅
   let eventSource: EventSource | null = null
@@ -72,10 +79,20 @@ export function useSession() {
         handleSSEEvent,
         (error) => {
           console.error('Stream error:', error)
+          sessionError.value = {
+            message: `网络错误: ${error.message || '连接中断'}`,
+            dismissable: true
+          }
           isStreaming.value = false
         },
         model
       )
+    } catch (error: any) {
+      console.error('Failed to send message:', error)
+      sessionError.value = {
+        message: `发送失败: ${error.message || '未知错误'}`,
+        dismissable: true
+      }
     } finally {
       isStreaming.value = false
       streamingMessage.value = null
@@ -177,6 +194,68 @@ export function useSession() {
       case 'message.completed':
         // 消息完成
         break
+
+      case 'question.asked':
+        // 新问题请求
+        if (properties) {
+          const request = properties as QuestionRequest
+          // 只处理当前会话的问题
+          if (currentSession.value && request.sessionID === currentSession.value.id) {
+            // 避免重复添加
+            if (!pendingQuestions.value.find(q => q.id === request.id)) {
+              pendingQuestions.value.push(request)
+            }
+          }
+        }
+        break
+
+      case 'question.replied':
+      case 'question.rejected':
+        // 问题已回复或被拒绝，从待处理列表移除
+        if (properties?.requestID) {
+          pendingQuestions.value = pendingQuestions.value.filter(q => q.id !== properties.requestID)
+        }
+        break
+
+      case 'permission.asked':
+        // 新权限请求
+        if (properties) {
+          const request = properties as PermissionRequest
+          // 只处理当前会话的权限请求
+          if (currentSession.value && request.sessionID === currentSession.value.id) {
+            // 避免重复添加
+            if (!pendingPermissions.value.find(p => p.id === request.id)) {
+              pendingPermissions.value.push(request)
+            }
+          }
+        }
+        break
+
+      case 'permission.replied':
+        // 权限已回复，从待处理列表移除
+        if (properties?.requestID) {
+          pendingPermissions.value = pendingPermissions.value.filter(p => p.id !== properties.requestID)
+        }
+        break
+
+      case 'session.error':
+        // 会话错误（如模型不可用）
+        if (properties?.error) {
+          const error = properties.error
+          const message = error.data?.message || error.message || '发生未知错误'
+          sessionError.value = {
+            message,
+            dismissable: true
+          }
+          // 停止流式状态
+          isStreaming.value = false
+        }
+        break
+
+      case 'session.idle':
+        // 会话空闲，停止流式状态
+        isStreaming.value = false
+        break
     }
   }
 
@@ -195,6 +274,7 @@ export function useSession() {
   function subscribeToEvents() {
     if (eventSource) {
       eventSource.close()
+      eventSource = null
     }
 
     eventSource = api.subscribeEvents((event: SSEEvent) => {
@@ -226,6 +306,64 @@ export function useSession() {
     }
   }
 
+  // 加载待处理的问题和权限请求
+  async function loadPendingRequests() {
+    try {
+      const [questions, permissions] = await Promise.all([
+        questionApi.list(),
+        permissionApi.list()
+      ])
+      // 只保留当前会话的请求
+      if (currentSession.value) {
+        pendingQuestions.value = questions.filter(q => q.sessionID === currentSession.value!.id)
+        pendingPermissions.value = permissions.filter(p => p.sessionID === currentSession.value!.id)
+      } else {
+        pendingQuestions.value = questions
+        pendingPermissions.value = permissions
+      }
+    } catch (error) {
+      console.error('Failed to load pending requests:', error)
+    }
+  }
+
+  // 回答问题
+  async function answerQuestion(requestId: string, answers: string[][]) {
+    try {
+      await questionApi.reply(requestId, answers)
+      pendingQuestions.value = pendingQuestions.value.filter(q => q.id !== requestId)
+    } catch (error) {
+      console.error('Failed to answer question:', error)
+      throw error
+    }
+  }
+
+  // 拒绝问题
+  async function rejectQuestion(requestId: string) {
+    try {
+      await questionApi.reject(requestId)
+      pendingQuestions.value = pendingQuestions.value.filter(q => q.id !== requestId)
+    } catch (error) {
+      console.error('Failed to reject question:', error)
+      throw error
+    }
+  }
+
+  // 响应权限请求
+  async function respondPermission(requestId: string, reply: 'once' | 'always' | 'reject', message?: string) {
+    try {
+      await permissionApi.reply(requestId, reply, message)
+      pendingPermissions.value = pendingPermissions.value.filter(p => p.id !== requestId)
+    } catch (error) {
+      console.error('Failed to respond to permission:', error)
+      throw error
+    }
+  }
+
+  // 清除会话错误
+  function clearSessionError() {
+    sessionError.value = null
+  }
+
   return {
     sessions,
     currentSession,
@@ -234,12 +372,20 @@ export function useSession() {
     isStreaming,
     currentDirectory,
     streamingMessage,
+    pendingQuestions,
+    pendingPermissions,
+    sessionError,
     loadSessions,
     createSession,
     selectSession,
     sendMessage,
     abortCurrentSession,
     subscribeToEvents,
-    unsubscribe
+    unsubscribe,
+    loadPendingRequests,
+    answerQuestion,
+    rejectQuestion,
+    respondPermission,
+    clearSessionError
   }
 }

@@ -254,6 +254,39 @@ export interface SSEEvent {
   properties: Record<string, any>
 }
 
+// === Question Types ===
+export interface QuestionOption {
+  label: string
+  description: string
+}
+
+export interface QuestionInfo {
+  question: string
+  header: string
+  options: QuestionOption[]
+  multiple?: boolean
+  custom?: boolean
+}
+
+export interface QuestionRequest {
+  id: string
+  sessionID: string
+  questions: QuestionInfo[]
+  tool?: {
+    messageID: string
+    callID: string
+  }
+}
+
+// === Permission Types ===
+export interface PermissionRequest {
+  id: string
+  sessionID: string
+  permission: string
+  patterns: string[]
+  metadata: Record<string, any>
+}
+
 // === MCP Types ===
 export interface McpServer {
   name: string
@@ -470,6 +503,53 @@ export const authApi = {
   async remove(providerId: string): Promise<void> {
     await fetch(`${BASE_URL}/auth/${encodeURIComponent(providerId)}`, {
       method: 'DELETE'
+    })
+  }
+}
+
+// === Question API ===
+export const questionApi = {
+  // 获取待处理的问题列表
+  async list(): Promise<QuestionRequest[]> {
+    const res = await fetch(`${BASE_URL}/question`)
+    const data = await res.json()
+    return Array.isArray(data) ? data : []
+  },
+
+  // 回复问题
+  // answers 是二维数组: 每个问题对应一个选中的答案数组
+  async reply(requestId: string, answers: string[][]): Promise<void> {
+    await fetch(`${BASE_URL}/question/${encodeURIComponent(requestId)}/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers })
+    })
+  },
+
+  // 拒绝问题
+  async reject(requestId: string): Promise<void> {
+    await fetch(`${BASE_URL}/question/${encodeURIComponent(requestId)}/reject`, {
+      method: 'POST'
+    })
+  }
+}
+
+// === Permission API ===
+export const permissionApi = {
+  // 获取待处理的权限请求列表
+  async list(): Promise<PermissionRequest[]> {
+    const res = await fetch(`${BASE_URL}/permission`)
+    const data = await res.json()
+    return Array.isArray(data) ? data : []
+  },
+
+  // 回复权限请求
+  // reply: 'once' | 'always' | 'reject'
+  async reply(requestId: string, reply: 'once' | 'always' | 'reject', message?: string): Promise<void> {
+    await fetch(`${BASE_URL}/permission/${encodeURIComponent(requestId)}/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reply, message })
     })
   }
 }

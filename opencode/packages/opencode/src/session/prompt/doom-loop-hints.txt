@@ -1,0 +1,15 @@
+You've tried this approach multiple times without success. Consider a completely different strategy.
+---
+The same tool call has been repeated. Try analyzing the problem from a different angle.
+---
+This approach isn't working. What alternative methods could solve this problem?
+---
+Step back and reconsider: is there a simpler or different way to achieve this goal?
+---
+The repeated attempts suggest the current approach has limitations. What other options exist?
+---
+You seem to be stuck in a loop. Try breaking out by using a completely different tool or approach.
+---
+Multiple identical attempts have failed. Consider whether the task requirements need clarification from the user.
+---
+The same action keeps failing. Perhaps the underlying assumption is wrong - what else could you try?

@@ -16,13 +16,21 @@ const {
   isLoading,
   isStreaming,
   currentDirectory,
+  pendingQuestions,
+  pendingPermissions,
+  sessionError,
   loadSessions,
   createSession,
   selectSession,
   sendMessage,
   abortCurrentSession,
   subscribeToEvents,
-  unsubscribe
+  unsubscribe,
+  loadPendingRequests,
+  answerQuestion,
+  rejectQuestion,
+  respondPermission,
+  clearSessionError
 } = useSession()
 
 const {
@@ -37,8 +45,18 @@ const { showSettings, openSettings, closeSettings, currentProvider, currentModel
 const sidebarCollapsed = ref(false)
 const sidebarTab = ref<'sessions' | 'files'>('sessions')
 
+// 保存 watch 停止函数以便在 unmount 时清理
+let stopSessionWatch: (() => void) | null = null
+
 onMounted(async () => {
   subscribeToEvents()
+
+  // 设置会话切换的 watch
+  stopSessionWatch = watch(currentSession, async () => {
+    if (currentSession.value) {
+      await loadPendingRequests()
+    }
+  })
 
   // 不传 directory 参数以加载所有会话
   await loadSessions()
@@ -50,10 +68,18 @@ onMounted(async () => {
     // 创建新会话时使用当前工作目录
     await createSession('.')
   }
+
+  // 加载待处理的问题和权限请求
+  await loadPendingRequests()
 })
 
 onUnmounted(() => {
   unsubscribe()
+  // 清理 watch
+  if (stopSessionWatch) {
+    stopSessionWatch()
+    stopSessionWatch = null
+  }
 })
 
 // 注意：currentDirectory 可能是绝对路径，但文件 API 只接受相对路径
@@ -117,6 +143,14 @@ function toggleSidebar() {
           :messages="messages"
           :isLoading="isLoading"
           :isStreaming="isStreaming"
+          :pendingQuestions="pendingQuestions"
+          :pendingPermissions="pendingPermissions"
+          :sessionError="sessionError"
+          @question-answered="(id, answers) => answerQuestion(id, answers)"
+          @question-rejected="rejectQuestion"
+          @permission-responded="respondPermission"
+          @clear-error="clearSessionError"
+          @open-settings="openSettings"
         />
         <InputBox
           :disabled="isLoading"
