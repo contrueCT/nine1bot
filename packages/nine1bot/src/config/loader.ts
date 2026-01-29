@@ -1,11 +1,15 @@
 import { readFile, writeFile, mkdir, access, appendFile } from 'fs/promises'
-import { dirname, resolve } from 'path'
+import { dirname, resolve, join } from 'path'
 import { fileURLToPath } from 'url'
+import { homedir } from 'os'
 import { Nine1BotConfigSchema, type Nine1BotConfig } from './schema'
 import { execSync } from 'child_process'
 
 // 支持的配置文件名（按优先级排序）
 const CONFIG_FILENAMES = ['nine1bot.config.jsonc', 'nine1bot.config.json']
+
+// 全局配置文件名
+const GLOBAL_CONFIG_FILENAME = 'config.jsonc'
 
 /**
  * 获取程序安装目录
@@ -88,6 +92,38 @@ export function getDefaultConfigPath(): string {
 }
 
 /**
+ * 获取全局配置目录
+ * - Windows: %APPDATA%\nine1bot
+ * - Unix: ~/.config/nine1bot
+ */
+export function getGlobalConfigDir(): string {
+  const home = homedir()
+  if (process.platform === 'win32') {
+    return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'nine1bot')
+  }
+  return join(home, '.config', 'nine1bot')
+}
+
+/**
+ * 获取全局配置文件路径
+ */
+export function getGlobalConfigPath(): string {
+  return join(getGlobalConfigDir(), GLOBAL_CONFIG_FILENAME)
+}
+
+/**
+ * 检查文件是否存在
+ */
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * 去除 JSONC 中的注释
  */
 function stripJsonComments(jsonc: string): string {
@@ -159,36 +195,72 @@ function stripJsonComments(jsonc: string): string {
 }
 
 /**
- * 加载配置文件
- * @param customConfigPath 可选的自定义配置文件路径
+ * 加载单个配置文件
  */
-export async function loadConfig(customConfigPath?: string): Promise<Nine1BotConfig> {
-  const configPath = customConfigPath || await findConfigPath()
-
-  if (!configPath) {
-    // 返回默认配置
-    return Nine1BotConfigSchema.parse({})
-  }
-
+async function loadConfigFile(configPath: string): Promise<Partial<Nine1BotConfig>> {
   try {
     const content = await readFile(configPath, 'utf-8')
-    // 支持 JSONC（带注释的 JSON）
     const jsonContent = stripJsonComments(content)
     const json = JSON.parse(jsonContent)
-
-    // 处理环境变量替换 {env:VAR_NAME}
     const processed = processEnvVars(json)
-
-    return Nine1BotConfigSchema.parse(processed)
+    return processed
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(`Invalid JSON in config file: ${configPath}`)
     }
-    // 处理 Zod 验证错误
+    throw error
+  }
+}
+
+/**
+ * 加载配置文件
+ * 配置优先级（从低到高）：
+ * 1. Nine1Bot 全局配置（~/.config/nine1bot/config.jsonc）
+ * 2. Nine1Bot 项目配置（nine1bot.config.jsonc）
+ *
+ * @param customConfigPath 可选的自定义配置文件路径
+ */
+export async function loadConfig(customConfigPath?: string): Promise<Nine1BotConfig> {
+  let result: Partial<Nine1BotConfig> = {}
+
+  // 1. 加载全局配置
+  const globalConfigPath = getGlobalConfigPath()
+  if (await fileExists(globalConfigPath)) {
+    try {
+      const globalConfig = await loadConfigFile(globalConfigPath)
+      result = deepMerge(result, globalConfig)
+    } catch (error) {
+      console.warn(`Warning: Failed to load global config from ${globalConfigPath}:`, error)
+    }
+  }
+
+  // 2. 加载项目配置
+  const projectConfigPath = customConfigPath || await findConfigPath()
+  if (projectConfigPath && await fileExists(projectConfigPath)) {
+    try {
+      const projectConfig = await loadConfigFile(projectConfigPath)
+      result = deepMerge(result, projectConfig)
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(`Invalid JSON in config file: ${projectConfigPath}`)
+      }
+      if (error && typeof error === 'object' && 'issues' in error) {
+        const zodError = error as { issues: Array<{ path: (string | number)[]; message: string }> }
+        const messages = zodError.issues.map(i => `  - ${i.path.join('.')}: ${i.message}`).join('\n')
+        throw new Error(`Invalid config in ${projectConfigPath}:\n${messages}`)
+      }
+      throw error
+    }
+  }
+
+  // 验证并返回最终配置
+  try {
+    return Nine1BotConfigSchema.parse(result)
+  } catch (error) {
     if (error && typeof error === 'object' && 'issues' in error) {
       const zodError = error as { issues: Array<{ path: (string | number)[]; message: string }> }
       const messages = zodError.issues.map(i => `  - ${i.path.join('.')}: ${i.message}`).join('\n')
-      throw new Error(`Invalid config in ${configPath}:\n${messages}`)
+      throw new Error(`Invalid config:\n${messages}`)
     }
     throw error
   }

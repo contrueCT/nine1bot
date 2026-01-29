@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import { providerApi, configApi, mcpApi, skillApi, authApi } from '../api/client'
-import type { Provider, McpServer, Skill, Config } from '../api/client'
+import type { Provider, McpServer, Skill, Config, McpConfig } from '../api/client'
 
 const showSettings = ref(false)
 const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth'>('models')
@@ -145,6 +145,26 @@ export function useSettings() {
     }
   }
 
+  async function addMcp(name: string, config: McpConfig) {
+    try {
+      await mcpApi.add(name, config)
+      await loadMcpServers()
+    } catch (e) {
+      console.error('Failed to add MCP:', e)
+      throw e
+    }
+  }
+
+  async function removeMcp(name: string) {
+    try {
+      await mcpApi.remove(name)
+      await loadMcpServers()
+    } catch (e) {
+      console.error('Failed to remove MCP:', e)
+      throw e
+    }
+  }
+
   async function startOAuth(providerId: string) {
     try {
       const { url } = await providerApi.startOAuth(providerId)
@@ -193,6 +213,8 @@ export function useSettings() {
     selectModel,
     connectMcp,
     disconnectMcp,
+    addMcp,
+    removeMcp,
     startOAuth,
     setApiKey,
     removeAuth

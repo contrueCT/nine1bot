@@ -563,6 +563,22 @@ export namespace MCP {
     s.status[name] = { status: "disabled" }
   }
 
+  /**
+   * Remove an MCP server completely (disconnect and remove from state)
+   */
+  export async function remove(name: string) {
+    const s = await state()
+    const client = s.clients[name]
+    if (client) {
+      await client.close().catch((error) => {
+        log.error("Failed to close MCP client", { name, error })
+      })
+      delete s.clients[name]
+    }
+    delete s.status[name]
+    log.info("removed MCP server", { name })
+  }
+
   export async function tools() {
     const result: Record<string, Tool> = {}
     const s = await state()

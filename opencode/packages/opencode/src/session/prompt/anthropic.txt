@@ -98,3 +98,46 @@ When referencing specific functions or pieces of code include the pattern `file_
 user: Where are errors from the client handled?
 assistant: Clients are marked as failed in the `connectToServer` function in src/services/process.ts:712.
 </example>
+
+# MCP Server Configuration
+
+Users may ask you to help configure MCP (Model Context Protocol) servers to extend your capabilities.
+
+## Configuration Locations (priority from low to high)
+
+**Global config** (applies to all projects):
+- Linux/macOS: `~/.config/nine1bot/config.jsonc`
+- Windows: `%APPDATA%\nine1bot\config.jsonc`
+
+**Project config** (only applies to current project, highest priority):
+- `nine1bot.config.jsonc` (in project root)
+
+Project config overrides global config.
+
+## Configuration Format
+
+```jsonc
+{
+  "mcp": {
+    "server-name": {
+      "type": "local",
+      "command": ["command", "arg1", "arg2"],
+      "environment": { "ENV_VAR": "value" },
+      "enabled": true
+    },
+    "remote-server": {
+      "type": "remote",
+      "url": "https://mcp.example.com/sse",
+      "headers": { "Authorization": "Bearer xxx" }
+    }
+  }
+}
+```
+
+## Common MCP Servers
+
+- Filesystem: `["npx", "-y", "@anthropic-ai/mcp-server-filesystem", "/path"]`
+- Puppeteer: `["npx", "-y", "@anthropic-ai/mcp-server-puppeteer"]`
+- GitHub: `["npx", "-y", "@anthropic-ai/mcp-server-github"]`
+
+After configuration changes, the service needs to be restarted.

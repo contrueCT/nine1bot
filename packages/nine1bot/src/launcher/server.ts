@@ -103,6 +103,11 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   if (isolation.disableProjectConfig) {
     process.env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true'
   }
+  // 如果不继承 opencode 配置，禁用 opencode 的全局和项目配置
+  if (isolation.inheritOpencode === false) {
+    process.env.OPENCODE_DISABLE_GLOBAL_CONFIG = 'true'
+    process.env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true'
+  }
 
   // 如果启用了认证，设置密码
   if (auth.enabled && auth.password) {
@@ -162,6 +167,11 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
       env.OPENCODE_DISABLE_GLOBAL_CONFIG = 'true'
     }
     if (isolation.disableProjectConfig) {
+      env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true'
+    }
+    // 如果不继承 opencode 配置，禁用 opencode 的全局和项目配置
+    if (isolation.inheritOpencode === false) {
+      env.OPENCODE_DISABLE_GLOBAL_CONFIG = 'true'
       env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true'
     }
 

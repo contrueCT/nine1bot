@@ -438,6 +438,25 @@ export interface McpResource {
   mimeType?: string
 }
 
+// MCP 配置类型
+export interface McpLocalConfig {
+  type: 'local'
+  command: string[]
+  environment?: Record<string, string>
+  enabled?: boolean
+  timeout?: number
+}
+
+export interface McpRemoteConfig {
+  type: 'remote'
+  url: string
+  headers?: Record<string, string>
+  enabled?: boolean
+  timeout?: number
+}
+
+export type McpConfig = McpLocalConfig | McpRemoteConfig
+
 // === Provider Types ===
 export interface Provider {
   id: string
@@ -495,14 +514,27 @@ export const mcpApi = {
   },
 
   // 添加新 MCP 服务器
-  async add(config: { name: string; command?: string; args?: string[]; env?: Record<string, string> }): Promise<McpServer> {
+  async add(name: string, config: McpConfig): Promise<void> {
     const res = await fetch(`${BASE_URL}/mcp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: config.name, config })
+      body: JSON.stringify({ name, config })
     })
-    const data = await res.json()
-    return data
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to add MCP server: ${res.status}`)
+    }
+  },
+
+  // 删除 MCP 服务器
+  async remove(name: string): Promise<void> {
+    const res = await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}`, {
+      method: 'DELETE'
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to remove MCP server: ${res.status}`)
+    }
   },
 
   // 连接 MCP 服务器

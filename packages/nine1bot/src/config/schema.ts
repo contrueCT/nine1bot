@@ -37,6 +37,9 @@ export const IsolationConfigSchema = z.object({
   disableGlobalConfig: z.boolean().default(false),
   // 禁用项目级配置（./.opencode/）
   disableProjectConfig: z.boolean().default(false),
+  // 是否继承 opencode 的配置（默认继承）
+  // 设为 false 则完全使用 nine1bot 自己的配置
+  inheritOpencode: z.boolean().default(true),
 })
 
 // ===== OpenCode 兼容配置（简化版）=====

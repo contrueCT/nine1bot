@@ -22,6 +22,8 @@ const {
   selectModel,
   connectMcp,
   disconnectMcp,
+  addMcp,
+  removeMcp,
   startOAuth,
   setApiKey,
   removeAuth
@@ -97,6 +99,8 @@ function handleOverlayClick(e: MouseEvent) {
           :loading="loadingMcp"
           @connect="connectMcp"
           @disconnect="disconnectMcp"
+          @add="addMcp"
+          @remove="removeMcp"
         />
 
         <!-- Skills Tab -->
