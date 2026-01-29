@@ -26,6 +26,19 @@ export function useSession() {
   // 事件源订阅
   let eventSource: EventSource | null = null
 
+  // 外部事件处理器
+  const externalEventHandlers: ((event: SSEEvent) => void)[] = []
+
+  function registerEventHandler(handler: (event: SSEEvent) => void) {
+    externalEventHandlers.push(handler)
+    return () => {
+      const index = externalEventHandlers.indexOf(handler)
+      if (index > -1) {
+        externalEventHandlers.splice(index, 1)
+      }
+    }
+  }
+
   async function loadSessions(directory?: string) {
     try {
       sessions.value = await api.getSessions(directory)
@@ -282,10 +295,20 @@ export function useSession() {
     }
 
     eventSource = api.subscribeEvents((event: SSEEvent) => {
+      // 调用外部事件处理器（如 agent terminal）
+      for (const handler of externalEventHandlers) {
+        try {
+          handler(event)
+        } catch (e) {
+          console.error('External event handler error:', e)
+        }
+      }
+
       // 只处理当前会话的事件
       const sessionID = event.properties?.sessionID
         || event.properties?.message?.info?.sessionID
         || event.properties?.part?.sessionID
+        || event.properties?.info?.sessionID
       if (sessionID && currentSession.value && sessionID !== currentSession.value.id) {
         return
       }
@@ -520,6 +543,8 @@ export function useSession() {
     isSummarizing,
     // 待办事项
     todoItems,
-    loadTodoItems
+    loadTodoItems,
+    // 事件处理器注册
+    registerEventHandler
   }
 }

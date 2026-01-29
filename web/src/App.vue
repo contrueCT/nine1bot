@@ -10,6 +10,8 @@ import InputBox from './components/InputBox.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import FileViewer from './components/FileViewer.vue'
 import TodoList from './components/TodoList.vue'
+import TerminalPanel from './components/TerminalPanel.vue'
+import { useAgentTerminal } from './composables/useAgentTerminal'
 
 const {
   sessions,
@@ -41,8 +43,13 @@ const {
   summarizeSession,
   isSummarizing,
   todoItems,
-  loadTodoItems
+  loadTodoItems,
+  // 事件处理器注册
+  registerEventHandler
 } = useSession()
+
+// Agent 终端
+const { handleSSEEvent: handleTerminalEvent } = useAgentTerminal()
 
 const {
   files,
@@ -76,9 +83,13 @@ const sidebarTab = ref<'sessions' | 'files'>('sessions')
 
 // 保存 watch 停止函数以便在 unmount 时清理
 let stopSessionWatch: (() => void) | null = null
+let unregisterTerminalHandler: (() => void) | null = null
 
 onMounted(async () => {
   subscribeToEvents()
+
+  // 注册终端事件处理器
+  unregisterTerminalHandler = registerEventHandler(handleTerminalEvent)
 
   // 设置会话切换的 watch
   stopSessionWatch = watch(currentSession, async () => {
@@ -108,6 +119,11 @@ onUnmounted(() => {
   if (stopSessionWatch) {
     stopSessionWatch()
     stopSessionWatch = null
+  }
+  // 清理终端事件处理器
+  if (unregisterTerminalHandler) {
+    unregisterTerminalHandler()
+    unregisterTerminalHandler = null
   }
 })
 
@@ -212,7 +228,6 @@ function closeFileViewer() {
         :sidebarCollapsed="sidebarCollapsed"
         :isSummarizing="isSummarizing"
         @toggle-sidebar="toggleSidebar"
-        @new-session="handleNewSession"
         @abort="abortCurrentSession"
         @open-settings="openSettings"
         @summarize="handleSummarize"
@@ -254,6 +269,9 @@ function closeFileViewer() {
         </div>
       </div>
     </div>
+
+    <!-- Terminal Panel (Right Side) -->
+    <TerminalPanel />
 
     <!-- Settings Modal -->
     <SettingsPanel

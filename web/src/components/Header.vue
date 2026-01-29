@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { Sun, Moon, Settings, Plus, Square, Cpu, ChevronDown, PanelLeftOpen, Check, Minimize2, ListTodo } from 'lucide-vue-next'
+import { Sun, Moon, Settings, Square, Cpu, ChevronDown, PanelLeftOpen, Check, Minimize2, ListTodo } from 'lucide-vue-next'
 import type { Session } from '../api/client'
 import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
@@ -15,7 +15,6 @@ defineProps<{
 
 const emit = defineEmits<{
   'toggle-sidebar': []
-  'new-session': []
   'abort': []
   'open-settings': []
   'summarize': []
@@ -173,12 +172,6 @@ function getCurrentModelName(): string {
       <button class="btn btn-ghost btn-icon" @click="emit('open-settings')" title="设置">
         <Settings :size="20" />
       </button>
-
-      <!-- New Session Button -->
-      <button class="btn btn-primary new-btn" @click="emit('new-session')">
-        <Plus :size="18" />
-        <span>新建</span>
-      </button>
     </div>
   </header>
 </template>
@@ -330,20 +323,6 @@ function getCurrentModelName(): string {
 .dropdown-menu-scrollable {
   max-height: 400px;
   overflow-y: auto;
-}
-
-.new-btn {
-  border-radius: var(--radius-full);
-  padding-left: 16px;
-  padding-right: 20px;
-  box-shadow: 0 4px 12px var(--accent-glow);
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
-  border: none;
-}
-
-.new-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px var(--accent-glow);
 }
 
 .animate-pulse {

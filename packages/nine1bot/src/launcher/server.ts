@@ -2,11 +2,37 @@ import { resolve, dirname } from 'path'
 import { writeFile, mkdir } from 'fs/promises'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
+import { spawn as spawnChild, type ChildProcess } from 'child_process'
 import type { ServerConfig, AuthConfig, Nine1BotConfig } from '../config/schema'
 import { getInstallDir } from '../config/loader'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
+
+/**
+ * 跨平台杀死进程
+ */
+async function killProcess(proc: ChildProcess): Promise<void> {
+  if (!proc.pid) return
+
+  if (process.platform === 'win32') {
+    // Windows: 使用 taskkill 强制终止进程树
+    return new Promise((resolve) => {
+      const killer = spawnChild('taskkill', ['/pid', String(proc.pid), '/f', '/t'], {
+        stdio: 'ignore',
+      })
+      killer.on('exit', () => resolve())
+      killer.on('error', () => resolve())
+    })
+  } else {
+    // Unix: 发送 SIGTERM，如果进程未退出则发送 SIGKILL
+    proc.kill('SIGTERM')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    if (!proc.killed) {
+      proc.kill('SIGKILL')
+    }
+  }
+}
 
 export interface ServerInstance {
   url: string
@@ -120,7 +146,6 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
  */
 async function startServerProcess(options: StartServerOptions): Promise<ServerInstance> {
   const { server, auth, fullConfig } = options
-  const { spawn, ChildProcess } = await import('child_process')
 
   // 生成 opencode 兼容的配置文件
   const opencodeConfigPath = await generateOpencodeConfig(fullConfig)
@@ -147,15 +172,17 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
 
     // 使用安装目录的绝对路径
     const installDir = getInstallDir()
-    const opencodeEntry = resolve(installDir, 'opencode/packages/opencode/src/index.ts')
+    const opencodeDir = resolve(installDir, 'opencode/packages/opencode')
+    const opencodeEntry = resolve(opencodeDir, 'src/index.ts')
     const args = ['run', opencodeEntry, 'serve', '--port', String(server.port)]
 
     if (server.hostname !== '127.0.0.1') {
       args.push('--hostname', server.hostname)
     }
 
-    const proc = spawn('bun', args, {
-      cwd: installDir,
+    // cwd 必须设置为 opencode 包目录，以便 bunfig.toml 的 preload 配置生效
+    const proc = spawnChild('bun', args, {
+      cwd: opencodeDir,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -204,7 +231,7 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
           hostname: server.hostname,
           port: server.port,
           stop: async () => {
-            proc.kill('SIGTERM')
+            await killProcess(proc)
           },
         })
       }
@@ -236,7 +263,7 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
           hostname: server.hostname,
           port: server.port,
           stop: async () => {
-            proc.kill('SIGTERM')
+            await killProcess(proc)
           },
         })
       }

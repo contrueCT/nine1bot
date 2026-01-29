@@ -134,7 +134,22 @@ export function setupGracefulShutdown(result: LaunchResult): void {
     process.exit(0)
   }
 
+  // Windows 和 Unix 信号处理
   process.on('SIGINT', () => handleExit('SIGINT'))
   process.on('SIGTERM', () => handleExit('SIGTERM'))
-  process.on('SIGHUP', () => handleExit('SIGHUP'))
+
+  // SIGHUP 在 Windows 上不可用
+  if (process.platform !== 'win32') {
+    process.on('SIGHUP', () => handleExit('SIGHUP'))
+  }
+
+  // Windows 特殊处理：监听 stdin 关闭和 'exit' 事件
+  if (process.platform === 'win32') {
+    // 当终端窗口关闭时
+    process.on('exit', () => {
+      if (!isShuttingDown) {
+        shutdown(result).catch(() => {})
+      }
+    })
+  }
 }

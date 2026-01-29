@@ -102,11 +102,9 @@ export interface FileItem {
 // === Todo Types ===
 export interface TodoItem {
   id: string
-  subject: string
-  description?: string
-  status: 'pending' | 'in_progress' | 'completed'
-  owner?: string
-  blockedBy?: string[]
+  content: string  // 任务内容
+  status: string   // pending, in_progress, completed, cancelled
+  priority: string // high, medium, low
 }
 
 // === File Content Types ===

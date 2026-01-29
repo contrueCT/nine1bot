@@ -40,8 +40,32 @@ function getStatusText(status: string) {
       return '已完成'
     case 'in_progress':
       return '进行中'
+    case 'cancelled':
+      return '已取消'
     default:
       return '待处理'
+  }
+}
+
+function getPriorityClass(priority: string) {
+  switch (priority) {
+    case 'high':
+      return 'priority-high'
+    case 'medium':
+      return 'priority-medium'
+    default:
+      return 'priority-low'
+  }
+}
+
+function getPriorityText(priority: string) {
+  switch (priority) {
+    case 'high':
+      return '高'
+    case 'medium':
+      return '中'
+    default:
+      return '低'
   }
 }
 </script>
@@ -95,13 +119,11 @@ function getStatusText(status: string) {
             :class="{ spinning: item.status === 'in_progress' }"
           />
           <div class="todo-content">
-            <div class="todo-subject">{{ item.subject }}</div>
-            <div v-if="item.description" class="todo-description">{{ item.description }}</div>
+            <div class="todo-text">{{ item.content }}</div>
             <div class="todo-meta">
               <span class="todo-status">{{ getStatusText(item.status) }}</span>
-              <span v-if="item.owner" class="todo-owner">{{ item.owner }}</span>
-              <span v-if="item.blockedBy?.length" class="todo-blocked">
-                阻塞于: {{ item.blockedBy.join(', ') }}
+              <span class="todo-priority" :class="getPriorityClass(item.priority)">
+                {{ getPriorityText(item.priority) }}
               </span>
             </div>
           </div>
@@ -251,7 +273,7 @@ function getStatusText(status: string) {
   color: var(--success, #22c55e);
 }
 
-.status-completed .todo-subject {
+.status-completed .todo-text {
   text-decoration: line-through;
   opacity: 0.7;
 }
@@ -261,21 +283,12 @@ function getStatusText(status: string) {
   min-width: 0;
 }
 
-.todo-subject {
+.todo-text {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
-  margin-bottom: 2px;
-}
-
-.todo-description {
-  font-size: 12px;
-  color: var(--text-muted);
   margin-bottom: 4px;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  line-height: 1.4;
 }
 
 .todo-meta {
@@ -302,11 +315,25 @@ function getStatusText(status: string) {
   color: var(--success, #22c55e);
 }
 
-.todo-owner {
-  font-style: italic;
+.todo-priority {
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
 }
 
-.todo-blocked {
+.priority-high {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--error, #ef4444);
+}
+
+.priority-medium {
+  background: rgba(245, 158, 11, 0.1);
   color: var(--warning, #f59e0b);
+}
+
+.priority-low {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
 }
 </style>
