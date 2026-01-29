@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { spawn as spawnChild, type ChildProcess } from 'child_process'
 import type { ServerConfig, AuthConfig, Nine1BotConfig } from '../config/schema'
-import { getInstallDir, getGlobalSkillsDir } from '../config/loader'
+import { getInstallDir, getGlobalSkillsDir, getAuthPath, getGlobalConfigDir } from '../config/loader'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -140,6 +140,10 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
     process.env.OPENCODE_DISABLE_OPENCODE_AUTH = 'true'
   }
 
+  // 设置 Nine1Bot 独立的认证存储路径
+  await mkdir(getGlobalConfigDir(), { recursive: true })
+  process.env.NINE1BOT_AUTH_PATH = getAuthPath()
+
   // 动态导入 opencode 服务器模块
   // 使用安装目录的绝对路径
   const installDir = getInstallDir()
@@ -229,6 +233,10 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
     if (providerConfig.inheritOpencode === false) {
       env.OPENCODE_DISABLE_OPENCODE_AUTH = 'true'
     }
+
+    // 设置 Nine1Bot 独立的认证存储路径
+    await mkdir(getGlobalConfigDir(), { recursive: true })
+    env.NINE1BOT_AUTH_PATH = getAuthPath()
 
     // 使用安装目录的绝对路径
     const installDir = getInstallDir()

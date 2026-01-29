@@ -121,6 +121,15 @@ export function getGlobalSkillsDir(): string {
 }
 
 /**
+ * 获取认证文件路径
+ * - Windows: %APPDATA%\nine1bot\auth.json
+ * - Unix: ~/.config/nine1bot/auth.json
+ */
+export function getAuthPath(): string {
+  return join(getGlobalConfigDir(), 'auth.json')
+}
+
+/**
  * 检查文件是否存在
  */
 async function fileExists(filePath: string): Promise<boolean> {
