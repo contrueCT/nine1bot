@@ -43,7 +43,7 @@ export function useSettings() {
       // 并行获取 providers 和 auth methods
       const [providerData, authMethods] = await Promise.all([
         providerApi.list(),
-        providerApi.getAuthMethods().catch(() => ({}))
+        providerApi.getAuthMethods().catch(() => ({} as Record<string, any[]>))
       ])
 
       // 保存 defaults 和 connected

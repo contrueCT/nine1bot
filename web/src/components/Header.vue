@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { Sun, Moon, Settings, Plus, Square, Cpu, ChevronDown, PanelLeftOpen, Check } from 'lucide-vue-next'
+import { Sun, Moon, Settings, Plus, Square, Cpu, ChevronDown, PanelLeftOpen, Check, Minimize2, ListTodo } from 'lucide-vue-next'
 import type { Session } from '../api/client'
 import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
@@ -10,6 +10,7 @@ defineProps<{
   directory: string
   isStreaming: boolean
   sidebarCollapsed: boolean
+  isSummarizing?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -17,6 +18,8 @@ const emit = defineEmits<{
   'new-session': []
   'abort': []
   'open-settings': []
+  'summarize': []
+  'toggle-todo': []
 }>()
 
 const {
@@ -137,6 +140,27 @@ function getCurrentModelName(): string {
       >
         <Square :size="14" fill="currentColor" />
         <span>停止</span>
+      </button>
+
+      <!-- Summarize Button -->
+      <button
+        v-if="session && !isStreaming"
+        class="btn btn-ghost btn-icon"
+        @click="emit('summarize')"
+        :disabled="isSummarizing"
+        title="压缩会话"
+      >
+        <Minimize2 :size="20" :class="{ 'animate-pulse': isSummarizing }" />
+      </button>
+
+      <!-- Todo List Button -->
+      <button
+        v-if="session"
+        class="btn btn-ghost btn-icon"
+        @click="emit('toggle-todo')"
+        title="待办事项"
+      >
+        <ListTodo :size="20" />
       </button>
 
        <!-- Theme Toggle -->
@@ -320,6 +344,15 @@ function getCurrentModelName(): string {
 .new-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 16px var(--accent-glow);
+}
+
+.animate-pulse {
+  animation: pulse-opacity 1.5s infinite;
+}
+
+@keyframes pulse-opacity {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
 </style>
 

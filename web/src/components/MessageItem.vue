@@ -1,13 +1,54 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { marked } from 'marked'
-import { Bot, User, Brain, ChevronDown } from 'lucide-vue-next'
+import { Bot, User, Brain, ChevronDown, Pencil, Trash2, X, Check } from 'lucide-vue-next'
 import type { Message, MessagePart } from '../api/client'
 import ToolCall from './ToolCall.vue'
 
 const props = defineProps<{
   message: Message
 }>()
+
+const emit = defineEmits<{
+  'delete-part': [messageId: string, partId: string]
+  'update-part': [messageId: string, partId: string, updates: { text?: string }]
+}>()
+
+// 编辑状态
+const editingPartId = ref<string | null>(null)
+const editText = ref('')
+const deleteConfirmPartId = ref<string | null>(null)
+
+function startEdit(part: MessagePart) {
+  if (part.type !== 'text' || !part.text) return
+  editingPartId.value = part.id
+  editText.value = part.text
+}
+
+function cancelEdit() {
+  editingPartId.value = null
+  editText.value = ''
+}
+
+function confirmEdit(partId: string) {
+  if (editText.value.trim()) {
+    emit('update-part', props.message.info.id, partId, { text: editText.value.trim() })
+  }
+  cancelEdit()
+}
+
+function startDelete(part: MessagePart) {
+  deleteConfirmPartId.value = part.id
+}
+
+function cancelDelete() {
+  deleteConfirmPartId.value = null
+}
+
+function confirmDelete(partId: string) {
+  emit('delete-part', props.message.info.id, partId)
+  cancelDelete()
+}
 
 // Configure marked
 marked.setOptions({
@@ -87,10 +128,62 @@ function formatText(text: string): string {
           <!-- Text Content with Markdown -->
           <div
             v-else-if="item.type === 'text'"
-            class="markdown-content"
-            v-html="formatText(item.part.text || '')"
-          ></div>
+            class="text-part"
+            :class="{ 'editing': editingPartId === item.part.id }"
+          >
+            <!-- 编辑模式 -->
+            <div v-if="editingPartId === item.part.id" class="edit-mode">
+              <textarea
+                v-model="editText"
+                class="edit-textarea"
+                rows="4"
+                @keyup.escape="cancelEdit"
+              ></textarea>
+              <div class="edit-actions">
+                <button class="btn btn-ghost btn-sm" @click="cancelEdit">
+                  <X :size="14" /> 取消
+                </button>
+                <button class="btn btn-primary btn-sm" @click="confirmEdit(item.part.id)" :disabled="!editText.trim()">
+                  <Check :size="14" /> 保存
+                </button>
+              </div>
+            </div>
+            <!-- 正常显示模式 -->
+            <template v-else>
+              <div class="markdown-content" v-html="formatText(item.part.text || '')"></div>
+              <div class="part-actions">
+                <button class="action-btn" @click="startEdit(item.part)" title="编辑">
+                  <Pencil :size="14" />
+                </button>
+                <button class="action-btn danger" @click="startDelete(item.part)" title="删除">
+                  <Trash2 :size="14" />
+                </button>
+              </div>
+            </template>
+          </div>
         </template>
+      </div>
+    </div>
+
+    <!-- 删除确认对话框 -->
+    <div v-if="deleteConfirmPartId" class="dialog-overlay" @click="cancelDelete">
+      <div class="dialog" @click.stop>
+        <div class="dialog-header">
+          <span>删除消息内容</span>
+          <button class="action-btn" @click="cancelDelete">
+            <X :size="16" />
+          </button>
+        </div>
+        <div class="dialog-body">
+          <p class="dialog-message">确定要删除这部分内容吗？</p>
+          <p class="dialog-warning">此操作不可撤销。</p>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-ghost btn-sm" @click="cancelDelete">取消</button>
+          <button class="btn btn-danger btn-sm" @click="confirmDelete(deleteConfirmPartId)">
+            <Trash2 :size="14" /> 删除
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -327,6 +420,152 @@ function formatText(text: string): string {
   padding-left: 1em;
   font-style: italic;
   color: var(--text-muted);
+}
+
+/* Text Part with Actions */
+.text-part {
+  position: relative;
+}
+
+.text-part:hover .part-actions {
+  opacity: 1;
+}
+
+.part-actions {
+  position: absolute;
+  top: 0;
+  right: -8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  transform: translateX(100%);
+}
+
+.action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.action-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.action-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--error, #ef4444);
+}
+
+/* Edit Mode */
+.edit-mode {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.edit-textarea {
+  width: 100%;
+  min-width: 300px;
+  padding: var(--space-sm);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.edit-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+.btn-sm {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 13px;
+  height: 32px;
+}
+
+.btn-danger {
+  background: var(--error, #ef4444);
+  color: white;
+  border: none;
+}
+
+.btn-danger:hover {
+  background: #dc2626;
+}
+
+/* Delete Dialog */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 320px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg);
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.dialog-body {
+  padding: var(--space-md);
+}
+
+.dialog-message {
+  color: var(--text-primary);
+  margin-bottom: var(--space-sm);
+}
+
+.dialog-warning {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-top: 1px solid var(--border);
 }
 </style>
 

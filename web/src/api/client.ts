@@ -88,6 +88,29 @@ export interface FileItem {
   type: 'file' | 'directory'
 }
 
+// === Todo Types ===
+export interface TodoItem {
+  id: string
+  subject: string
+  description?: string
+  status: 'pending' | 'in_progress' | 'completed'
+  owner?: string
+  blockedBy?: string[]
+}
+
+// === File Content Types ===
+export interface FileContent {
+  content: string
+  path: string
+  encoding?: string
+}
+
+export interface FileSearchResult {
+  path: string
+  name: string
+  type: 'file' | 'directory'
+}
+
 export const api = {
   // 健康检查
   async health(): Promise<{ healthy: boolean; version: string }> {
@@ -239,6 +262,51 @@ export const api = {
     }
   },
 
+  // 删除消息部分
+  async deleteMessagePart(sessionId: string, messageId: string, partId: string): Promise<boolean> {
+    const res = await fetch(`${BASE_URL}/session/${sessionId}/message/${messageId}/part/${partId}`, {
+      method: 'DELETE'
+    })
+    if (!res.ok) {
+      throw new Error(`Failed to delete message part: ${res.status}`)
+    }
+    return true
+  },
+
+  // 更新消息部分
+  async updateMessagePart(sessionId: string, messageId: string, partId: string, updates: { text?: string }): Promise<MessagePart> {
+    const res = await fetch(`${BASE_URL}/session/${sessionId}/message/${messageId}/part/${partId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    })
+    if (!res.ok) {
+      throw new Error(`Failed to update message part: ${res.status}`)
+    }
+    const data = await res.json()
+    return data.data || data
+  },
+
+  // 压缩会话
+  async summarizeSession(sessionId: string): Promise<void> {
+    const res = await fetch(`${BASE_URL}/session/${sessionId}/summarize`, {
+      method: 'POST'
+    })
+    if (!res.ok) {
+      throw new Error(`Failed to summarize session: ${res.status}`)
+    }
+  },
+
+  // 获取会话待办事项
+  async getSessionTodo(sessionId: string): Promise<TodoItem[]> {
+    const res = await fetch(`${BASE_URL}/session/${sessionId}/todo`)
+    if (!res.ok) {
+      throw new Error(`Failed to get session todo: ${res.status}`)
+    }
+    const data = await res.json()
+    return Array.isArray(data) ? data : (data.data || [])
+  },
+
   // 获取文件列表
   async getFiles(path: string = ''): Promise<FileItem[]> {
     const params = new URLSearchParams()
@@ -246,6 +314,28 @@ export const api = {
     const res = await fetch(`${BASE_URL}/file?${params}`)
     const data = await res.json()
     // API 直接返回数组
+    return Array.isArray(data) ? data : (data.data || [])
+  },
+
+  // 获取文件内容
+  async getFileContent(path: string): Promise<FileContent> {
+    const params = new URLSearchParams({ path })
+    const res = await fetch(`${BASE_URL}/file/content?${params}`)
+    if (!res.ok) {
+      throw new Error(`Failed to get file content: ${res.status}`)
+    }
+    const data = await res.json()
+    return data.data || data
+  },
+
+  // 搜索文件
+  async searchFiles(pattern: string): Promise<FileSearchResult[]> {
+    const params = new URLSearchParams({ pattern })
+    const res = await fetch(`${BASE_URL}/find/file?${params}`)
+    if (!res.ok) {
+      throw new Error(`Failed to search files: ${res.status}`)
+    }
+    const data = await res.json()
     return Array.isArray(data) ? data : (data.data || [])
   },
 

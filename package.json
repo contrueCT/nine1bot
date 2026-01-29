@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --cwd opencode dev",
-    "build:web": "cd web && npm run build",
+    "build:web": "bun run --cwd web build",
     "start": "bun run --cwd packages/nine1bot src/index.ts",
     "serve": "bun run --cwd opencode/packages/opencode src/index.ts serve --port 4096",
-    "web": "cd web && npm run dev",
-    "nine1bot": "bun run --cwd packages/nine1bot src/index.ts"
+    "web": "bun run --cwd web dev",
+    "nine1bot": "bun run --cwd packages/nine1bot src/index.ts",
+    "rebuild": "bun run --cwd web build",
+    "dev:test": "bun run rebuild && bun run nine1bot"
   }
 }

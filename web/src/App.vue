@@ -8,6 +8,8 @@ import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import InputBox from './components/InputBox.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
+import FileViewer from './components/FileViewer.vue'
+import TodoList from './components/TodoList.vue'
 
 const {
   sessions,
@@ -32,17 +34,42 @@ const {
   respondPermission,
   clearSessionError,
   deleteSession,
-  renameSession
+  renameSession,
+  // 新增功能
+  deleteMessagePart,
+  updateMessagePart,
+  summarizeSession,
+  isSummarizing,
+  todoItems,
+  loadTodoItems
 } = useSession()
 
 const {
   files,
   isLoading: filesLoading,
   loadFiles,
-  toggleDirectory
+  toggleDirectory,
+  // 文件查看
+  fileContent,
+  isLoadingContent,
+  contentError,
+  loadFileContent,
+  clearFileContent,
+  // 文件搜索 (预留功能)
+  // searchResults,
+  // isSearching,
+  // searchError,
+  // searchFiles,
+  // clearSearch
 } = useFiles()
 
 const { showSettings, openSettings, closeSettings, currentProvider, currentModel } = useSettings()
+
+// 文件查看器状态
+const showFileViewer = ref(false)
+
+// 待办事项面板状态
+const showTodoList = ref(false)
 
 const sidebarCollapsed = ref(false)
 const sidebarTab = ref<'sessions' | 'files'>('sessions')
@@ -106,6 +133,53 @@ function handleNewSession() {
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
+
+// 处理消息部分删除
+async function handleDeletePart(messageId: string, partId: string) {
+  try {
+    await deleteMessagePart(messageId, partId)
+  } catch (error) {
+    console.error('Failed to delete message part:', error)
+  }
+}
+
+// 处理消息部分更新
+async function handleUpdatePart(messageId: string, partId: string, updates: { text?: string }) {
+  try {
+    await updateMessagePart(messageId, partId, updates)
+  } catch (error) {
+    console.error('Failed to update message part:', error)
+  }
+}
+
+// 处理会话压缩
+async function handleSummarize() {
+  try {
+    await summarizeSession()
+  } catch (error) {
+    console.error('Failed to summarize session:', error)
+  }
+}
+
+// 切换待办事项面板
+function toggleTodoList() {
+  showTodoList.value = !showTodoList.value
+  if (showTodoList.value) {
+    loadTodoItems()
+  }
+}
+
+// 处理文件点击查看
+async function handleFileClick(path: string) {
+  showFileViewer.value = true
+  await loadFileContent(path)
+}
+
+// 关闭文件查看器
+function closeFileViewer() {
+  showFileViewer.value = false
+  clearFileContent()
+}
 </script>
 
 <template>
@@ -125,6 +199,7 @@ function toggleSidebar() {
       @change-tab="(tab) => sidebarTab = tab"
       @delete-session="deleteSession"
       @rename-session="renameSession"
+      @file-click="handleFileClick"
     />
 
     <!-- Main Content -->
@@ -135,10 +210,13 @@ function toggleSidebar() {
         :directory="currentDirectory"
         :isStreaming="isStreaming"
         :sidebarCollapsed="sidebarCollapsed"
+        :isSummarizing="isSummarizing"
         @toggle-sidebar="toggleSidebar"
         @new-session="handleNewSession"
         @abort="abortCurrentSession"
         @open-settings="openSettings"
+        @summarize="handleSummarize"
+        @toggle-todo="toggleTodoList"
       />
 
       <!-- Chat Area -->
@@ -155,6 +233,8 @@ function toggleSidebar() {
           @permission-responded="respondPermission"
           @clear-error="clearSessionError"
           @open-settings="openSettings"
+          @delete-part="handleDeletePart"
+          @update-part="handleUpdatePart"
         />
         <InputBox
           :disabled="isLoading"
@@ -162,6 +242,16 @@ function toggleSidebar() {
           @send="handleSend"
           @abort="abortCurrentSession"
         />
+
+        <!-- Todo List Panel -->
+        <div v-if="showTodoList" class="todo-panel-container">
+          <TodoList
+            :items="todoItems"
+            :isLoading="isLoading"
+            @close="showTodoList = false"
+            @refresh="loadTodoItems"
+          />
+        </div>
       </div>
     </div>
 
@@ -170,9 +260,31 @@ function toggleSidebar() {
       v-if="showSettings"
       @close="closeSettings"
     />
+
+    <!-- File Viewer Modal -->
+    <FileViewer
+      v-if="showFileViewer"
+      :file="fileContent"
+      :isLoading="isLoadingContent"
+      :error="contentError"
+      @close="closeFileViewer"
+    />
   </div>
 </template>
 
 <style scoped>
 /* Layout uses global styles from style.css */
+
+.todo-panel-container {
+  position: absolute;
+  top: calc(var(--header-height) + var(--space-md));
+  right: var(--space-md);
+  z-index: 100;
+  width: 360px;
+  max-width: calc(100% - var(--space-md) * 2);
+}
+
+.chat-panel {
+  position: relative;
+}
 </style>

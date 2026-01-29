@@ -16,11 +16,13 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'questionAnswered', requestId: string): void
+  (e: 'questionAnswered', requestId: string, answers: string[][]): void
   (e: 'questionRejected', requestId: string): void
   (e: 'permissionResponded', requestId: string, response: 'once' | 'always' | 'reject'): void
   (e: 'clearError'): void
   (e: 'openSettings'): void
+  (e: 'deletePart', messageId: string, partId: string): void
+  (e: 'updatePart', messageId: string, partId: string, updates: { text?: string }): void
 }>()
 
 const scrollContainer = ref<HTMLDivElement>()
@@ -86,6 +88,8 @@ function scrollToBottom() {
         v-for="message in messages"
         :key="message.info.id"
         :message="message"
+        @delete-part="(msgId, partId) => emit('deletePart', msgId, partId)"
+        @update-part="(msgId, partId, updates) => emit('updatePart', msgId, partId, updates)"
       />
 
       <!-- Pending Permission Requests -->
@@ -104,8 +108,8 @@ function scrollToBottom() {
           v-for="request in pendingQuestions"
           :key="request.id"
           :request="request"
-          @answered="emit('questionAnswered', request.id)"
-          @rejected="emit('questionRejected', request.id)"
+          @answered="(id, answers) => emit('questionAnswered', id, answers)"
+          @rejected="(id) => emit('questionRejected', id)"
         />
       </div>
 

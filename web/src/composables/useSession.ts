@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, questionApi, permissionApi } from '../api/client'
+import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, type TodoItem, questionApi, permissionApi } from '../api/client'
 
 export function useSession() {
   const sessions = ref<Session[]>([])
@@ -18,6 +18,10 @@ export function useSession() {
 
   // 会话错误（如模型不可用）
   const sessionError = ref<{ message: string; dismissable?: boolean } | null>(null)
+
+  // 待办事项
+  const todoItems = ref<TodoItem[]>([])
+  const isSummarizing = ref(false)
 
   // 事件源订阅
   let eventSource: EventSource | null = null
@@ -405,6 +409,84 @@ export function useSession() {
     }
   }
 
+  // 删除消息部分
+  async function deleteMessagePart(messageId: string, partId: string) {
+    if (!currentSession.value) return
+
+    try {
+      await api.deleteMessagePart(currentSession.value.id, messageId, partId)
+
+      // 从本地消息列表中删除
+      const msgIndex = messages.value.findIndex(m => m.info.id === messageId)
+      if (msgIndex !== -1) {
+        messages.value[msgIndex].parts = messages.value[msgIndex].parts.filter(p => p.id !== partId)
+        // 如果消息没有任何部分了，也删除消息
+        if (messages.value[msgIndex].parts.length === 0) {
+          messages.value.splice(msgIndex, 1)
+        } else {
+          // 触发响应式更新
+          messages.value[msgIndex] = { ...messages.value[msgIndex] }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to delete message part:', error)
+      throw error
+    }
+  }
+
+  // 更新消息部分
+  async function updateMessagePart(messageId: string, partId: string, updates: { text?: string }) {
+    if (!currentSession.value) return
+
+    try {
+      const updatedPart = await api.updateMessagePart(currentSession.value.id, messageId, partId, updates)
+
+      // 更新本地消息
+      const msgIndex = messages.value.findIndex(m => m.info.id === messageId)
+      if (msgIndex !== -1) {
+        const partIndex = messages.value[msgIndex].parts.findIndex(p => p.id === partId)
+        if (partIndex !== -1) {
+          messages.value[msgIndex].parts[partIndex] = updatedPart
+          // 触发响应式更新
+          messages.value[msgIndex] = { ...messages.value[msgIndex] }
+        }
+      }
+      return updatedPart
+    } catch (error) {
+      console.error('Failed to update message part:', error)
+      throw error
+    }
+  }
+
+  // 压缩会话
+  async function summarizeSession() {
+    if (!currentSession.value || isSummarizing.value) return
+
+    isSummarizing.value = true
+    try {
+      await api.summarizeSession(currentSession.value.id)
+      // 重新加载消息以获取压缩后的内容
+      messages.value = await api.getMessages(currentSession.value.id)
+    } catch (error) {
+      console.error('Failed to summarize session:', error)
+      throw error
+    } finally {
+      isSummarizing.value = false
+    }
+  }
+
+  // 加载待办事项
+  async function loadTodoItems() {
+    if (!currentSession.value) return
+
+    try {
+      todoItems.value = await api.getSessionTodo(currentSession.value.id)
+    } catch (error) {
+      console.error('Failed to load todo items:', error)
+      todoItems.value = []
+    }
+  }
+
   return {
     sessions,
     currentSession,
@@ -429,6 +511,15 @@ export function useSession() {
     respondPermission,
     clearSessionError,
     deleteSession,
-    renameSession
+    renameSession,
+    // 消息管理
+    deleteMessagePart,
+    updateMessagePart,
+    // 会话高级功能
+    summarizeSession,
+    isSummarizing,
+    // 待办事项
+    todoItems,
+    loadTodoItems
   }
 }

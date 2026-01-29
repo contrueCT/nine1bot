@@ -21,6 +21,7 @@ const emit = defineEmits<{
   'change-tab': [tab: 'sessions' | 'files']
   'delete-session': [sessionId: string]
   'rename-session': [sessionId: string, title: string]
+  'file-click': [path: string]
 }>()
 
 // 重命名状态
@@ -214,6 +215,7 @@ function getSessionTitle(session: Session): string {
           :files="files"
           :isLoading="filesLoading"
           @toggle="emit('toggle-directory', $event)"
+          @select="(node) => emit('file-click', node.path)"
         />
       </div>
     </div>

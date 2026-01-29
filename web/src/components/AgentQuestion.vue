@@ -30,7 +30,7 @@ watch(() => props.request.id, () => {
 })
 
 const canSubmit = computed(() => {
-  return props.request.questions.every((q, i) => {
+  return props.request.questions.every((_q, i) => {
     const hasSelection = selectedAnswers.value[i]?.length > 0
     const hasCustom = customInputs.value[i]?.trim().length > 0
     return hasSelection || hasCustom
