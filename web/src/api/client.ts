@@ -210,6 +210,35 @@ export const api = {
     })
   },
 
+  // 删除会话
+  async deleteSession(sessionId: string): Promise<boolean> {
+    const res = await fetch(`${BASE_URL}/session/${sessionId}`, {
+      method: 'DELETE'
+    })
+    if (!res.ok) {
+      throw new Error(`Failed to delete session: ${res.status}`)
+    }
+    return true
+  },
+
+  // 更新会话（重命名等）
+  async updateSession(sessionId: string, updates: { title?: string }): Promise<Session> {
+    const res = await fetch(`${BASE_URL}/session/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    })
+    if (!res.ok) {
+      throw new Error(`Failed to update session: ${res.status}`)
+    }
+    const data = await res.json()
+    const session = data.data || data
+    return {
+      ...session,
+      createdAt: session.time ? new Date(session.time.created).toISOString() : undefined
+    }
+  },
+
   // 获取文件列表
   async getFiles(path: string = ''): Promise<FileItem[]> {
     const params = new URLSearchParams()

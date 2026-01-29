@@ -30,7 +30,9 @@ const {
   answerQuestion,
   rejectQuestion,
   respondPermission,
-  clearSessionError
+  clearSessionError,
+  deleteSession,
+  renameSession
 } = useSession()
 
 const {
@@ -121,6 +123,8 @@ function toggleSidebar() {
       @new-session="handleNewSession"
       @toggle-directory="toggleDirectory"
       @change-tab="(tab) => sidebarTab = tab"
+      @delete-session="deleteSession"
+      @rename-session="renameSession"
     />
 
     <!-- Main Content -->

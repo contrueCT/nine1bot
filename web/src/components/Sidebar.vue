@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ChevronsLeft, ChevronsRight, MessageSquare, Plus, Folder, MessagesSquare } from 'lucide-vue-next'
+import { ref } from 'vue'
+import { ChevronsLeft, ChevronsRight, MessageSquare, Plus, Folder, MessagesSquare, Pencil, Trash2, X, Check } from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
 import FileTree from './FileTree.vue'
 
@@ -18,7 +19,50 @@ const emit = defineEmits<{
   'new-session': []
   'toggle-directory': [file: FileItem]
   'change-tab': [tab: 'sessions' | 'files']
+  'delete-session': [sessionId: string]
+  'rename-session': [sessionId: string, title: string]
 }>()
+
+// 重命名状态
+const renamingSession = ref<Session | null>(null)
+const newTitle = ref('')
+
+// 删除确认状态
+const deletingSession = ref<Session | null>(null)
+
+function startRename(session: Session, event: Event) {
+  event.stopPropagation()
+  renamingSession.value = session
+  newTitle.value = session.title || `会话 ${session.id.slice(0, 6)}`
+}
+
+function cancelRename() {
+  renamingSession.value = null
+  newTitle.value = ''
+}
+
+function doRename() {
+  if (renamingSession.value && newTitle.value.trim()) {
+    emit('rename-session', renamingSession.value.id, newTitle.value.trim())
+  }
+  cancelRename()
+}
+
+function confirmDelete(session: Session, event: Event) {
+  event.stopPropagation()
+  deletingSession.value = session
+}
+
+function cancelDelete() {
+  deletingSession.value = null
+}
+
+function doDelete() {
+  if (deletingSession.value) {
+    emit('delete-session', deletingSession.value.id)
+  }
+  cancelDelete()
+}
 
 function formatTime(session: Session): string {
   // 优先使用 createdAt，否则使用 time.created
@@ -96,10 +140,71 @@ function getSessionTitle(session: Session): string {
             <span class="session-item-title">{{ getSessionTitle(session) }}</span>
             <span class="session-item-time">{{ formatTime(session) }}</span>
           </div>
+          <div class="session-actions" @click.stop>
+            <button class="action-btn" @click="startRename(session, $event)" title="重命名">
+              <Pencil :size="14" />
+            </button>
+            <button class="action-btn danger" @click="confirmDelete(session, $event)" title="删除">
+              <Trash2 :size="14" />
+            </button>
+          </div>
         </div>
 
         <div v-if="sessions.length === 0" class="empty-state">
           <p class="text-muted text-sm">暂无会话</p>
+        </div>
+      </div>
+
+      <!-- 重命名对话框 -->
+      <div v-if="renamingSession" class="dialog-overlay" @click="cancelRename">
+        <div class="dialog" @click.stop>
+          <div class="dialog-header">
+            <span>重命名会话</span>
+            <button class="action-btn" @click="cancelRename">
+              <X :size="16" />
+            </button>
+          </div>
+          <div class="dialog-body">
+            <input
+              v-model="newTitle"
+              type="text"
+              class="dialog-input"
+              placeholder="输入新名称"
+              @keyup.enter="doRename"
+              @keyup.escape="cancelRename"
+              autofocus
+            />
+          </div>
+          <div class="dialog-footer">
+            <button class="btn btn-ghost btn-sm" @click="cancelRename">取消</button>
+            <button class="btn btn-primary btn-sm" @click="doRename" :disabled="!newTitle.trim()">
+              <Check :size="14" class="mr-1" />
+              确定
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 删除确认对话框 -->
+      <div v-if="deletingSession" class="dialog-overlay" @click="cancelDelete">
+        <div class="dialog" @click.stop>
+          <div class="dialog-header">
+            <span>删除会话</span>
+            <button class="action-btn" @click="cancelDelete">
+              <X :size="16" />
+            </button>
+          </div>
+          <div class="dialog-body">
+            <p class="dialog-message">确定要删除会话 "{{ getSessionTitle(deletingSession) }}" 吗？</p>
+            <p class="dialog-warning">此操作不可撤销，所有消息将被永久删除。</p>
+          </div>
+          <div class="dialog-footer">
+            <button class="btn btn-ghost btn-sm" @click="cancelDelete">取消</button>
+            <button class="btn btn-danger btn-sm" @click="doDelete">
+              <Trash2 :size="14" class="mr-1" />
+              删除
+            </button>
+          </div>
         </div>
       </div>
 
@@ -285,6 +390,125 @@ function getSessionTitle(session: Session): string {
 .new-chat-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 16px var(--accent-glow);
+}
+
+/* Session actions */
+.session-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.session-item:hover .session-actions {
+  opacity: 1;
+}
+
+.action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.action-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.action-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--error, #ef4444);
+}
+
+/* Dialog styles */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.dialog {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 320px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg);
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.dialog-body {
+  padding: var(--space-md);
+}
+
+.dialog-input {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.dialog-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.dialog-message {
+  color: var(--text-primary);
+  margin-bottom: var(--space-sm);
+}
+
+.dialog-warning {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-top: 1px solid var(--border);
+}
+
+.btn-sm {
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 13px;
+  height: 32px;
+}
+
+.btn-danger {
+  background: var(--error, #ef4444);
+  color: white;
+  border: none;
+}
+
+.btn-danger:hover {
+  background: #dc2626;
 }
 </style>
 

@@ -364,6 +364,47 @@ export function useSession() {
     sessionError.value = null
   }
 
+  // 删除会话
+  async function deleteSession(sessionId: string) {
+    try {
+      await api.deleteSession(sessionId)
+      sessions.value = sessions.value.filter(s => s.id !== sessionId)
+
+      // 如果删除的是当前会话，切换到其他会话
+      if (currentSession.value?.id === sessionId) {
+        if (sessions.value.length > 0) {
+          await selectSession(sessions.value[0])
+        } else {
+          currentSession.value = null
+          messages.value = []
+        }
+      }
+    } catch (error) {
+      console.error('Failed to delete session:', error)
+      throw error
+    }
+  }
+
+  // 重命名会话
+  async function renameSession(sessionId: string, title: string) {
+    try {
+      const updated = await api.updateSession(sessionId, { title })
+
+      // 更新本地状态
+      const index = sessions.value.findIndex(s => s.id === sessionId)
+      if (index !== -1) {
+        sessions.value[index] = updated
+      }
+      if (currentSession.value?.id === sessionId) {
+        currentSession.value = updated
+      }
+      return updated
+    } catch (error) {
+      console.error('Failed to rename session:', error)
+      throw error
+    }
+  }
+
   return {
     sessions,
     currentSession,
@@ -386,6 +427,8 @@ export function useSession() {
     answerQuestion,
     rejectQuestion,
     respondPermission,
-    clearSessionError
+    clearSessionError,
+    deleteSession,
+    renameSession
   }
 }
