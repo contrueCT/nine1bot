@@ -70,6 +70,17 @@ export interface MessagePart {
   metadata?: Record<string, any>
 }
 
+// 文件附件类型
+export interface FilePart {
+  id: string
+  sessionID?: string
+  messageID?: string
+  type: 'file'
+  mime: string
+  filename?: string
+  url: string
+}
+
 export interface ToolState {
   status: 'pending' | 'running' | 'completed' | 'error'
   input?: Record<string, any>
@@ -79,7 +90,7 @@ export interface ToolState {
   error?: string
   time?: { start?: number; end?: number; compacted?: number }
   metadata?: Record<string, any>
-  attachments?: any[]
+  attachments?: FilePart[]
 }
 
 export interface FileItem {

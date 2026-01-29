@@ -58,7 +58,7 @@ function getFileName(path: string): string {
         <div v-else-if="error" class="viewer-error">
           <p>{{ error }}</p>
         </div>
-        <pre v-else-if="file?.content" class="viewer-content"><code>{{ file.content }}</code></pre>
+        <pre v-else-if="file?.content" class="viewer-content custom-scrollbar"><code>{{ file.content }}</code></pre>
         <div v-else class="viewer-empty">
           <p>文件内容为空</p>
         </div>
@@ -144,8 +144,10 @@ function getFileName(path: string): string {
 
 .viewer-body {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   min-height: 200px;
+  display: flex;
+  flex-direction: column;
 }
 
 .viewer-loading,
@@ -185,8 +187,18 @@ function getFileName(path: string): string {
   font-size: 13px;
   line-height: 1.6;
   color: var(--text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
+  word-break: normal;
+  overflow: auto;
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.viewer-content code {
+  display: block;
+  min-width: fit-content;
 }
 
 .viewer-footer {

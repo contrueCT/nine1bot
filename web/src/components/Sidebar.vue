@@ -156,59 +156,6 @@ function getSessionTitle(session: Session): string {
         </div>
       </div>
 
-      <!-- 重命名对话框 -->
-      <div v-if="renamingSession" class="dialog-overlay" @click="cancelRename">
-        <div class="dialog" @click.stop>
-          <div class="dialog-header">
-            <span>重命名会话</span>
-            <button class="action-btn" @click="cancelRename">
-              <X :size="16" />
-            </button>
-          </div>
-          <div class="dialog-body">
-            <input
-              v-model="newTitle"
-              type="text"
-              class="dialog-input"
-              placeholder="输入新名称"
-              @keyup.enter="doRename"
-              @keyup.escape="cancelRename"
-              autofocus
-            />
-          </div>
-          <div class="dialog-footer">
-            <button class="btn btn-ghost btn-sm" @click="cancelRename">取消</button>
-            <button class="btn btn-primary btn-sm" @click="doRename" :disabled="!newTitle.trim()">
-              <Check :size="14" class="mr-1" />
-              确定
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 删除确认对话框 -->
-      <div v-if="deletingSession" class="dialog-overlay" @click="cancelDelete">
-        <div class="dialog" @click.stop>
-          <div class="dialog-header">
-            <span>删除会话</span>
-            <button class="action-btn" @click="cancelDelete">
-              <X :size="16" />
-            </button>
-          </div>
-          <div class="dialog-body">
-            <p class="dialog-message">确定要删除会话 "{{ getSessionTitle(deletingSession) }}" 吗？</p>
-            <p class="dialog-warning">此操作不可撤销，所有消息将被永久删除。</p>
-          </div>
-          <div class="dialog-footer">
-            <button class="btn btn-ghost btn-sm" @click="cancelDelete">取消</button>
-            <button class="btn btn-danger btn-sm" @click="doDelete">
-              <Trash2 :size="14" class="mr-1" />
-              删除
-            </button>
-          </div>
-        </div>
-      </div>
-
       <!-- Files Tab -->
       <div v-if="activeTab === 'files'" class="files-container">
         <FileTree
@@ -227,6 +174,62 @@ function getSessionTitle(session: Session): string {
       </button>
     </div>
   </aside>
+
+  <!-- 使用 Teleport 将对话框传送到 body，避免被侧边栏样式限制 -->
+  <Teleport to="body">
+    <!-- 重命名对话框 -->
+    <div v-if="renamingSession" class="dialog-overlay" @click="cancelRename">
+      <div class="dialog" @click.stop>
+        <div class="dialog-header">
+          <span>重命名会话</span>
+          <button class="action-btn" @click="cancelRename">
+            <X :size="16" />
+          </button>
+        </div>
+        <div class="dialog-body">
+          <input
+            v-model="newTitle"
+            type="text"
+            class="dialog-input"
+            placeholder="输入新名称"
+            @keyup.enter="doRename"
+            @keyup.escape="cancelRename"
+            autofocus
+          />
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-ghost btn-sm" @click="cancelRename">取消</button>
+          <button class="btn btn-primary btn-sm" @click="doRename" :disabled="!newTitle.trim()">
+            <Check :size="14" class="mr-1" />
+            确定
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除确认对话框 -->
+    <div v-if="deletingSession" class="dialog-overlay" @click="cancelDelete">
+      <div class="dialog" @click.stop>
+        <div class="dialog-header">
+          <span>删除会话</span>
+          <button class="action-btn" @click="cancelDelete">
+            <X :size="16" />
+          </button>
+        </div>
+        <div class="dialog-body">
+          <p class="dialog-message">确定要删除会话 "{{ getSessionTitle(deletingSession) }}" 吗？</p>
+          <p class="dialog-warning">此操作不可撤销，所有消息将被永久删除。</p>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-ghost btn-sm" @click="cancelDelete">取消</button>
+          <button class="btn btn-danger btn-sm" @click="doDelete">
+            <Trash2 :size="14" class="mr-1" />
+            删除
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -430,7 +433,10 @@ function getSessionTitle(session: Session): string {
   color: var(--error, #ef4444);
 }
 
-/* Dialog styles */
+</style>
+
+<!-- 非 scoped 样式，用于 Teleport 的对话框 -->
+<style>
 .dialog-overlay {
   position: fixed;
   inset: 0;
@@ -458,6 +464,25 @@ function getSessionTitle(session: Session): string {
   padding: var(--space-md);
   border-bottom: 1px solid var(--border);
   font-weight: 600;
+}
+
+.dialog-header .action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.dialog-header .action-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
 .dialog-body {
@@ -497,20 +522,27 @@ function getSessionTitle(session: Session): string {
   border-top: 1px solid var(--border);
 }
 
-.btn-sm {
+.dialog-footer .btn-sm {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   padding: var(--space-xs) var(--space-sm);
   font-size: 13px;
   height: 32px;
 }
 
-.btn-danger {
+.dialog-footer .btn-danger {
   background: var(--error, #ef4444);
   color: white;
   border: none;
 }
 
-.btn-danger:hover {
+.dialog-footer .btn-danger:hover {
   background: #dc2626;
+}
+
+.dialog-footer .mr-1 {
+  margin-right: 4px;
 }
 </style>
 

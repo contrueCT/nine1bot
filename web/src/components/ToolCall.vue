@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { FileDown, File } from 'lucide-vue-next'
 import type { MessagePart } from '../api/client'
+
+// 附件类型
+interface FileAttachment {
+  id: string
+  type: 'file'
+  mime: string
+  filename?: string
+  url: string
+}
 
 const props = defineProps<{
   tool: MessagePart
@@ -86,6 +96,38 @@ const executionTime = computed(() => {
   if (duration < 1000) return `${duration}ms`
   return `${(duration / 1000).toFixed(1)}s`
 })
+
+// Attachments (files to download)
+const attachments = computed<FileAttachment[]>(() => {
+  const atts = props.tool.state?.attachments
+  if (!atts || !Array.isArray(atts)) return []
+  return atts.filter((a: any) => a.type === 'file' && a.url)
+})
+
+// Download file
+function downloadFile(attachment: FileAttachment) {
+  const link = document.createElement('a')
+  link.href = attachment.url
+  link.download = attachment.filename || 'download'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
+// Format file size
+function formatFileSize(url: string): string {
+  // Estimate size from base64 data URL
+  if (url.startsWith('data:')) {
+    const base64Part = url.split(',')[1]
+    if (base64Part) {
+      const bytes = Math.ceil(base64Part.length * 0.75)
+      if (bytes < 1024) return `${bytes} B`
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    }
+  }
+  return ''
+}
 </script>
 
 <template>
@@ -139,6 +181,23 @@ const executionTime = computed(() => {
         <pre class="error-text">{{ tool.state.error }}</pre>
       </div>
     </div>
+
+    <!-- Attachments (always visible when present) -->
+    <div v-if="attachments.length > 0" class="tool-attachments">
+      <div
+        v-for="attachment in attachments"
+        :key="attachment.id"
+        class="attachment-item"
+      >
+        <File :size="16" class="attachment-icon" />
+        <span class="attachment-name">{{ attachment.filename || '未命名文件' }}</span>
+        <span class="attachment-size">{{ formatFileSize(attachment.url) }}</span>
+        <button class="download-btn" @click="downloadFile(attachment)" title="下载文件">
+          <FileDown :size="14" />
+          <span>下载</span>
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -173,5 +232,73 @@ const executionTime = computed(() => {
 
 .error-text {
   color: var(--error);
+}
+
+/* Attachments */
+.tool-attachments {
+  margin-top: var(--space-sm);
+  padding: var(--space-sm);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.attachment-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+}
+
+.attachment-item:not(:last-child) {
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.attachment-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.attachment-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-size {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.download-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.download-btn:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.download-btn:active {
+  transform: translateY(0);
 }
 </style>
