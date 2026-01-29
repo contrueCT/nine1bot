@@ -125,6 +125,21 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
     process.env.OPENCODE_DISABLE_OPENCODE_SKILLS = 'true'
   }
 
+  // MCP 配置：继承控制
+  const mcpConfig = fullConfig.mcp as any || {}
+  if (mcpConfig.inheritOpencode === false) {
+    process.env.OPENCODE_DISABLE_OPENCODE_MCP = 'true'
+  }
+  if (mcpConfig.inheritClaudeCode === false) {
+    process.env.OPENCODE_DISABLE_CLAUDE_CODE_MCP = 'true'
+  }
+
+  // Provider 认证配置：继承控制
+  const providerConfig = fullConfig.provider as any || {}
+  if (providerConfig.inheritOpencode === false) {
+    process.env.OPENCODE_DISABLE_OPENCODE_AUTH = 'true'
+  }
+
   // 动态导入 opencode 服务器模块
   // 使用安装目录的绝对路径
   const installDir = getInstallDir()
@@ -198,6 +213,21 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
     }
     if (skills.inheritOpencode === false) {
       env.OPENCODE_DISABLE_OPENCODE_SKILLS = 'true'
+    }
+
+    // MCP 配置：继承控制
+    const mcpConfig = fullConfig.mcp as any || {}
+    if (mcpConfig.inheritOpencode === false) {
+      env.OPENCODE_DISABLE_OPENCODE_MCP = 'true'
+    }
+    if (mcpConfig.inheritClaudeCode === false) {
+      env.OPENCODE_DISABLE_CLAUDE_CODE_MCP = 'true'
+    }
+
+    // Provider 认证配置：继承控制
+    const providerConfig = fullConfig.provider as any || {}
+    if (providerConfig.inheritOpencode === false) {
+      env.OPENCODE_DISABLE_OPENCODE_AUTH = 'true'
     }
 
     // 使用安装目录的绝对路径

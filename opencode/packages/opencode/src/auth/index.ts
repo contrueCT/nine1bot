@@ -2,6 +2,7 @@ import path from "path"
 import { Global } from "../global"
 import fs from "fs/promises"
 import z from "zod"
+import { Flag } from "../flag/flag"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
@@ -43,6 +44,11 @@ export namespace Auth {
   }
 
   export async function all(): Promise<Record<string, Info>> {
+    // If opencode auth is disabled, return empty (Nine1Bot will use its own auth)
+    if (Flag.OPENCODE_DISABLE_OPENCODE_AUTH) {
+      return {}
+    }
+
     const file = Bun.file(filepath)
     const data = await file.json().catch(() => ({}) as Record<string, unknown>)
     return Object.entries(data).reduce(

@@ -91,11 +91,17 @@ const McpRemoteSchema = z.object({
   timeout: z.number().optional(),
 })
 
-const McpConfigSchema = z.union([
+const McpServerConfigSchema = z.union([
   McpLocalSchema,
   McpRemoteSchema,
   z.object({ enabled: z.boolean() }),
 ])
+
+// MCP 配置（支持继承控制）
+const McpConfigSchema = z.object({
+  inheritOpencode: z.boolean().default(true),
+  inheritClaudeCode: z.boolean().default(true),
+}).catchall(McpServerConfigSchema)
 
 const ProviderOptionsSchema = z.object({
   apiKey: z.string().optional(),
@@ -103,11 +109,16 @@ const ProviderOptionsSchema = z.object({
   timeout: z.union([z.number(), z.literal(false)]).optional(),
 }).passthrough()
 
-const ProviderConfigSchema = z.object({
+const ProviderItemConfigSchema = z.object({
   options: ProviderOptionsSchema.optional(),
   whitelist: z.array(z.string()).optional(),
   blacklist: z.array(z.string()).optional(),
 }).passthrough()
+
+// Provider 配置（支持继承控制）
+const ProviderConfigSchema = z.object({
+  inheritOpencode: z.boolean().default(true),
+}).catchall(ProviderItemConfigSchema)
 
 // ===== 完整配置模式 =====
 

@@ -75,6 +75,22 @@ export namespace Config {
       result = mergeConfigConcatArrays(result, await global())
     }
 
+    // MCP inheritance control: clear opencode MCP if disabled
+    if (Flag.OPENCODE_DISABLE_OPENCODE_MCP) {
+      result.mcp = {}
+      log.debug("cleared opencode MCP config (OPENCODE_DISABLE_OPENCODE_MCP)")
+    }
+
+    // Load Claude Code MCP if not disabled
+    if (!Flag.OPENCODE_DISABLE_CLAUDE_CODE_MCP) {
+      const { loadClaudeCodeMcp } = await import("./claude-mcp")
+      const claudeMcp = await loadClaudeCodeMcp()
+      if (Object.keys(claudeMcp).length > 0) {
+        result.mcp = { ...claudeMcp, ...(result.mcp || {}) }
+        log.debug("loaded Claude Code MCP config", { count: Object.keys(claudeMcp).length })
+      }
+    }
+
     // Custom config path overrides global
     if (Flag.OPENCODE_CONFIG) {
       result = mergeConfigConcatArrays(result, await loadFile(Flag.OPENCODE_CONFIG))
