@@ -112,6 +112,15 @@ export function getGlobalConfigPath(): string {
 }
 
 /**
+ * 获取全局 skills 目录
+ * - Windows: %APPDATA%\nine1bot\skills
+ * - Unix: ~/.config/nine1bot/skills
+ */
+export function getGlobalSkillsDir(): string {
+  return join(getGlobalConfigDir(), 'skills')
+}
+
+/**
  * 检查文件是否存在
  */
 async function fileExists(filePath: string): Promise<boolean> {

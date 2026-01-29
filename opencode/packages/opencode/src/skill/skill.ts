@@ -40,6 +40,7 @@ export namespace Skill {
 
   const OPENCODE_SKILL_GLOB = new Bun.Glob("{skill,skills}/**/SKILL.md")
   const CLAUDE_SKILL_GLOB = new Bun.Glob("skills/**/SKILL.md")
+  const NINE1BOT_SKILL_GLOB = new Bun.Glob("**/SKILL.md")
 
   export const state = Instance.state(async () => {
     const skills: Record<string, Info> = {}
@@ -72,6 +73,45 @@ export namespace Skill {
         name: parsed.data.name,
         description: parsed.data.description,
         location: match,
+      }
+    }
+
+    // Scan Nine1Bot skills directories (highest priority)
+    // Global: ~/.config/nine1bot/skills/ or %APPDATA%\nine1bot\skills\
+    const nine1botGlobalSkillsDir = process.env.NINE1BOT_SKILLS_DIR
+    if (nine1botGlobalSkillsDir && await Filesystem.isDir(nine1botGlobalSkillsDir)) {
+      const matches = await Array.fromAsync(
+        NINE1BOT_SKILL_GLOB.scan({
+          cwd: nine1botGlobalSkillsDir,
+          absolute: true,
+          onlyFiles: true,
+          followSymlinks: true,
+        }),
+      ).catch((error) => {
+        log.error("failed nine1bot global skills directory scan", { dir: nine1botGlobalSkillsDir, error })
+        return []
+      })
+      for (const match of matches) {
+        await addSkill(match)
+      }
+    }
+
+    // Project-level: .nine1bot/skills/
+    const nine1botProjectSkillsDir = path.join(Instance.directory, ".nine1bot", "skills")
+    if (await Filesystem.isDir(nine1botProjectSkillsDir)) {
+      const matches = await Array.fromAsync(
+        NINE1BOT_SKILL_GLOB.scan({
+          cwd: nine1botProjectSkillsDir,
+          absolute: true,
+          onlyFiles: true,
+          followSymlinks: true,
+        }),
+      ).catch((error) => {
+        log.error("failed nine1bot project skills directory scan", { dir: nine1botProjectSkillsDir, error })
+        return []
+      })
+      for (const match of matches) {
+        await addSkill(match)
       }
     }
 
@@ -110,15 +150,17 @@ export namespace Skill {
       }
     }
 
-    // Scan .opencode/skill/ directories
-    for (const dir of await Config.directories()) {
-      for await (const match of OPENCODE_SKILL_GLOB.scan({
-        cwd: dir,
-        absolute: true,
-        onlyFiles: true,
-        followSymlinks: true,
-      })) {
-        await addSkill(match)
+    // Scan .opencode/skill/ directories (if not disabled)
+    if (!Flag.OPENCODE_DISABLE_OPENCODE_SKILLS) {
+      for (const dir of await Config.directories()) {
+        for await (const match of OPENCODE_SKILL_GLOB.scan({
+          cwd: dir,
+          absolute: true,
+          onlyFiles: true,
+          followSymlinks: true,
+        })) {
+          await addSkill(match)
+        }
       }
     }
 

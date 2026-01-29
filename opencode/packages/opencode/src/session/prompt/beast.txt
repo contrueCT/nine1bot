@@ -188,3 +188,32 @@ Project config overrides global config.
 - GitHub: `["npx", "-y", "@anthropic-ai/mcp-server-github"]`
 
 After configuration changes, the service needs to be restarted.
+
+# Skills Configuration
+
+Skills extend your capabilities with predefined instructions. They can be:
+- **Complete packages**: A directory containing `SKILL.md` and related files
+- **Single files**: Just a `SKILL.md` file
+
+## Storage Locations
+
+- Global: `~/.config/nine1bot/skills/<skill-name>/SKILL.md` (Unix) or `%APPDATA%\nine1bot\skills\` (Windows)
+- Project: `.nine1bot/skills/<skill-name>/SKILL.md`
+
+## Installing Skills from URLs
+
+When users provide a GitHub repo or other URL to install a skill:
+1. Fetch and verify the link contains a valid skill (has `SKILL.md`)
+2. Ask the user for installation scope (global or project)
+3. Clone/download to the appropriate location:
+   - Global: `git clone <url> ~/.config/nine1bot/skills/<skill-name>`
+   - Project: `git clone <url> .nine1bot/skills/<skill-name>`
+4. Confirm installation and tell user to refresh settings
+
+# Provider Authentication
+
+API Keys are securely stored in `~/.opencode/data/auth.json` (not in config files).
+
+Users can configure authentication via:
+1. Web UI: Settings -> Auth -> Enter API Key or OAuth login
+2. Environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.

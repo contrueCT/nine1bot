@@ -42,6 +42,14 @@ export const IsolationConfigSchema = z.object({
   inheritOpencode: z.boolean().default(true),
 })
 
+// Skills 配置选项
+export const SkillsConfigSchema = z.object({
+  // 是否继承 opencode 的 skills（默认继承）
+  inheritOpencode: z.boolean().default(true),
+  // 是否继承 claude code 的 skills（默认继承）
+  inheritClaudeCode: z.boolean().default(true),
+})
+
 // ===== OpenCode 兼容配置（简化版）=====
 
 const PermissionActionSchema = z.enum(['ask', 'allow', 'deny'])
@@ -111,6 +119,7 @@ export const Nine1BotConfigSchema = z.object({
   auth: AuthConfigSchema.default({}),
   tunnel: TunnelConfigSchema.default({}),
   isolation: IsolationConfigSchema.default({}),
+  skills: SkillsConfigSchema.default({}),
 
   // OpenCode 兼容配置
   model: z.string().optional(),
@@ -178,3 +187,4 @@ export type TunnelConfig = z.infer<typeof TunnelConfigSchema>
 export type NgrokConfig = z.infer<typeof NgrokConfigSchema>
 export type NatappConfig = z.infer<typeof NatappConfigSchema>
 export type IsolationConfig = z.infer<typeof IsolationConfigSchema>
+export type SkillsConfig = z.infer<typeof SkillsConfigSchema>

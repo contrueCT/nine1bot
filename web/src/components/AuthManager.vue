@@ -35,6 +35,13 @@ function submitApiKey(providerId: string) {
     <div class="section-header">
       <h3 class="section-title">认证管理</h3>
       <p class="section-desc text-muted text-sm">管理 AI 提供者的认证信息</p>
+      <div class="auth-hint">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+        <span>API Key 安全存储在本地，不会上传到任何服务器</span>
+      </div>
     </div>
 
     <div v-if="loading" class="loading-state">
@@ -147,6 +154,23 @@ function submitApiKey(providerId: string) {
 
 .section-desc {
   margin: 0;
+}
+
+.auth-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.auth-hint svg {
+  flex-shrink: 0;
+  color: var(--success);
 }
 
 .loading-state {

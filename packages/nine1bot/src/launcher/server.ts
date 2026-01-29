@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { spawn as spawnChild, type ChildProcess } from 'child_process'
 import type { ServerConfig, AuthConfig, Nine1BotConfig } from '../config/schema'
-import { getInstallDir } from '../config/loader'
+import { getInstallDir, getGlobalSkillsDir } from '../config/loader'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -51,7 +51,7 @@ export interface StartServerOptions {
 /**
  * Nine1Bot 特有的配置字段（需要从 opencode 配置中过滤掉）
  */
-const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation']
+const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills']
 
 /**
  * 生成 opencode 兼容的配置文件
@@ -113,6 +113,16 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   if (auth.enabled && auth.password) {
     process.env.OPENCODE_SERVER_PASSWORD = auth.password
     process.env.OPENCODE_SERVER_USERNAME = 'nine1bot'
+  }
+
+  // Skills 配置：设置 Nine1Bot skills 目录
+  process.env.NINE1BOT_SKILLS_DIR = getGlobalSkillsDir()
+  const skills = fullConfig.skills || {}
+  if (skills.inheritClaudeCode === false) {
+    process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = 'true'
+  }
+  if (skills.inheritOpencode === false) {
+    process.env.OPENCODE_DISABLE_OPENCODE_SKILLS = 'true'
   }
 
   // 动态导入 opencode 服务器模块
@@ -178,6 +188,16 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
     if (auth.enabled && auth.password) {
       env.OPENCODE_SERVER_PASSWORD = auth.password
       env.OPENCODE_SERVER_USERNAME = 'nine1bot'
+    }
+
+    // Skills 配置：设置 Nine1Bot skills 目录
+    env.NINE1BOT_SKILLS_DIR = getGlobalSkillsDir()
+    const skills = fullConfig.skills || {}
+    if (skills.inheritClaudeCode === false) {
+      env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = 'true'
+    }
+    if (skills.inheritOpencode === false) {
+      env.OPENCODE_DISABLE_OPENCODE_SKILLS = 'true'
     }
 
     // 使用安装目录的绝对路径
