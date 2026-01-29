@@ -31,9 +31,17 @@ export const TunnelConfigSchema = z.object({
   natapp: NatappConfigSchema.optional(),
 })
 
+// 配置隔离选项
+export const IsolationConfigSchema = z.object({
+  // 禁用 opencode 全局配置（~/.config/opencode/）
+  disableGlobalConfig: z.boolean().default(false),
+  // 禁用项目级配置（./.opencode/）
+  disableProjectConfig: z.boolean().default(false),
+})
+
 // ===== OpenCode 兼容配置（简化版）=====
 
-const PermissionActionSchema = z.enum(['auto', 'ask', 'deny'])
+const PermissionActionSchema = z.enum(['ask', 'allow', 'deny'])
 
 const PermissionRuleSchema = z.union([
   PermissionActionSchema,
@@ -99,6 +107,7 @@ export const Nine1BotConfigSchema = z.object({
   server: ServerConfigSchema.default({}),
   auth: AuthConfigSchema.default({}),
   tunnel: TunnelConfigSchema.default({}),
+  isolation: IsolationConfigSchema.default({}),
 
   // OpenCode 兼容配置
   model: z.string().optional(),
@@ -165,3 +174,4 @@ export type AuthConfig = z.infer<typeof AuthConfigSchema>
 export type TunnelConfig = z.infer<typeof TunnelConfigSchema>
 export type NgrokConfig = z.infer<typeof NgrokConfigSchema>
 export type NatappConfig = z.infer<typeof NatappConfigSchema>
+export type IsolationConfig = z.infer<typeof IsolationConfigSchema>

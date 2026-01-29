@@ -1,5 +1,12 @@
-import { resolve } from 'path'
-import type { ServerConfig, AuthConfig } from '../config/schema'
+import { resolve, dirname } from 'path'
+import { writeFile, mkdir } from 'fs/promises'
+import { tmpdir } from 'os'
+import { fileURLToPath } from 'url'
+import type { ServerConfig, AuthConfig, Nine1BotConfig } from '../config/schema'
+import { getInstallDir } from '../config/loader'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 export interface ServerInstance {
   url: string
@@ -12,16 +19,64 @@ export interface StartServerOptions {
   server: ServerConfig
   auth: AuthConfig
   configPath: string
+  fullConfig: Nine1BotConfig
+}
+
+/**
+ * Nine1Bot 特有的配置字段（需要从 opencode 配置中过滤掉）
+ */
+const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation']
+
+/**
+ * 生成 opencode 兼容的配置文件
+ * 过滤掉 nine1bot 特有的字段
+ */
+async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
+  const opencodeConfig: Record<string, any> = {}
+
+  for (const [key, value] of Object.entries(config)) {
+    if (!NINE1BOT_ONLY_FIELDS.includes(key)) {
+      // 特殊处理 server 字段：只保留 opencode 认识的字段
+      if (key === 'server') {
+        const { openBrowser, ...rest } = value as any
+        if (Object.keys(rest).length > 0) {
+          opencodeConfig[key] = rest
+        }
+      } else {
+        opencodeConfig[key] = value
+      }
+    }
+  }
+
+  // 写入临时文件（设置安全权限，仅当前用户可读写）
+  const tempDir = resolve(tmpdir(), 'nine1bot')
+  await mkdir(tempDir, { recursive: true, mode: 0o700 })
+  const tempConfigPath = resolve(tempDir, 'opencode.config.json')
+  await writeFile(tempConfigPath, JSON.stringify(opencodeConfig, null, 2), { mode: 0o600 })
+
+  return tempConfigPath
 }
 
 /**
  * 启动 OpenCode 服务器
  */
 export async function startServer(options: StartServerOptions): Promise<ServerInstance> {
-  const { server, auth, configPath } = options
+  const { server, auth, fullConfig } = options
+
+  // 生成 opencode 兼容的配置文件（过滤掉 nine1bot 特有字段）
+  const opencodeConfigPath = await generateOpencodeConfig(fullConfig)
 
   // 设置环境变量
-  process.env.OPENCODE_CONFIG = configPath
+  process.env.OPENCODE_CONFIG = opencodeConfigPath
+
+  // 配置隔离：禁用全局或项目配置
+  const isolation = fullConfig.isolation || {}
+  if (isolation.disableGlobalConfig) {
+    process.env.OPENCODE_DISABLE_GLOBAL_CONFIG = 'true'
+  }
+  if (isolation.disableProjectConfig) {
+    process.env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true'
+  }
 
   // 如果启用了认证，设置密码
   if (auth.enabled && auth.password) {
@@ -30,8 +85,9 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   }
 
   // 动态导入 opencode 服务器模块
-  // 路径相对于 nine1bot 包的位置
-  const opencodeServerPath = resolve(__dirname, '../../../../opencode/packages/opencode/src/server/server.ts')
+  // 使用安装目录的绝对路径
+  const installDir = getInstallDir()
+  const opencodeServerPath = resolve(installDir, 'opencode/packages/opencode/src/server/server.ts')
 
   try {
     // 尝试导入 opencode 服务器
@@ -63,13 +119,25 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
  * 使用子进程启动服务器（备用方案）
  */
 async function startServerProcess(options: StartServerOptions): Promise<ServerInstance> {
-  const { server, auth, configPath } = options
-  const { spawn } = await import('child_process')
+  const { server, auth, fullConfig } = options
+  const { spawn, ChildProcess } = await import('child_process')
 
-  return new Promise((resolve, reject) => {
-    const env = {
+  // 生成 opencode 兼容的配置文件
+  const opencodeConfigPath = await generateOpencodeConfig(fullConfig)
+
+  return new Promise((resolvePromise, rejectPromise) => {
+    const env: Record<string, string | undefined> = {
       ...process.env,
-      OPENCODE_CONFIG: configPath,
+      OPENCODE_CONFIG: opencodeConfigPath,
+    }
+
+    // 配置隔离：禁用全局或项目配置
+    const isolation = fullConfig.isolation || {}
+    if (isolation.disableGlobalConfig) {
+      env.OPENCODE_DISABLE_GLOBAL_CONFIG = 'true'
+    }
+    if (isolation.disableProjectConfig) {
+      env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true'
     }
 
     if (auth.enabled && auth.password) {
@@ -77,7 +145,9 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
       env.OPENCODE_SERVER_USERNAME = 'nine1bot'
     }
 
-    const opencodeEntry = '../../opencode/packages/opencode/src/index.ts'
+    // 使用安装目录的绝对路径
+    const installDir = getInstallDir()
+    const opencodeEntry = resolve(installDir, 'opencode/packages/opencode/src/index.ts')
     const args = ['run', opencodeEntry, 'serve', '--port', String(server.port)]
 
     if (server.hostname !== '127.0.0.1') {
@@ -85,13 +155,40 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
     }
 
     const proc = spawn('bun', args, {
-      cwd: __dirname,
+      cwd: installDir,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
     let output = ''
     let resolved = false
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+    // 清理函数
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+      proc.stdout?.removeAllListeners('data')
+      proc.stderr?.removeAllListeners('data')
+      proc.removeAllListeners('error')
+      proc.removeAllListeners('close')
+    }
+
+    // 杀死进程并拒绝 Promise
+    const killAndReject = (error: Error) => {
+      if (!resolved) {
+        resolved = true
+        cleanup()
+        try {
+          proc.kill('SIGTERM')
+        } catch {
+          // 忽略杀死进程时的错误
+        }
+        rejectPromise(error)
+      }
+    }
 
     const handleOutput = (data: Buffer) => {
       output += data.toString()
@@ -101,7 +198,8 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
       const urlMatch = output.match(/Local:\s*(https?:\/\/[^\s]+)/)
       if (urlMatch && !resolved) {
         resolved = true
-        resolve({
+        cleanup()
+        resolvePromise({
           url: urlMatch[1],
           hostname: server.hostname,
           port: server.port,
@@ -116,25 +214,24 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
     proc.stderr?.on('data', handleOutput)
 
     proc.on('error', (error) => {
-      if (!resolved) {
-        resolved = true
-        reject(new Error(`Failed to start server: ${error.message}`))
-      }
+      killAndReject(new Error(`Failed to start server: ${error.message}`))
     })
 
     proc.on('close', (code) => {
       if (!resolved && code !== 0) {
         resolved = true
-        reject(new Error(`Server exited with code ${code}`))
+        cleanup()
+        rejectPromise(new Error(`Server exited with code ${code}`))
       }
     })
 
     // 超时处理
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       if (!resolved) {
         resolved = true
-        // 假设服务器已启动
-        resolve({
+        cleanup()
+        // 假设服务器已启动（进程仍在运行）
+        resolvePromise({
           url: `http://${server.hostname}:${server.port}`,
           hostname: server.hostname,
           port: server.port,

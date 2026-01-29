@@ -1,20 +1,119 @@
 {
   "$schema": "https://nine1bot.com/config.schema.json",
 
+  // ===== Nine1Bot 服务配置 =====
   "server": {
     "port": 4096,
     "hostname": "127.0.0.1",
     "openBrowser": true
   },
 
+  // 访问认证（可选）
   "auth": {
-    "enabled": false
+    "enabled": false,
+    "password": ""
   },
 
+  // 内网穿透（可选）
   "tunnel": {
     "enabled": false,
-    "provider": "ngrok"
+    "provider": "ngrok",
+    "ngrok": {
+      "authToken": ""
+    },
+    "natapp": {
+      "authToken": ""
+    }
   },
 
-  "model": "anthropic/claude-3-5-sonnet-20241022"
+  // 配置隔离（可选）
+  // 用于控制是否加载 opencode 的全局配置
+  "isolation": {
+    // 禁用全局配置（~/.config/opencode/ 和 ~/.opencode/）
+    "disableGlobalConfig": false,
+    // 禁用项目配置（./.opencode/）
+    "disableProjectConfig": false
+  },
+
+  // ===== AI 模型配置 =====
+  // 格式: "provider/model"
+  // 留空则自动选择第一个可用的 provider 和模型
+  // "model": "opencode/claude-sonnet-4",
+
+  // 小模型（用于生成标题等轻量任务）
+  // 留空则使用主模型
+
+  // ===== Provider 配置 =====
+  // 支持的 provider: anthropic, openai, openrouter, google, copilot, azure 等
+  // 只需配置你使用的 provider
+  "provider": {
+    // 示例: Anthropic
+    // "anthropic": {
+    //   "options": {
+    //     "apiKey": "{env:ANTHROPIC_API_KEY}"
+    //   }
+    // },
+
+    // 示例: 自定义 OpenAI 兼容 API
+    // "custom": {
+    //   "options": {
+    //     "apiKey": "{env:CUSTOM_API_KEY}",
+    //     "baseURL": "https://api.example.com/v1"
+    //   }
+    // }
+  },
+
+  // ===== MCP 服务器配置 =====
+  // 详见: https://modelcontextprotocol.io/
+  "mcp": {
+    // 本地 MCP 服务器示例
+    // "my-local-server": {
+    //   "type": "local",
+    //   "command": ["npx", "-y", "@some/mcp-server"],
+    //   "environment": {
+    //     "API_KEY": "{env:SOME_API_KEY}"
+    //   },
+    //   "enabled": true
+    // },
+
+    // 远程 MCP 服务器示例
+    // "my-remote-server": {
+    //   "type": "remote",
+    //   "url": "https://mcp.example.com/sse",
+    //   "headers": {
+    //     "Authorization": "Bearer {env:MCP_TOKEN}"
+    //   },
+    //   "enabled": true
+    // }
+  },
+
+  // ===== 沙箱配置 =====
+  "sandbox": {
+    "enabled": true,
+    "allowedPaths": [
+      "/tmp/*",
+      "~/.cache/*"
+    ],
+    "denyPaths": [
+      "*.env",
+      "*.key",
+      "*.pem",
+      "*credentials*"
+    ]
+  },
+
+  // ===== 压缩配置 =====
+  "compaction": {
+    "auto": true,
+    "prune": true
+  },
+
+  // ===== 额外指令文件 =====
+  "instructions": [
+    ".nine1bot/instructions.md",
+    "AGENTS.md"
+  ],
+
+  // ===== 插件 =====
+  "plugin": []
 }

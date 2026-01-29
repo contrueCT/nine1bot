@@ -4,7 +4,8 @@ import { fileURLToPath } from 'url'
 import { Nine1BotConfigSchema, type Nine1BotConfig } from './schema'
 import { execSync } from 'child_process'
 
-const CONFIG_FILENAME = 'nine1bot.config.json'
+// 支持的配置文件名（按优先级排序）
+const CONFIG_FILENAMES = ['nine1bot.config.jsonc', 'nine1bot.config.json']
 
 /**
  * 获取程序安装目录
@@ -19,6 +20,22 @@ export function getInstallDir(): string {
 }
 
 /**
+ * 在指定目录中查找配置文件
+ */
+async function findConfigInDir(dir: string): Promise<string | null> {
+  for (const filename of CONFIG_FILENAMES) {
+    const configPath = resolve(dir, filename)
+    try {
+      await access(configPath)
+      return configPath
+    } catch {
+      // 继续尝试下一个文件名
+    }
+  }
+  return null
+}
+
+/**
  * 查找配置文件路径
  * 优先级：
  * 1. 程序安装目录
@@ -27,12 +44,9 @@ export function getInstallDir(): string {
 export async function findConfigPath(startDir?: string): Promise<string | null> {
   // 首先检查安装目录
   const installDir = getInstallDir()
-  const installConfigPath = resolve(installDir, CONFIG_FILENAME)
-  try {
-    await access(installConfigPath)
+  const installConfigPath = await findConfigInDir(installDir)
+  if (installConfigPath) {
     return installConfigPath
-  } catch {
-    // 继续查找
   }
 
   // 如果指定了起始目录，从那里向上查找
@@ -41,22 +55,17 @@ export async function findConfigPath(startDir?: string): Promise<string | null> 
     const root = dirname(dir)
 
     while (dir !== root) {
-      const configPath = resolve(dir, CONFIG_FILENAME)
-      try {
-        await access(configPath)
+      const configPath = await findConfigInDir(dir)
+      if (configPath) {
         return configPath
-      } catch {
-        dir = dirname(dir)
       }
+      dir = dirname(dir)
     }
 
     // 检查根目录
-    const rootConfig = resolve(root, CONFIG_FILENAME)
-    try {
-      await access(rootConfig)
+    const rootConfig = await findConfigInDir(root)
+    if (rootConfig) {
       return rootConfig
-    } catch {
-      // 未找到
     }
   }
 
@@ -75,14 +84,86 @@ export async function configExists(): Promise<boolean> {
  * 获取默认配置文件路径（安装目录）
  */
 export function getDefaultConfigPath(): string {
-  return resolve(getInstallDir(), CONFIG_FILENAME)
+  return resolve(getInstallDir(), CONFIG_FILENAMES[0])
+}
+
+/**
+ * 去除 JSONC 中的注释
+ */
+function stripJsonComments(jsonc: string): string {
+  let result = ''
+  let inString = false
+  let inSingleLineComment = false
+  let inMultiLineComment = false
+  let i = 0
+
+  while (i < jsonc.length) {
+    const char = jsonc[i]
+    const nextChar = jsonc[i + 1]
+
+    // 处理字符串
+    if (!inSingleLineComment && !inMultiLineComment) {
+      if (char === '"' && jsonc[i - 1] !== '\\') {
+        inString = !inString
+        result += char
+        i++
+        continue
+      }
+    }
+
+    // 在字符串中，直接添加字符
+    if (inString) {
+      result += char
+      i++
+      continue
+    }
+
+    // 检测单行注释开始
+    if (!inMultiLineComment && char === '/' && nextChar === '/') {
+      inSingleLineComment = true
+      i += 2
+      continue
+    }
+
+    // 检测多行注释开始
+    if (!inSingleLineComment && char === '/' && nextChar === '*') {
+      inMultiLineComment = true
+      i += 2
+      continue
+    }
+
+    // 检测单行注释结束
+    if (inSingleLineComment && char === '\n') {
+      inSingleLineComment = false
+      result += char
+      i++
+      continue
+    }
+
+    // 检测多行注释结束
+    if (inMultiLineComment && char === '*' && nextChar === '/') {
+      inMultiLineComment = false
+      i += 2
+      continue
+    }
+
+    // 不在注释中，添加字符
+    if (!inSingleLineComment && !inMultiLineComment) {
+      result += char
+    }
+
+    i++
+  }
+
+  return result
 }
 
 /**
  * 加载配置文件
+ * @param customConfigPath 可选的自定义配置文件路径
  */
-export async function loadConfig(): Promise<Nine1BotConfig> {
-  const configPath = await findConfigPath()
+export async function loadConfig(customConfigPath?: string): Promise<Nine1BotConfig> {
+  const configPath = customConfigPath || await findConfigPath()
 
   if (!configPath) {
     // 返回默认配置
@@ -91,7 +172,9 @@ export async function loadConfig(): Promise<Nine1BotConfig> {
 
   try {
     const content = await readFile(configPath, 'utf-8')
-    const json = JSON.parse(content)
+    // 支持 JSONC（带注释的 JSON）
+    const jsonContent = stripJsonComments(content)
+    const json = JSON.parse(jsonContent)
 
     // 处理环境变量替换 {env:VAR_NAME}
     const processed = processEnvVars(json)
@@ -100,6 +183,12 @@ export async function loadConfig(): Promise<Nine1BotConfig> {
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(`Invalid JSON in config file: ${configPath}`)
+    }
+    // 处理 Zod 验证错误
+    if (error && typeof error === 'object' && 'issues' in error) {
+      const zodError = error as { issues: Array<{ path: (string | number)[]; message: string }> }
+      const messages = zodError.issues.map(i => `  - ${i.path.join('.')}: ${i.message}`).join('\n')
+      throw new Error(`Invalid config in ${configPath}:\n${messages}`)
     }
     throw error
   }
@@ -312,4 +401,4 @@ export async function addToPath(): Promise<{ success: boolean; message: string; 
   }
 }
 
-export { CONFIG_FILENAME }
+export { CONFIG_FILENAMES }
