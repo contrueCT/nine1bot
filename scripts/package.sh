@@ -74,7 +74,17 @@ else
     chmod +x "$BUILD_DIR/nine1bot"
 fi
 
-# 6. 打包
+# 6. 写入版本文件（用于更新检测）
+echo "Writing VERSION file..."
+echo "v${VERSION}" > "$BUILD_DIR/VERSION"
+
+# 7. 复制更新脚本
+echo "Copying update script..."
+mkdir -p "$BUILD_DIR/scripts"
+cp "$PROJECT_ROOT/scripts/update.sh" "$BUILD_DIR/scripts/"
+chmod +x "$BUILD_DIR/scripts/update.sh" 2>/dev/null || true
+
+# 8. 打包
 echo "Creating archive..."
 cd "$PROJECT_ROOT/build"
 
