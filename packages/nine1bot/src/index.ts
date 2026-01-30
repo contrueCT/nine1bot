@@ -1,4 +1,10 @@
 #!/usr/bin/env bun
+// 在程序最开始保存原始工作目录（在任何模块加载之前）
+// 这确保了用户运行 nine1bot 命令时的目录被正确记录
+if (!process.env.NINE1BOT_PROJECT_DIR) {
+  process.env.NINE1BOT_PROJECT_DIR = process.cwd()
+}
+
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
 import { UI } from './cli/ui'

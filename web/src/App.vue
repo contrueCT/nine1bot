@@ -253,7 +253,6 @@ function closeFileViewer() {
       <!-- Header -->
       <Header
         :session="currentSession"
-        :directory="currentDirectory"
         :isStreaming="isStreaming"
         :sidebarCollapsed="sidebarCollapsed"
         :isSummarizing="isSummarizing"

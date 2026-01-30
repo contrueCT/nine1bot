@@ -184,8 +184,8 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   process.env.NINE1BOT_PREFERENCES_PATH = getGlobalPreferencesPath()
 
   // 设置项目目录（用于 opencode 的默认工作目录）
-  // 使用用户运行 nine1bot 命令时的工作目录
-  // 注意：此时 process.cwd() 还是用户的原始工作目录，尚未被子进程改变
+  // 注意：NINE1BOT_PROJECT_DIR 应该在 index.ts 入口处就设置好了
+  // 这里只是一个后备方案
   if (!process.env.NINE1BOT_PROJECT_DIR) {
     process.env.NINE1BOT_PROJECT_DIR = process.cwd()
   }
@@ -301,7 +301,7 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
     env.NINE1BOT_PREFERENCES_PATH = getGlobalPreferencesPath()
 
     // 设置项目目录（用于 opencode 的默认工作目录）
-    // 使用用户运行 nine1bot 命令时的工作目录
+    // NINE1BOT_PROJECT_DIR 在 index.ts 入口处设置，这里直接使用
     env.NINE1BOT_PROJECT_DIR = process.env.NINE1BOT_PROJECT_DIR || process.cwd()
 
     const opencodeDir = resolve(installDir, 'opencode/packages/opencode')

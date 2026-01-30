@@ -7,7 +7,6 @@ import { useTheme } from '../composables/useTheme'
 
 defineProps<{
   session: Session | null
-  directory: string
   isStreaming: boolean
   sidebarCollapsed: boolean
   isSummarizing?: boolean
@@ -89,7 +88,6 @@ function getCurrentModelName(): string {
 
       <div class="session-info" v-if="session">
         <span class="session-title">{{ session.title || '新会话' }}</span>
-        <span class="session-dir text-muted text-xs">{{ directory }}</span>
       </div>
     </div>
 
@@ -253,18 +251,12 @@ function getCurrentModelName(): string {
 
 .session-info {
   display: flex;
-  flex-direction: column;
-  gap: 0;
+  align-items: center;
 }
 
 .session-title {
   font-weight: 600;
   font-size: 14px;
-}
-
-.session-dir {
-  font-family: var(--font-mono);
-  opacity: 0.7;
 }
 
 .dropdown-label {
