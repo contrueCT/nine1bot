@@ -199,15 +199,25 @@ Claude reads REDLINING.md or OOXML.md only when the user needs those features.
 - **Avoid deeply nested references** - Keep references one level deep from SKILL.md. All reference files should link directly from SKILL.md.
 - **Structure longer reference files** - For files longer than 100 lines, include a table of contents at the top so Claude can see the full scope when previewing.
 
+## Skill Installation Locations
+
+Skills can be installed at three levels (priority from low to high):
+
+1. **Builtin** - Pre-installed with Nine1Bot (read-only)
+2. **Global** - `~/.config/nine1bot/skills/` - Available in all projects
+3. **Project** - `.nine1bot/skills/` - Project-specific skills
+
+Higher priority skills override lower priority ones with the same name.
+
 ## Skill Creation Process
 
 Skill creation involves these steps:
 
 1. Understand the skill with concrete examples
 2. Plan reusable skill contents (scripts, references, assets)
-3. Initialize the skill (run init_skill.py)
+3. Create the skill directory structure
 4. Edit the skill (implement resources and write SKILL.md)
-5. Package the skill (run package_skill.py)
+5. Install to global or project directory
 6. Iterate based on real usage
 
 Follow these steps in order, skipping only if there is a clear reason why they are not applicable.
@@ -253,28 +263,44 @@ Example: When building a `big-query` skill to handle queries like "How many user
 
 To establish the skill's contents, analyze each concrete example to create a list of the reusable resources to include: scripts, references, and assets.
 
-### Step 3: Initializing the Skill
+### Step 3: Create the Skill Directory Structure
 
 At this point, it is time to actually create the skill.
 
-Skip this step only if the skill being developed already exists, and iteration or packaging is needed. In this case, continue to the next step.
+Skip this step only if the skill being developed already exists. In this case, continue to the next step.
 
-When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
-
-Usage:
+Create the skill directory structure manually:
 
 ```bash
-scripts/init_skill.py <skill-name> --path <output-directory>
+# For global skill (available in all projects)
+mkdir -p ~/.config/nine1bot/skills/my-skill
+
+# Or for project-specific skill
+mkdir -p .nine1bot/skills/my-skill
 ```
 
-The script:
+Create the required SKILL.md file:
 
-- Creates the skill directory at the specified path
-- Generates a SKILL.md template with proper frontmatter and TODO placeholders
-- Creates example resource directories: `scripts/`, `references/`, and `assets/`
-- Adds example files in each directory that can be customized or deleted
+```markdown
+---
+name: my-skill
+description: Description of what this skill does and when to use it.
+---
 
-After initialization, customize or remove the generated SKILL.md and example files as needed.
+# My Skill
+
+Instructions for using this skill...
+```
+
+Optionally create resource directories as needed:
+
+```
+my-skill/
+├── SKILL.md (required)
+├── scripts/      (optional - executable code)
+├── references/   (optional - documentation)
+└── assets/       (optional - templates, images)
+```
 
 ### Step 4: Edit the Skill
 
@@ -317,32 +343,30 @@ Do not include any other fields in YAML frontmatter.
 
 Write instructions for using the skill and its bundled resources.
 
-### Step 5: Packaging a Skill
+### Step 5: Install the Skill
 
-Once development of the skill is complete, it must be packaged into a distributable .skill file that gets shared with the user. The packaging process automatically validates the skill first to ensure it meets all requirements:
+Once development of the skill is complete, ensure it is in the correct location:
 
+**For global skills** (available in all projects):
 ```bash
-scripts/package_skill.py <path/to/skill-folder>
+# Skill should be at: ~/.config/nine1bot/skills/my-skill/SKILL.md
+ls ~/.config/nine1bot/skills/my-skill/
 ```
 
-Optional output directory specification:
-
+**For project-specific skills**:
 ```bash
-scripts/package_skill.py <path/to/skill-folder> ./dist
+# Skill should be at: .nine1bot/skills/my-skill/SKILL.md
+ls .nine1bot/skills/my-skill/
 ```
 
-The packaging script will:
+**Validation checklist:**
 
-1. **Validate** the skill automatically, checking:
+- [ ] SKILL.md exists with valid YAML frontmatter (`name` and `description` fields)
+- [ ] Skill name in frontmatter matches directory name
+- [ ] Description clearly explains what the skill does and when to use it
+- [ ] All referenced files (scripts, references, assets) exist
 
-   - YAML frontmatter format and required fields
-   - Skill naming conventions and directory structure
-   - Description completeness and quality
-   - File organization and resource references
-
-2. **Package** the skill if validation passes, creating a .skill file named after the skill (e.g., `my-skill.skill`) that includes all files and maintains the proper directory structure for distribution. The .skill file is a zip file with a .skill extension.
-
-If validation fails, the script will report the errors and exit without creating a package. Fix any validation errors and run the packaging command again.
+Skills are hot-reloaded automatically - no restart required. The skill will be available via `/skill-name` command.
 
 ### Step 6: Iterate
 
