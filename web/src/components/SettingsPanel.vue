@@ -4,6 +4,7 @@ import McpManager from './McpManager.vue'
 import SkillsList from './SkillsList.vue'
 import ModelSelector from './ModelSelector.vue'
 import AuthManager from './AuthManager.vue'
+import PreferencesPanel from './PreferencesPanel.vue'
 
 const emit = defineEmits<{
   close: []
@@ -78,6 +79,13 @@ function handleOverlayClick(e: MouseEvent) {
           >
             认证
           </button>
+          <button
+            class="tab"
+            :class="{ active: activeTab === 'preferences' }"
+            @click="activeTab = 'preferences'"
+          >
+            偏好
+          </button>
         </div>
       </div>
 
@@ -118,6 +126,11 @@ function handleOverlayClick(e: MouseEvent) {
           @oauth="startOAuth"
           @set-api-key="setApiKey"
           @remove="removeAuth"
+        />
+
+        <!-- Preferences Tab -->
+        <PreferencesPanel
+          v-if="activeTab === 'preferences'"
         />
       </div>
     </div>

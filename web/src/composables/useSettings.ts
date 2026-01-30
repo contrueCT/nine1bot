@@ -3,7 +3,7 @@ import { providerApi, configApi, mcpApi, skillApi, authApi } from '../api/client
 import type { Provider, McpServer, Skill, Config, McpConfig } from '../api/client'
 
 const showSettings = ref(false)
-const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth'>('models')
+const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth' | 'preferences'>('models')
 
 // Providers and models
 const providers = ref<Provider[]>([])

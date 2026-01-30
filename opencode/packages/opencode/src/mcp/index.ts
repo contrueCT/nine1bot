@@ -23,6 +23,7 @@ import { BusEvent } from "../bus/bus-event"
 import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import open from "open"
+import { checkAndReloadMcpConfig } from "./hot-reload"
 
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
@@ -494,6 +495,9 @@ export namespace MCP {
   }
 
   export async function status() {
+    // 检查配置文件变化，支持热更新
+    await checkAndReloadMcpConfig()
+
     const s = await state()
     const cfg = await Config.get()
     const config = cfg.mcp ?? {}

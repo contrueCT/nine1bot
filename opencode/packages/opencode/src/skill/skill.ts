@@ -42,7 +42,15 @@ export namespace Skill {
   const CLAUDE_SKILL_GLOB = new Bun.Glob("skills/**/SKILL.md")
   const NINE1BOT_SKILL_GLOB = new Bun.Glob("**/SKILL.md")
 
-  export const state = Instance.state(async () => {
+  // Skills 热更新缓存
+  let cachedSkills: Record<string, Info> | null = null
+  let skillsLastLoadTime: number = 0
+  const SKILLS_CACHE_TTL = 30000 // 30秒
+
+  /**
+   * 扫描所有技能目录
+   */
+  async function scanSkillDirectories(): Promise<Record<string, Info>> {
     const skills: Record<string, Info> = {}
 
     const addSkill = async (match: string) => {
@@ -89,6 +97,25 @@ export namespace Skill {
         }),
       ).catch((error) => {
         log.error("failed nine1bot global skills directory scan", { dir: nine1botGlobalSkillsDir, error })
+        return []
+      })
+      for (const match of matches) {
+        await addSkill(match)
+      }
+    }
+
+    // Scan Nine1Bot built-in skills (from packages/nine1bot/skills/)
+    const nine1botBuiltinSkillsDir = process.env.NINE1BOT_BUILTIN_SKILLS_DIR
+    if (nine1botBuiltinSkillsDir && await Filesystem.isDir(nine1botBuiltinSkillsDir)) {
+      const matches = await Array.fromAsync(
+        NINE1BOT_SKILL_GLOB.scan({
+          cwd: nine1botBuiltinSkillsDir,
+          absolute: true,
+          onlyFiles: true,
+          followSymlinks: true,
+        }),
+      ).catch((error) => {
+        log.error("failed nine1bot builtin skills directory scan", { dir: nine1botBuiltinSkillsDir, error })
         return []
       })
       for (const match of matches) {
@@ -165,13 +192,40 @@ export namespace Skill {
     }
 
     return skills
+  }
+
+  /**
+   * 获取技能列表（带定时缓存，支持热更新）
+   */
+  async function getSkillsWithCache(): Promise<Record<string, Info>> {
+    const now = Date.now()
+
+    // 检查缓存是否有效
+    if (cachedSkills !== null && now - skillsLastLoadTime < SKILLS_CACHE_TTL) {
+      return cachedSkills
+    }
+
+    // 重新扫描技能目录
+    log.info("Scanning skill directories...")
+    cachedSkills = await scanSkillDirectories()
+    skillsLastLoadTime = now
+    log.info("Skills loaded", { count: Object.keys(cachedSkills).length })
+
+    return cachedSkills
+  }
+
+  // 保留原 state() 用于向后兼容
+  export const state = Instance.state(async () => {
+    return getSkillsWithCache()
   })
 
   export async function get(name: string) {
-    return state().then((x) => x[name])
+    const skills = await getSkillsWithCache()
+    return skills[name]
   }
 
   export async function all() {
-    return state().then((x) => Object.values(x))
+    const skills = await getSkillsWithCache()
+    return Object.values(skills)
   }
 }

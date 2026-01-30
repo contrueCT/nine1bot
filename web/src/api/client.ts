@@ -779,3 +779,76 @@ export const permissionApi = {
     })
   }
 }
+
+// === Preferences API ===
+export interface Preference {
+  id: string
+  content: string
+  source: 'user' | 'ai'
+  createdAt: number
+  scope: 'global' | 'project'
+}
+
+export interface PreferencesState {
+  preferences: Preference[]
+  global: Preference[]
+  project: Preference[]
+}
+
+export const preferencesApi = {
+  // 获取所有偏好
+  async list(): Promise<PreferencesState> {
+    const res = await fetchWithTimeout(`${BASE_URL}/preferences`)
+    if (!res.ok) {
+      throw new Error('Failed to fetch preferences')
+    }
+    return res.json()
+  },
+
+  // 添加偏好
+  async add(content: string, scope: 'global' | 'project' = 'global', source: 'user' | 'ai' = 'user'): Promise<Preference> {
+    const res = await fetchWithTimeout(`${BASE_URL}/preferences`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, scope, source })
+    })
+    if (!res.ok) {
+      throw new Error('Failed to add preference')
+    }
+    return res.json()
+  },
+
+  // 更新偏好
+  async update(id: string, content: string): Promise<Preference> {
+    const res = await fetchWithTimeout(`${BASE_URL}/preferences/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content })
+    })
+    if (!res.ok) {
+      throw new Error('Failed to update preference')
+    }
+    return res.json()
+  },
+
+  // 删除偏好
+  async delete(id: string): Promise<boolean> {
+    const res = await fetchWithTimeout(`${BASE_URL}/preferences/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    })
+    if (!res.ok) {
+      throw new Error('Failed to delete preference')
+    }
+    return true
+  },
+
+  // 获取偏好提示词
+  async getPrompt(): Promise<string> {
+    const res = await fetchWithTimeout(`${BASE_URL}/preferences/prompt`)
+    if (!res.ok) {
+      throw new Error('Failed to fetch preferences prompt')
+    }
+    const data = await res.json()
+    return data.prompt || ''
+  }
+}

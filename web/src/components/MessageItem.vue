@@ -94,8 +94,18 @@ function formatText(text: string): string {
       <Bot v-else :size="18" />
     </div>
     
+    <!-- 用户消息的操作按钮（在气泡外部左侧） -->
+    <div class="message-actions" v-if="message.info.role === 'user' && !editingPartId">
+      <button class="action-btn" @click="startEdit(message.parts.find(p => p.type === 'text')!)" title="编辑">
+        <Pencil :size="14" />
+      </button>
+      <button class="action-btn danger" @click="startDelete(message.parts.find(p => p.type === 'text')!)" title="删除">
+        <Trash2 :size="14" />
+      </button>
+    </div>
+
     <div class="message-bubble" :class="{ 'user-bubble': message.info.role === 'user', 'agent-bubble glass': message.info.role !== 'user' }">
-      
+
       <div class="message-sender-name" v-if="message.info.role !== 'user'">
         {{ message.info.model?.modelID || 'Nine1Bot' }}
       </div>
@@ -107,10 +117,10 @@ function formatText(text: string): string {
             <div class="thinking-header" @click="thinkingExpanded = !thinkingExpanded">
               <Brain :size="14" class="thinking-icon" />
               <span class="thinking-label">Reasoning Process</span>
-              <ChevronDown 
-                :size="14" 
-                class="thinking-chevron" 
-                :class="{ expanded: thinkingExpanded }" 
+              <ChevronDown
+                :size="14"
+                class="thinking-chevron"
+                :class="{ expanded: thinkingExpanded }"
               />
             </div>
             <div v-if="thinkingExpanded || !item.part.text" class="thinking-body">
@@ -156,16 +166,6 @@ function formatText(text: string): string {
             </template>
           </div>
         </template>
-      </div>
-
-      <!-- 操作按钮移到消息底部 -->
-      <div class="message-actions" v-if="message.info.role === 'user' && !editingPartId">
-        <button class="action-btn" @click="startEdit(message.parts.find(p => p.type === 'text')!)" title="编辑">
-          <Pencil :size="14" />
-        </button>
-        <button class="action-btn danger" @click="startDelete(message.parts.find(p => p.type === 'text')!)" title="删除">
-          <Trash2 :size="14" />
-        </button>
       </div>
     </div>
 
@@ -434,21 +434,18 @@ function formatText(text: string): string {
   position: relative;
 }
 
-/* Message Actions at bottom */
+/* Message Actions - outside bubble */
 .message-actions {
   display: flex;
+  flex-direction: column;
   gap: 4px;
-  margin-top: 8px;
   opacity: 0;
   transition: opacity var(--transition-fast);
+  align-self: center;
 }
 
-.message-bubble:hover .message-actions {
+.message-row:hover .message-actions {
   opacity: 1;
-}
-
-.user-row .message-actions {
-  justify-content: flex-end;
 }
 
 .action-btn {

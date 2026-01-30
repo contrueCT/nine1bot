@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url'
 import { spawn as spawnChild, type ChildProcess } from 'child_process'
 import type { ServerConfig, AuthConfig, Nine1BotConfig } from '../config/schema'
 import { getInstallDir, getGlobalSkillsDir, getAuthPath, getGlobalConfigDir } from '../config/loader'
+import { getGlobalPreferencesPath } from '../preferences'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -88,6 +89,7 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
  */
 export async function startServer(options: StartServerOptions): Promise<ServerInstance> {
   const { server, auth, fullConfig } = options
+  const installDir = getInstallDir()
 
   // 生成 opencode 兼容的配置文件（过滤掉 nine1bot 特有字段）
   const opencodeConfigPath = await generateOpencodeConfig(fullConfig)
@@ -117,6 +119,8 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
 
   // Skills 配置：设置 Nine1Bot skills 目录
   process.env.NINE1BOT_SKILLS_DIR = getGlobalSkillsDir()
+  // 设置内置 skills 目录（包含 /remember 等内置技能）
+  process.env.NINE1BOT_BUILTIN_SKILLS_DIR = resolve(installDir, 'packages/nine1bot/skills')
   const skills = fullConfig.skills || {}
   if (skills.inheritClaudeCode === false) {
     process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = 'true'
@@ -134,6 +138,9 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
     process.env.OPENCODE_DISABLE_CLAUDE_CODE_MCP = 'true'
   }
 
+  // 设置配置文件路径，供 MCP 热更新使用
+  process.env.NINE1BOT_CONFIG_PATH = options.configPath
+
   // Provider 认证配置：继承控制
   const providerConfig = fullConfig.provider as any || {}
   if (providerConfig.inheritOpencode === false) {
@@ -144,9 +151,15 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   await mkdir(getGlobalConfigDir(), { recursive: true })
   process.env.NINE1BOT_AUTH_PATH = getAuthPath()
 
+  // 设置偏好模块路径，让 OpenCode 可以动态加载
+  const preferencesModulePath = resolve(installDir, 'packages/nine1bot/src/preferences/index.ts')
+  process.env.NINE1BOT_PREFERENCES_MODULE = preferencesModulePath
+
+  // 设置偏好文件路径（由 instruction.ts 定时读取）
+  process.env.NINE1BOT_PREFERENCES_PATH = getGlobalPreferencesPath()
+
   // 动态导入 opencode 服务器模块
   // 使用安装目录的绝对路径
-  const installDir = getInstallDir()
   const opencodeServerPath = resolve(installDir, 'opencode/packages/opencode/src/server/server.ts')
 
   try {
@@ -214,6 +227,8 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
 
     // Skills 配置：设置 Nine1Bot skills 目录
     env.NINE1BOT_SKILLS_DIR = getGlobalSkillsDir()
+    // 设置内置 skills 目录
+    env.NINE1BOT_BUILTIN_SKILLS_DIR = resolve(installDir, 'packages/nine1bot/skills')
     const skills = fullConfig.skills || {}
     if (skills.inheritClaudeCode === false) {
       env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = 'true'
@@ -231,6 +246,9 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
       env.OPENCODE_DISABLE_CLAUDE_CODE_MCP = 'true'
     }
 
+    // 设置配置文件路径，供 MCP 热更新使用
+    env.NINE1BOT_CONFIG_PATH = options.configPath
+
     // Provider 认证配置：继承控制
     const providerConfig = fullConfig.provider as any || {}
     if (providerConfig.inheritOpencode === false) {
@@ -242,6 +260,13 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
 
     // 使用安装目录的绝对路径
     const installDir = getInstallDir()
+
+    // 设置偏好模块路径
+    const preferencesModulePath = resolve(installDir, 'packages/nine1bot/src/preferences/index.ts')
+    env.NINE1BOT_PREFERENCES_MODULE = preferencesModulePath
+
+    // 设置偏好文件路径（由 instruction.ts 定时读取）
+    env.NINE1BOT_PREFERENCES_PATH = getGlobalPreferencesPath()
     const opencodeDir = resolve(installDir, 'opencode/packages/opencode')
     const opencodeEntry = resolve(opencodeDir, 'src/index.ts')
     const args = ['run', opencodeEntry, 'serve', '--port', String(server.port)]

@@ -10,6 +10,58 @@ import type { MessageV2 } from "./message-v2"
 
 const log = Log.create({ service: "instruction" })
 
+// Nine1Bot 偏好缓存
+let cachedPreferencesPrompt: string = ''
+let preferencesLastLoadTime: number = 0
+const PREFERENCES_CACHE_TTL = 10000 // 10秒缓存
+
+async function loadNine1BotPreferences(): Promise<string> {
+  const now = Date.now()
+
+  // 检查缓存是否有效
+  if (cachedPreferencesPrompt !== '' && now - preferencesLastLoadTime < PREFERENCES_CACHE_TTL) {
+    return cachedPreferencesPrompt
+  }
+
+  const preferencesPath = process.env.NINE1BOT_PREFERENCES_PATH
+  if (!preferencesPath) {
+    // 回退到旧的环境变量方式
+    return process.env.NINE1BOT_PREFERENCES_PROMPT || ''
+  }
+
+  try {
+    const file = Bun.file(preferencesPath)
+    if (!await file.exists()) {
+      cachedPreferencesPrompt = ''
+      preferencesLastLoadTime = now
+      return ''
+    }
+
+    const content = await file.text()
+    const data = JSON.parse(content)
+    if (!data.preferences?.length) {
+      cachedPreferencesPrompt = ''
+      preferencesLastLoadTime = now
+      return ''
+    }
+
+    const items = data.preferences.map((p: any, i: number) => `${i + 1}. ${p.content}`).join('\n')
+    cachedPreferencesPrompt = `<user-preferences>
+以下是用户设置的偏好，请在回复中遵循这些偏好：
+
+${items}
+
+这些偏好由用户明确设置，优先级高于默认行为。
+</user-preferences>`
+    preferencesLastLoadTime = now
+    return cachedPreferencesPrompt
+  } catch (e) {
+    log.warn("Failed to load Nine1Bot preferences", { error: e })
+    // 返回旧缓存或空字符串
+    return cachedPreferencesPrompt || process.env.NINE1BOT_PREFERENCES_PROMPT || ''
+  }
+}
+
 const FILES = [
   "AGENTS.md",
   "CLAUDE.md",
@@ -110,7 +162,15 @@ export namespace InstructionPrompt {
         .then((x) => (x ? "Instructions from: " + url + "\n" + x : "")),
     )
 
-    return Promise.all([...files, ...fetches]).then((result) => result.filter(Boolean))
+    const result = await Promise.all([...files, ...fetches]).then((result) => result.filter(Boolean))
+
+    // 注入 Nine1Bot 用户偏好（使用定时缓存）
+    const preferencesPrompt = await loadNine1BotPreferences()
+    if (preferencesPrompt) {
+      result.push(preferencesPrompt)
+    }
+
+    return result
   }
 
   export function loaded(messages: MessageV2.WithParts[]) {
