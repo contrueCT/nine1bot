@@ -22,3 +22,4 @@ natapp.exe
 build/
 runtime/
 web/tsconfig.tsbuildinfo
+packages/nine1bot/config.json

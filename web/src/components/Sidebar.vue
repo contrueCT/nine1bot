@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ChevronsLeft, ChevronsRight, MessageSquare, Plus, Folder, MessagesSquare, Pencil, Trash2, X, Check } from 'lucide-vue-next'
+import { ChevronsLeft, ChevronsRight, MessageSquare, Plus, Folder, MessagesSquare, Pencil, Trash2, X, Check, Loader2, Square } from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
 import FileTree from './FileTree.vue'
 
@@ -11,6 +11,10 @@ defineProps<{
   files: FileItem[]
   filesLoading: boolean
   activeTab: 'sessions' | 'files'
+  // Parallel session props
+  isSessionRunning: (sessionId: string) => boolean
+  runningCount: number
+  maxParallelAgents: number
 }>()
 
 const emit = defineEmits<{
@@ -22,6 +26,7 @@ const emit = defineEmits<{
   'delete-session': [sessionId: string]
   'rename-session': [sessionId: string, title: string]
   'file-click': [path: string]
+  'abort-session': [sessionId: string]
 }>()
 
 // 重命名状态
@@ -98,6 +103,9 @@ function getSessionTitle(session: Session): string {
       <div class="brand-area" v-if="!collapsed">
         <div class="brand-logo">91</div>
         <span class="sidebar-logo">Nine1Bot</span>
+        <div v-if="runningCount > 0" class="running-badge" :title="`${runningCount} 个 agent 正在运行`">
+          {{ runningCount }}/{{ maxParallelAgents }}
+        </div>
       </div>
       <button class="btn btn-ghost btn-icon sm toggle-btn" @click="emit('toggle-collapse')" :title="collapsed ? '展开侧边栏' : '折叠侧边栏'">
         <ChevronsLeft v-if="!collapsed" :size="18" />
@@ -131,17 +139,32 @@ function getSessionTitle(session: Session): string {
           v-for="session in sessions"
           :key="session.id"
           class="session-item"
-          :class="{ active: currentSession?.id === session.id }"
+          :class="{
+            active: currentSession?.id === session.id,
+            running: isSessionRunning(session.id)
+          }"
           @click="emit('select-session', session)"
         >
-          <div class="session-icon">
-            <MessageSquare :size="16" />
+          <div class="session-icon" :class="{ 'icon-running': isSessionRunning(session.id) }">
+            <Loader2 v-if="isSessionRunning(session.id)" :size="16" class="spin" />
+            <MessageSquare v-else :size="16" />
           </div>
           <div class="session-item-content">
             <span class="session-item-title">{{ getSessionTitle(session) }}</span>
-            <span class="session-item-time">{{ formatTime(session) }}</span>
+            <span class="session-item-time">
+              <span v-if="isSessionRunning(session.id)" class="running-text">运行中</span>
+              <span v-else>{{ formatTime(session) }}</span>
+            </span>
           </div>
           <div class="session-actions" @click.stop>
+            <button
+              v-if="isSessionRunning(session.id)"
+              class="action-btn abort"
+              @click="emit('abort-session', session.id)"
+              title="停止"
+            >
+              <Square :size="12" fill="currentColor" />
+            </button>
             <button class="action-btn" @click="startRename(session, $event)" title="重命名">
               <Pencil :size="14" />
             </button>
@@ -431,6 +454,70 @@ function getSessionTitle(session: Session): string {
 .action-btn.danger:hover {
   background: rgba(239, 68, 68, 0.1);
   color: var(--error, #ef4444);
+}
+
+.action-btn.abort {
+  background: var(--error, #ef4444);
+  color: white;
+}
+
+.action-btn.abort:hover {
+  background: #dc2626;
+}
+
+/* Running badge in header */
+.running-badge {
+  background: var(--accent);
+  color: white;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  animation: pulse-badge 2s ease-in-out infinite;
+}
+
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Running session styles */
+.session-item.running .session-icon {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.session-item.running.active .session-icon {
+  background: var(--accent);
+  color: white;
+}
+
+.icon-running {
+  animation: pulse-icon 2s ease-in-out infinite;
+}
+
+@keyframes pulse-icon {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.running-text {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* Show abort button always for running sessions */
+.session-item.running .session-actions {
+  opacity: 1;
 }
 
 </style>

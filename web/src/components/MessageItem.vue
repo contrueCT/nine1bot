@@ -151,21 +151,26 @@ function formatText(text: string): string {
             <!-- 正常显示模式 -->
             <template v-else>
               <div class="markdown-content" v-html="formatText(item.part.text || '')"></div>
-              <div class="part-actions">
-                <button class="action-btn" @click="startEdit(item.part)" title="编辑">
-                  <Pencil :size="14" />
-                </button>
-                <button class="action-btn danger" @click="startDelete(item.part)" title="删除">
-                  <Trash2 :size="14" />
-                </button>
-              </div>
             </template>
           </div>
         </template>
       </div>
+
+      <!-- 操作按钮移到消息底部 -->
+      <div class="message-actions" v-if="message.info.role === 'user' && !editingPartId">
+        <button class="action-btn" @click="startEdit(message.parts.find(p => p.type === 'text')!)" title="编辑">
+          <Pencil :size="14" />
+        </button>
+        <button class="action-btn danger" @click="startDelete(message.parts.find(p => p.type === 'text')!)" title="删除">
+          <Trash2 :size="14" />
+        </button>
+      </div>
     </div>
 
-    <!-- 删除确认对话框 -->
+  </div>
+
+  <!-- 删除确认对话框 - 使用 Teleport 移到 body 避免 transform 影响 -->
+  <Teleport to="body">
     <div v-if="deleteConfirmPartId" class="dialog-overlay" @click="cancelDelete">
       <div class="dialog" @click.stop>
         <div class="dialog-header">
@@ -180,13 +185,13 @@ function formatText(text: string): string {
         </div>
         <div class="dialog-footer">
           <button class="btn btn-ghost btn-sm" @click="cancelDelete">取消</button>
-          <button class="btn btn-danger btn-sm" @click="confirmDelete(deleteConfirmPartId)">
+          <button class="btn btn-danger btn-sm" @click="confirmDelete(deleteConfirmPartId!)">
             <Trash2 :size="14" /> 删除
           </button>
         </div>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -422,24 +427,26 @@ function formatText(text: string): string {
   color: var(--text-muted);
 }
 
-/* Text Part with Actions */
+/* Text Part */
 .text-part {
   position: relative;
 }
 
-.text-part:hover .part-actions {
+/* Message Actions at bottom */
+.message-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.message-bubble:hover .message-actions {
   opacity: 1;
 }
 
-.part-actions {
-  position: absolute;
-  top: 0;
-  right: -8px;
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-  transform: translateX(100%);
+.user-row .message-actions {
+  justify-content: flex-end;
 }
 
 .action-btn {
@@ -516,7 +523,10 @@ function formatText(text: string): string {
   background: #dc2626;
 }
 
-/* Delete Dialog */
+</style>
+
+<!-- Non-scoped styles for Teleported dialog -->
+<style>
 .dialog-overlay {
   position: fixed;
   inset: 0;
@@ -546,6 +556,25 @@ function formatText(text: string): string {
   font-weight: 600;
 }
 
+.dialog-header .action-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.dialog-header .action-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
 .dialog-body {
   padding: var(--space-md);
 }
@@ -566,6 +595,39 @@ function formatText(text: string): string {
   gap: var(--space-sm);
   padding: var(--space-md);
   border-top: 1px solid var(--border);
+}
+
+.dialog-footer .btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 13px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.dialog-footer .btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.dialog-footer .btn-ghost:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.dialog-footer .btn-danger {
+  background: var(--error, #ef4444);
+  color: white;
+  border: none;
+}
+
+.dialog-footer .btn-danger:hover {
+  background: #dc2626;
 }
 </style>
 

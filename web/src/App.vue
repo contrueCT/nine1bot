@@ -13,6 +13,8 @@ import TodoList from './components/TodoList.vue'
 import TerminalPanel from './components/TerminalPanel.vue'
 import { useAgentTerminal } from './composables/useAgentTerminal'
 
+import { MAX_PARALLEL_AGENTS } from './composables/useParallelSessions'
+
 const {
   sessions,
   currentSession,
@@ -27,6 +29,7 @@ const {
   createSession,
   selectSession,
   sendMessage,
+  abortSession,
   abortCurrentSession,
   subscribeToEvents,
   unsubscribe,
@@ -45,7 +48,14 @@ const {
   todoItems,
   loadTodoItems,
   // 事件处理器注册
-  registerEventHandler
+  registerEventHandler,
+  // 并行会话
+  syncSessionStatus,
+  runningCount,
+  isSessionRunning,
+  // 会话通知
+  sessionNotifications,
+  dismissNotification
 } = useSession()
 
 // Agent 终端
@@ -97,6 +107,9 @@ onMounted(async () => {
       await loadPendingRequests()
     }
   })
+
+  // Sync parallel session status from backend (for page refresh recovery)
+  await syncSessionStatus()
 
   // 不传 directory 参数以加载所有会话
   await loadSessions()
@@ -208,6 +221,9 @@ function closeFileViewer() {
       :files="files"
       :filesLoading="filesLoading"
       :activeTab="sidebarTab"
+      :isSessionRunning="isSessionRunning"
+      :runningCount="runningCount"
+      :maxParallelAgents="MAX_PARALLEL_AGENTS"
       @toggle-collapse="toggleSidebar"
       @select-session="selectSession"
       @new-session="handleNewSession"
@@ -216,6 +232,7 @@ function closeFileViewer() {
       @delete-session="deleteSession"
       @rename-session="renameSession"
       @file-click="handleFileClick"
+      @abort-session="abortSession"
     />
 
     <!-- Main Content -->
@@ -287,6 +304,32 @@ function closeFileViewer() {
       :error="contentError"
       @close="closeFileViewer"
     />
+
+    <!-- Session Notifications Toast -->
+    <div class="notifications-container" v-if="sessionNotifications.length > 0">
+      <div
+        v-for="notification in sessionNotifications"
+        :key="notification.id"
+        class="notification-toast"
+        :class="notification.type"
+      >
+        <div class="notification-icon">
+          <svg v-if="notification.type === 'success'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        </div>
+        <div class="notification-content">
+          <span class="notification-title">{{ notification.sessionTitle }}</span>
+          <span class="notification-message">{{ notification.message }}</span>
+        </div>
+        <button class="notification-close" @click="dismissNotification(notification.id)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -304,5 +347,112 @@ function closeFileViewer() {
 
 .chat-panel {
   position: relative;
+}
+
+/* Session Notifications */
+.notifications-container {
+  position: fixed;
+  bottom: var(--space-lg);
+  right: var(--space-lg);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  max-width: 320px;
+}
+
+.notification-toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: slideIn 0.3s ease-out;
+}
+
+.notification-toast.success {
+  border-color: var(--color-success);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), var(--color-bg-elevated));
+}
+
+.notification-toast.info {
+  border-color: var(--color-accent);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), var(--color-bg-elevated));
+}
+
+.notification-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.notification-toast.success .notification-icon {
+  background: rgba(34, 197, 94, 0.2);
+  color: var(--color-success);
+}
+
+.notification-toast.info .notification-icon {
+  background: rgba(99, 102, 241, 0.2);
+  color: var(--color-accent);
+}
+
+.notification-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.notification-title {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notification-message {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.notification-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.notification-close:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 </style>

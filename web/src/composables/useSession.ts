@@ -1,13 +1,30 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, type TodoItem, questionApi, permissionApi } from '../api/client'
+import { useParallelSessions, MAX_PARALLEL_AGENTS } from './useParallelSessions'
 
 export function useSession() {
   const sessions = ref<Session[]>([])
   const currentSession = ref<Session | null>(null)
   const messages = ref<Message[]>([])
   const isLoading = ref(false)
-  const isStreaming = ref(false)
   const currentDirectory = ref('')
+
+  // Use parallel sessions for streaming state tracking
+  const {
+    isSessionRunning,
+    setSessionRunning,
+    canStartNewAgent,
+    handleGlobalSSEEvent,
+    syncSessionStatus,
+    runningCount,
+    clearSession
+  } = useParallelSessions()
+
+  // isStreaming is now computed based on current session
+  const isStreaming = computed(() => {
+    if (!currentSession.value) return false
+    return isSessionRunning(currentSession.value.id)
+  })
 
   // 当前正在流式接收的消息
   const streamingMessage = ref<Message | null>(null)
@@ -18,6 +35,9 @@ export function useSession() {
 
   // 会话错误（如模型不可用）
   const sessionError = ref<{ message: string; dismissable?: boolean } | null>(null)
+
+  // 会话完成通知（用于其他会话完成时的友好提示）
+  const sessionNotifications = ref<{ id: string; sessionId: string; sessionTitle: string; message: string; type: 'success' | 'info' }[]>([])
 
   // 待办事项
   const todoItems = ref<TodoItem[]>([])
@@ -82,37 +102,67 @@ export function useSession() {
   const seenUserMessageIds = new Set<string>()
 
   async function sendMessage(content: string, model?: { providerID: string; modelID: string }) {
-    if (!currentSession.value || isStreaming.value) return
+    if (!currentSession.value) return
 
-    isStreaming.value = true
+    // Check if this session is already streaming
+    if (isSessionRunning(currentSession.value.id)) return
+
+    // Check parallel limit
+    if (!canStartNewAgent.value) {
+      sessionError.value = {
+        message: `最多支持 ${MAX_PARALLEL_AGENTS} 个并行 agent，请等待其中一个完成`,
+        dismissable: true
+      }
+      return
+    }
+
+    // Mark session as running BEFORE the API call
+    setSessionRunning(currentSession.value.id, true)
     streamingMessage.value = null
     // 清空已见消息记录
     seenUserMessageIds.clear()
 
+    const sessionId = currentSession.value.id
+
     try {
       await api.sendMessage(
-        currentSession.value.id,
+        sessionId,
         content,
         handleSSEEvent,
         (error) => {
+          // Ignore abort errors - these are normal when session completes or user cancels
+          const errorMessage = error.message?.toLowerCase() || ''
+          if (errorMessage.includes('aborted') || errorMessage.includes('abort') || error.name === 'AbortError') {
+            console.log('Stream ended (aborted)')
+            return
+          }
           console.error('Stream error:', error)
           sessionError.value = {
             message: `网络错误: ${error.message || '连接中断'}`,
             dismissable: true
           }
-          isStreaming.value = false
+          // Mark session as stopped on error
+          setSessionRunning(sessionId, false)
         },
         model
       )
     } catch (error: any) {
+      // Ignore abort errors
+      const errorMessage = error.message?.toLowerCase() || ''
+      if (errorMessage.includes('aborted') || errorMessage.includes('abort') || error.name === 'AbortError') {
+        console.log('Request aborted')
+        return
+      }
       console.error('Failed to send message:', error)
       sessionError.value = {
         message: `发送失败: ${error.message || '未知错误'}`,
         dismissable: true
       }
+      // Mark session as stopped on error
+      setSessionRunning(sessionId, false)
     } finally {
-      isStreaming.value = false
       streamingMessage.value = null
+      // Note: Don't set running to false here - SSE events will handle that via session.idle
     }
   }
 
@@ -264,26 +314,29 @@ export function useSession() {
             message,
             dismissable: true
           }
-          // 停止流式状态
-          isStreaming.value = false
+          // Note: session running state is handled by handleGlobalSSEEvent
         }
         break
 
       case 'session.idle':
-        // 会话空闲，停止流式状态
-        isStreaming.value = false
+        // Note: session running state is handled by handleGlobalSSEEvent
         break
+    }
+  }
+
+  // Abort any session by ID
+  async function abortSession(sessionId: string) {
+    try {
+      await api.abortSession(sessionId)
+      setSessionRunning(sessionId, false)
+    } catch (error) {
+      console.error('Failed to abort session:', error)
     }
   }
 
   async function abortCurrentSession() {
     if (currentSession.value && isStreaming.value) {
-      try {
-        await api.abortSession(currentSession.value.id)
-        isStreaming.value = false
-      } catch (error) {
-        console.error('Failed to abort session:', error)
-      }
+      await abortSession(currentSession.value.id)
     }
   }
 
@@ -295,6 +348,9 @@ export function useSession() {
     }
 
     eventSource = api.subscribeEvents((event: SSEEvent) => {
+      // ALWAYS process for parallel session tracking (status events for ALL sessions)
+      handleGlobalSSEEvent(event)
+
       // 调用外部事件处理器（如 agent terminal）
       for (const handler of externalEventHandlers) {
         try {
@@ -304,12 +360,34 @@ export function useSession() {
         }
       }
 
-      // 只处理当前会话的事件
+      // Extract sessionID from all possible locations
       const sessionID = event.properties?.sessionID
         || event.properties?.message?.info?.sessionID
         || event.properties?.part?.sessionID
         || event.properties?.info?.sessionID
+        || event.properties?.status?.sessionID
+        || event.properties?.error?.sessionID
+
+      // Handle notifications for other sessions
       if (sessionID && currentSession.value && sessionID !== currentSession.value.id) {
+        // Show friendly notification when other session completes
+        if (event.type === 'session.idle' || (event.type === 'session.status' && event.properties?.status?.type === 'idle')) {
+          const session = sessions.value.find(s => s.id === sessionID)
+          if (session) {
+            const notificationId = `${sessionID}-${Date.now()}`
+            sessionNotifications.value.push({
+              id: notificationId,
+              sessionId: sessionID,
+              sessionTitle: session.title || '会话',
+              message: '任务已完成',
+              type: 'success'
+            })
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+              sessionNotifications.value = sessionNotifications.value.filter(n => n.id !== notificationId)
+            }, 5000)
+          }
+        }
         return
       }
 
@@ -396,6 +474,8 @@ export function useSession() {
     try {
       await api.deleteSession(sessionId)
       sessions.value = sessions.value.filter(s => s.id !== sessionId)
+      // Clean up running state tracking
+      clearSession(sessionId)
 
       // 如果删除的是当前会话，切换到其他会话
       if (currentSession.value?.id === sessionId) {
@@ -485,9 +565,24 @@ export function useSession() {
   async function summarizeSession() {
     if (!currentSession.value || isSummarizing.value) return
 
+    // 从最近的 assistant 消息中获取模型信息
+    const lastAssistantMsg = [...messages.value].reverse().find(m => m.info.role === 'assistant')
+    const model = lastAssistantMsg?.info.model ||
+      (lastAssistantMsg?.info.providerID && lastAssistantMsg?.info.modelID
+        ? { providerID: lastAssistantMsg.info.providerID, modelID: lastAssistantMsg.info.modelID }
+        : null)
+
+    if (!model) {
+      sessionError.value = {
+        message: '无法获取模型信息，请先发送一条消息',
+        dismissable: true
+      }
+      return
+    }
+
     isSummarizing.value = true
     try {
-      await api.summarizeSession(currentSession.value.id)
+      await api.summarizeSession(currentSession.value.id, model)
       // 重新加载消息以获取压缩后的内容
       messages.value = await api.getMessages(currentSession.value.id)
     } catch (error) {
@@ -510,6 +605,11 @@ export function useSession() {
     }
   }
 
+  // 关闭通知
+  function dismissNotification(notificationId: string) {
+    sessionNotifications.value = sessionNotifications.value.filter(n => n.id !== notificationId)
+  }
+
   return {
     sessions,
     currentSession,
@@ -525,6 +625,7 @@ export function useSession() {
     createSession,
     selectSession,
     sendMessage,
+    abortSession,
     abortCurrentSession,
     subscribeToEvents,
     unsubscribe,
@@ -545,6 +646,14 @@ export function useSession() {
     todoItems,
     loadTodoItems,
     // 事件处理器注册
-    registerEventHandler
+    registerEventHandler,
+    // 并行会话
+    syncSessionStatus,
+    runningCount,
+    isSessionRunning,
+    canStartNewAgent,
+    // 会话通知
+    sessionNotifications,
+    dismissNotification
   }
 }

@@ -242,6 +242,13 @@ export const api = {
     })
   },
 
+  // 获取所有会话状态
+  async getSessionStatus(): Promise<Record<string, { type: string }>> {
+    const res = await fetch(`${BASE_URL}/session/status`)
+    const data = await res.json()
+    return data
+  },
+
   // 删除会话
   async deleteSession(sessionId: string): Promise<boolean> {
     const res = await fetch(`${BASE_URL}/session/${sessionId}`, {
@@ -297,12 +304,15 @@ export const api = {
   },
 
   // 压缩会话
-  async summarizeSession(sessionId: string): Promise<void> {
+  async summarizeSession(sessionId: string, model: { providerID: string; modelID: string }): Promise<void> {
     const res = await fetch(`${BASE_URL}/session/${sessionId}/summarize`, {
-      method: 'POST'
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(model)
     })
     if (!res.ok) {
-      throw new Error(`Failed to summarize session: ${res.status}`)
+      const errorData = await res.json().catch(() => ({}))
+      throw new Error(errorData.error?.[0]?.message || `Failed to summarize session: ${res.status}`)
     }
   },
 

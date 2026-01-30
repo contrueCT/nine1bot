@@ -184,6 +184,9 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
   // 生成 opencode 兼容的配置文件
   const opencodeConfigPath = await generateOpencodeConfig(fullConfig)
 
+  // 确保认证目录存在（必须在 Promise 之前 await）
+  await mkdir(getGlobalConfigDir(), { recursive: true })
+
   return new Promise((resolvePromise, rejectPromise) => {
     const env: Record<string, string | undefined> = {
       ...process.env,
@@ -235,7 +238,6 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
     }
 
     // 设置 Nine1Bot 独立的认证存储路径
-    await mkdir(getGlobalConfigDir(), { recursive: true })
     env.NINE1BOT_AUTH_PATH = getAuthPath()
 
     // 使用安装目录的绝对路径
