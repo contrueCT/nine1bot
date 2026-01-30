@@ -101,7 +101,7 @@ function getSessionTitle(session: Session): string {
   <aside class="sidebar glass" :class="{ collapsed }">
     <div class="sidebar-header">
       <div class="brand-area" v-if="!collapsed">
-        <div class="brand-logo">91</div>
+        <div class="brand-logo">N</div>
         <span class="sidebar-logo">Nine1Bot</span>
         <div v-if="runningCount > 0" class="running-badge" :title="`${runningCount} 个 agent 正在运行`">
           {{ runningCount }}/{{ maxParallelAgents }}
@@ -274,8 +274,8 @@ function getSessionTitle(session: Session): string {
   background: var(--accent);
   color: white;
   border-radius: 6px;
-  font-weight: bold;
-  font-size: 12px;
+  font-weight: 700;
+  font-size: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
