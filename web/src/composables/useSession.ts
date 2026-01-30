@@ -73,9 +73,10 @@ export function useSession() {
   async function createSession(directory: string) {
     try {
       isLoading.value = true
-      currentDirectory.value = directory
       const session = await api.createSession(directory)
       currentSession.value = session
+      // 使用服务器返回的实际目录，而不是传入的参数
+      currentDirectory.value = session.directory
       messages.value = []
       // 重新加载所有会话，不过滤目录
       await loadSessions()

@@ -56,7 +56,7 @@ const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills']
 
 /**
  * 生成 opencode 兼容的配置文件
- * 过滤掉 nine1bot 特有的字段
+ * 过滤掉 nine1bot 特有的字段，并添加 skills 目录到沙盒白名单
  */
 async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
   const opencodeConfig: Record<string, any> = {}
@@ -72,6 +72,31 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
       } else {
         opencodeConfig[key] = value
       }
+    }
+  }
+
+  // 将 skills 目录添加到沙盒白名单
+  const installDir = getInstallDir()
+  const builtinSkillsDir = resolve(installDir, 'packages/nine1bot/skills')
+  const globalSkillsDir = getGlobalSkillsDir()
+
+  // 确保 sandbox 配置存在
+  if (!opencodeConfig.sandbox) {
+    opencodeConfig.sandbox = {}
+  }
+  if (!opencodeConfig.sandbox.allowedPaths) {
+    opencodeConfig.sandbox.allowedPaths = []
+  }
+
+  // 添加 skills 目录到白名单（使用通配符匹配所有子目录和文件）
+  const skillsPaths = [
+    `${builtinSkillsDir}/*`,  // 内置 skills
+    `${globalSkillsDir}/*`,   // 全局 skills (~/.config/nine1bot/skills)
+  ]
+
+  for (const skillPath of skillsPaths) {
+    if (!opencodeConfig.sandbox.allowedPaths.includes(skillPath)) {
+      opencodeConfig.sandbox.allowedPaths.push(skillPath)
     }
   }
 

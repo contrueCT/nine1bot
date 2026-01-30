@@ -130,7 +130,7 @@ watch([isPanelOpen, panelWidth, activeTab], () => {
   <button
     v-else-if="hasTerminals || hasPreviews"
     class="expand-btn"
-    @click="isPanelOpen = true"
+    @click="openPanel"
     title="打开面板"
   >
     <ChevronLeft :size="16" />
