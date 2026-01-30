@@ -15,6 +15,7 @@ const {
   hasPreviews,
   setActiveTab,
   closePanel,
+  openPanel,
 } = useRightPanel()
 
 const { terminals } = useAgentTerminal()
