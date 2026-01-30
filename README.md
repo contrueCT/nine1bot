@@ -34,6 +34,28 @@
 - **并行会话** - 支持同时运行至多10个 AI 会话
 - **开箱即用** - 下载即可运行，内置 Bun 运行时
 
+### 配置兼容性
+
+Nine1Bot 支持集成以下配置：
+
+| 配置类型 | OpenCode | Claude Code | 说明 |
+|---------|----------|-------------|------|
+| MCP 服务器 | ✅ | ✅ | 可继承 OpenCode 和 Claude Code 的 MCP 配置 |
+| Skills 技能 | ✅ | ✅ | 可继承 OpenCode 和 Claude Code 的自定义技能 |
+| 服务商认证 | ✅ | ❌ | 可继承 OpenCode 的 API Key 和 OAuth 认证 |
+| 官方服务商 | ❌ | - | 不支持 OpenCode 官方服务商（需要官方授权） |
+
+可通过配置文件控制是否继承这些配置：
+
+```jsonc
+{
+  "isolation": {
+    "inheritOpencode": true,      // 是否继承 OpenCode 配置
+    "inheritClaudeCode": true     // 是否继承 Claude Code 配置
+  }
+}
+```
+
 ## 安装
 
 ### 方式一：下载 Release（推荐）
