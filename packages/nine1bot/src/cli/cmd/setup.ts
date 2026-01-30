@@ -1,13 +1,25 @@
 import * as prompts from '@clack/prompts'
+import { access } from 'fs/promises'
 import { UI } from '../ui'
-import { saveConfig, configExists, getDefaultConfigPath, isInPath, addToPath, getInstallDir } from '../../config/loader'
+import { saveConfig, configExists, getDefaultConfigPath, isInPath, addToPath, getInstallDir, getGlobalConfigPath } from '../../config/loader'
 import type { Nine1BotConfig } from '../../config/schema'
 
 /**
  * 检查是否需要运行 setup（首次运行）
+ * 同时检查项目配置和全局配置
  */
 export async function checkFirstRun(): Promise<boolean> {
-  return !(await configExists())
+  // 检查项目配置
+  if (await configExists()) return false
+
+  // 检查全局配置
+  const globalConfigPath = getGlobalConfigPath()
+  try {
+    await access(globalConfigPath)
+    return false  // 全局配置存在，不是首次运行
+  } catch {
+    return true  // 两者都不存在，是首次运行
+  }
 }
 
 /**

@@ -14,7 +14,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # 配置
-GITHUB_REPO="nine1bot/nine1bot"  # 修改为实际的仓库地址
+GITHUB_REPO="contrueCT/nine1bot"
 INSTALL_DIR="${NINE1BOT_INSTALL_DIR:-$HOME/.nine1bot}"
 
 # 如果脚本在安装目录内运行，自动检测安装目录

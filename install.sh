@@ -15,7 +15,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # 配置
-REPO_URL="https://github.com/your-username/nine1bot.git"
+REPO_URL="https://github.com/contrueCT/nine1bot.git"
 INSTALL_DIR="${NINE1BOT_INSTALL_DIR:-$HOME/.nine1bot}"
 BIN_DIR="${NINE1BOT_BIN_DIR:-$HOME/.local/bin}"
 
