@@ -93,18 +93,9 @@ function formatText(text: string): string {
       <User v-if="message.info.role === 'user'" :size="18" />
       <Bot v-else :size="18" />
     </div>
-    
-    <!-- 用户消息的操作按钮（在气泡外部左侧） -->
-    <div class="message-actions" v-if="message.info.role === 'user' && !editingPartId">
-      <button class="action-btn" @click="startEdit(message.parts.find(p => p.type === 'text')!)" title="编辑">
-        <Pencil :size="14" />
-      </button>
-      <button class="action-btn danger" @click="startDelete(message.parts.find(p => p.type === 'text')!)" title="删除">
-        <Trash2 :size="14" />
-      </button>
-    </div>
 
-    <div class="message-bubble" :class="{ 'user-bubble': message.info.role === 'user', 'agent-bubble glass': message.info.role !== 'user' }">
+    <div class="message-wrapper" :class="{ 'user-wrapper': message.info.role === 'user' }">
+      <div class="message-bubble" :class="{ 'user-bubble': message.info.role === 'user', 'agent-bubble glass': message.info.role !== 'user' }">
 
       <div class="message-sender-name" v-if="message.info.role !== 'user'">
         {{ message.info.model?.modelID || 'Nine1Bot' }}
@@ -167,8 +158,18 @@ function formatText(text: string): string {
           </div>
         </template>
       </div>
-    </div>
+      </div>
 
+      <!-- 用户消息的操作按钮（在气泡下方） -->
+      <div class="message-actions" v-if="message.info.role === 'user' && !editingPartId">
+        <button class="action-btn" @click="startEdit(message.parts.find(p => p.type === 'text')!)" title="编辑">
+          <Pencil :size="14" />
+        </button>
+        <button class="action-btn danger" @click="startDelete(message.parts.find(p => p.type === 'text')!)" title="删除">
+          <Trash2 :size="14" />
+        </button>
+      </div>
+    </div>
   </div>
 
   <!-- 删除确认对话框 - 使用 Teleport 移到 body 避免 transform 影响 -->
@@ -236,21 +237,33 @@ function formatText(text: string): string {
   box-shadow: 0 4px 12px var(--accent-glow);
 }
 
+/* Message wrapper for positioning actions */
+.message-wrapper {
+  display: flex;
+  flex-direction: column;
+  max-width: 70%;
+}
+
+.user-wrapper {
+  align-items: flex-end;
+}
+
 .message-bubble {
-  max-width: 80%;
   width: fit-content;
-  padding: 10px 14px; /* Reduced padding further */
-  border-radius: 16px; /* Slightly reduced radius */
+  max-width: 100%;
+  padding: 10px 14px;
+  border-radius: 16px;
   position: relative;
   box-shadow: var(--shadow-sm);
-  line-height: 1.5; /* Tighter line height */
+  line-height: 1.5;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .user-bubble {
   background: var(--bg-tertiary);
-  border-bottom-right-radius: 2px; /* Sharper tail */
+  border-bottom-right-radius: 2px;
   color: var(--text-primary);
-  /* margin-left: auto; Removed unnecessary margin */
 }
 
 .agent-bubble {
@@ -434,14 +447,15 @@ function formatText(text: string): string {
   position: relative;
 }
 
-/* Message Actions - outside bubble */
+/* Message Actions - below user bubble */
 .message-actions {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 4px;
   opacity: 0;
   transition: opacity var(--transition-fast);
-  align-self: center;
+  margin-top: 4px;
+  justify-content: flex-end;
 }
 
 .message-row:hover .message-actions {
