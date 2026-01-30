@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { X, FileText, Copy, Check } from 'lucide-vue-next'
-import { ref } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import type { FileContent } from '../api/client'
 
 const props = defineProps<{
@@ -14,17 +14,30 @@ const emit = defineEmits<{
 }>()
 
 const copied = ref(false)
+let copyTimer: ReturnType<typeof setTimeout> | null = null
 
 async function copyContent() {
   if (!props.file?.content) return
   try {
     await navigator.clipboard.writeText(props.file.content)
     copied.value = true
-    setTimeout(() => copied.value = false, 2000)
+    // 清理之前的定时器
+    if (copyTimer) {
+      clearTimeout(copyTimer)
+    }
+    copyTimer = setTimeout(() => copied.value = false, 2000)
   } catch (err) {
     console.error('Failed to copy:', err)
   }
 }
+
+// 组件销毁时清理定时器
+onUnmounted(() => {
+  if (copyTimer) {
+    clearTimeout(copyTimer)
+    copyTimer = null
+  }
+})
 
 function getFileName(path: string): string {
   return path.split('/').pop() || path.split('\\').pop() || path

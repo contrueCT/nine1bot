@@ -57,6 +57,12 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
   let publicUrl: string | undefined
 
   if (enableTunnel) {
+    // 安全警告：隧道会将服务暴露到公网
+    if (!config.auth?.enabled) {
+      console.warn('\n⚠️  WARNING: Tunnel enabled without password protection!')
+      console.warn('   Your Nine1Bot instance will be publicly accessible without authentication.')
+      console.warn('   Consider enabling auth in your config for security.\n')
+    }
     try {
       tunnel = await createTunnel(config.tunnel)
       publicUrl = await tunnel.start(serverConfig.port)

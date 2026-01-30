@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onUnmounted } from 'vue'
 import { Search, X, File, Folder } from 'lucide-vue-next'
 import type { FileSearchResult } from '../api/client'
 
@@ -30,6 +30,14 @@ function handleInput() {
     }
   }, 300)
 }
+
+// 组件销毁时清理定时器
+onUnmounted(() => {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer)
+    debounceTimer = null
+  }
+})
 
 function clearSearch() {
   searchQuery.value = ''

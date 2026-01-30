@@ -47,7 +47,12 @@ fi
 echo "Copying nine1bot package..."
 mkdir -p "$BUILD_DIR/packages/nine1bot"
 cp -r "$PROJECT_ROOT/packages/nine1bot/src" "$BUILD_DIR/packages/nine1bot/"
-cp -r "$PROJECT_ROOT/packages/nine1bot/node_modules" "$BUILD_DIR/packages/nine1bot/" 2>/dev/null || true
+# 检查 node_modules 是否存在
+if [ -d "$PROJECT_ROOT/packages/nine1bot/node_modules" ]; then
+    cp -r "$PROJECT_ROOT/packages/nine1bot/node_modules" "$BUILD_DIR/packages/nine1bot/"
+else
+    echo "WARNING: packages/nine1bot/node_modules not found! Run 'bun install' in packages/nine1bot first."
+fi
 cp "$PROJECT_ROOT/packages/nine1bot/package.json" "$BUILD_DIR/packages/nine1bot/"
 cp "$PROJECT_ROOT/packages/nine1bot/tsconfig.json" "$BUILD_DIR/packages/nine1bot/" 2>/dev/null || true
 
@@ -55,7 +60,12 @@ cp "$PROJECT_ROOT/packages/nine1bot/tsconfig.json" "$BUILD_DIR/packages/nine1bot
 echo "Copying opencode..."
 mkdir -p "$BUILD_DIR/opencode"
 cp -r "$PROJECT_ROOT/opencode/packages" "$BUILD_DIR/opencode/"
-cp -r "$PROJECT_ROOT/opencode/node_modules" "$BUILD_DIR/opencode/" 2>/dev/null || true
+# 检查 node_modules 是否存在
+if [ -d "$PROJECT_ROOT/opencode/node_modules" ]; then
+    cp -r "$PROJECT_ROOT/opencode/node_modules" "$BUILD_DIR/opencode/"
+else
+    echo "WARNING: opencode/node_modules not found! Run 'bun install' in opencode first."
+fi
 cp "$PROJECT_ROOT/opencode/package.json" "$BUILD_DIR/opencode/"
 cp "$PROJECT_ROOT/opencode/tsconfig.json" "$BUILD_DIR/opencode/" 2>/dev/null || true
 cp "$PROJECT_ROOT/opencode/bunfig.toml" "$BUILD_DIR/opencode/" 2>/dev/null || true
@@ -63,7 +73,12 @@ cp "$PROJECT_ROOT/opencode/bunfig.toml" "$BUILD_DIR/opencode/" 2>/dev/null || tr
 # 4. 复制 web/dist
 echo "Copying web assets..."
 mkdir -p "$BUILD_DIR/web"
-cp -r "$PROJECT_ROOT/web/dist" "$BUILD_DIR/web/"
+if [ -d "$PROJECT_ROOT/web/dist" ]; then
+    cp -r "$PROJECT_ROOT/web/dist" "$BUILD_DIR/web/"
+else
+    echo "ERROR: web/dist not found! Run 'bun run build' in web first."
+    exit 1
+fi
 
 # 5. 复制启动脚本
 echo "Copying launcher scripts..."

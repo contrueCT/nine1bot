@@ -1,5 +1,28 @@
 const BASE_URL = ''  // 使用相对路径，由 vite proxy 或同源处理
 
+// 默认请求超时时间 (30秒)
+const DEFAULT_TIMEOUT = 30000
+
+// 带超时的 fetch 封装
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeout: number = DEFAULT_TIMEOUT
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    })
+    return response
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 export interface Session {
   id: string
   slug?: string
@@ -123,7 +146,7 @@ export interface FileSearchResult {
 export const api = {
   // 健康检查
   async health(): Promise<{ healthy: boolean; version: string }> {
-    const res = await fetch(`${BASE_URL}/global/health`)
+    const res = await fetchWithTimeout(`${BASE_URL}/global/health`, {}, 10000) // 10秒超时
     const data = await res.json()
     return data.data
   },
@@ -132,7 +155,7 @@ export const api = {
   async getSessions(directory?: string): Promise<Session[]> {
     const params = new URLSearchParams()
     if (directory) params.set('directory', directory)
-    const res = await fetch(`${BASE_URL}/session?${params}`)
+    const res = await fetchWithTimeout(`${BASE_URL}/session?${params}`)
     const data = await res.json()
     const sessions = Array.isArray(data) ? data : (data.data || [])
     // 添加 createdAt 字段用于显示
@@ -365,25 +388,58 @@ export const api = {
     return data.data || []
   },
 
-  // 订阅事件流
+  // 订阅事件流（带自动重连）
   subscribeEvents(onEvent: (event: SSEEvent) => void): EventSource {
-    const eventSource = new EventSource(`${BASE_URL}/event`)
-    eventSource.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data)
-        // 服务器发送格式: { directory, payload: { type, properties } }
-        const event = data.payload || data
-        if (event.type) {
-          onEvent(event)
-        }
-      } catch (err) {
-        console.warn('Failed to parse event:', e.data)
+    let eventSource: EventSource
+    let reconnectAttempts = 0
+    const maxReconnectAttempts = 5
+    const baseReconnectDelay = 1000 // 1秒
+
+    function connect(): EventSource {
+      eventSource = new EventSource(`${BASE_URL}/event`)
+
+      eventSource.onopen = () => {
+        // 连接成功，重置重连计数
+        reconnectAttempts = 0
       }
+
+      eventSource.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data)
+          // 服务器发送格式: { directory, payload: { type, properties } }
+          const event = data.payload || data
+          if (event.type) {
+            onEvent(event)
+          }
+        } catch (err) {
+          console.warn('Failed to parse event:', e.data)
+        }
+      }
+
+      eventSource.onerror = (e) => {
+        console.error('EventSource error:', e)
+
+        // 尝试重连
+        if (eventSource.readyState === EventSource.CLOSED) {
+          if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++
+            const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts - 1) // 指数退避
+            console.log(`EventSource disconnected, reconnecting in ${delay}ms (attempt ${reconnectAttempts}/${maxReconnectAttempts})`)
+            setTimeout(() => {
+              if (eventSource.readyState === EventSource.CLOSED) {
+                connect()
+              }
+            }, delay)
+          } else {
+            console.error('EventSource max reconnect attempts reached')
+          }
+        }
+      }
+
+      return eventSource
     }
-    eventSource.onerror = (e) => {
-      console.error('EventSource error:', e)
-    }
-    return eventSource
+
+    return connect()
   }
 }
 

@@ -46,6 +46,9 @@ export function useSession() {
   // 事件源订阅
   let eventSource: EventSource | null = null
 
+  // 通知定时器追踪（用于清理）
+  const notificationTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
+
   // 外部事件处理器
   const externalEventHandlers: ((event: SSEEvent) => void)[] = []
 
@@ -382,10 +385,12 @@ export function useSession() {
               message: '任务已完成',
               type: 'success'
             })
-            // Auto-dismiss after 5 seconds
-            setTimeout(() => {
+            // Auto-dismiss after 5 seconds (with cleanup tracking)
+            const timerId = setTimeout(() => {
               sessionNotifications.value = sessionNotifications.value.filter(n => n.id !== notificationId)
+              notificationTimers.delete(notificationId)
             }, 5000)
+            notificationTimers.set(notificationId, timerId)
           }
         }
         return
@@ -409,6 +414,11 @@ export function useSession() {
       eventSource.close()
       eventSource = null
     }
+    // 清理所有通知定时器
+    for (const timerId of notificationTimers.values()) {
+      clearTimeout(timerId)
+    }
+    notificationTimers.clear()
   }
 
   // 加载待处理的问题和权限请求
@@ -608,6 +618,12 @@ export function useSession() {
   // 关闭通知
   function dismissNotification(notificationId: string) {
     sessionNotifications.value = sessionNotifications.value.filter(n => n.id !== notificationId)
+    // 清理对应的定时器
+    const timerId = notificationTimers.get(notificationId)
+    if (timerId) {
+      clearTimeout(timerId)
+      notificationTimers.delete(notificationId)
+    }
   }
 
   return {

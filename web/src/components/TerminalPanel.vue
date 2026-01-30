@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onUnmounted } from 'vue'
 import { Terminal, X, ChevronLeft } from 'lucide-vue-next'
 import AgentTerminalViewer from './AgentTerminalViewer.vue'
 import { useAgentTerminal } from '../composables/useAgentTerminal'
@@ -20,6 +20,10 @@ const terminalViewerRef = ref<InstanceType<typeof AgentTerminalViewer> | null>(n
 const panelWidth = ref(400)
 const isResizing = ref(false)
 
+// 保存当前的事件处理器引用以便清理
+let currentMouseMoveHandler: ((e: MouseEvent) => void) | null = null
+let currentMouseUpHandler: (() => void) | null = null
+
 // 获取终端状态颜色
 function getStatusColor(status: string): string {
   return status === 'running' ? 'var(--success, #10b981)' : 'var(--text-muted)'
@@ -33,26 +37,45 @@ function formatTime(ts: number): string {
   return `${Math.floor(diff / 3600000)}h`
 }
 
+// 清理 resize 事件监听器
+function cleanupResizeListeners() {
+  if (currentMouseMoveHandler) {
+    document.removeEventListener('mousemove', currentMouseMoveHandler)
+    currentMouseMoveHandler = null
+  }
+  if (currentMouseUpHandler) {
+    document.removeEventListener('mouseup', currentMouseUpHandler)
+    currentMouseUpHandler = null
+  }
+  isResizing.value = false
+}
+
 // 开始调整大小
 function startResize(e: MouseEvent) {
+  // 先清理可能存在的旧监听器
+  cleanupResizeListeners()
+
   isResizing.value = true
   const startX = e.clientX
   const startWidth = panelWidth.value
 
-  const onMouseMove = (e: MouseEvent) => {
+  currentMouseMoveHandler = (e: MouseEvent) => {
     const diff = startX - e.clientX
     panelWidth.value = Math.max(300, Math.min(800, startWidth + diff))
   }
 
-  const onMouseUp = () => {
-    isResizing.value = false
-    document.removeEventListener('mousemove', onMouseMove)
-    document.removeEventListener('mouseup', onMouseUp)
+  currentMouseUpHandler = () => {
+    cleanupResizeListeners()
   }
 
-  document.addEventListener('mousemove', onMouseMove)
-  document.addEventListener('mouseup', onMouseUp)
+  document.addEventListener('mousemove', currentMouseMoveHandler)
+  document.addEventListener('mouseup', currentMouseUpHandler)
 }
+
+// 组件销毁时清理事件监听器
+onUnmounted(() => {
+  cleanupResizeListeners()
+})
 
 // 监听面板打开，调整终端大小
 watch(isPanelOpen, (open) => {

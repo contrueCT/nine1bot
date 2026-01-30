@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { Bot, User, Brain, ChevronDown, Pencil, Trash2, X, Check } from 'lucide-vue-next'
 import type { Message, MessagePart } from '../api/client'
 import ToolCall from './ToolCall.vue'
@@ -74,13 +75,14 @@ const displayParts = computed(() => {
 // Thinking block state
 const thinkingExpanded = ref(false)
 
-// Format text with marked
+// Format text with marked and sanitize with DOMPurify
 function formatText(text: string): string {
   try {
-    return marked.parse(text) as string
+    const html = marked.parse(text) as string
+    return DOMPurify.sanitize(html)
   } catch (e) {
     console.error('Markdown parse error:', e)
-    return text
+    return DOMPurify.sanitize(text)
   }
 }
 </script>
