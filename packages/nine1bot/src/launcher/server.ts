@@ -158,6 +158,13 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   // 设置偏好文件路径（由 instruction.ts 定时读取）
   process.env.NINE1BOT_PREFERENCES_PATH = getGlobalPreferencesPath()
 
+  // 设置项目目录（用于 opencode 的默认工作目录）
+  // 使用用户运行 nine1bot 命令时的工作目录
+  // 注意：此时 process.cwd() 还是用户的原始工作目录，尚未被子进程改变
+  if (!process.env.NINE1BOT_PROJECT_DIR) {
+    process.env.NINE1BOT_PROJECT_DIR = process.cwd()
+  }
+
   // 动态导入 opencode 服务器模块
   // 使用安装目录的绝对路径
   const opencodeServerPath = resolve(installDir, 'opencode/packages/opencode/src/server/server.ts')
@@ -199,6 +206,9 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
 
   // 确保认证目录存在（必须在 Promise 之前 await）
   await mkdir(getGlobalConfigDir(), { recursive: true })
+
+  // 使用安装目录的绝对路径（必须在 Promise 之前定义）
+  const installDir = getInstallDir()
 
   return new Promise((resolvePromise, rejectPromise) => {
     const env: Record<string, string | undefined> = {
@@ -258,15 +268,17 @@ async function startServerProcess(options: StartServerOptions): Promise<ServerIn
     // 设置 Nine1Bot 独立的认证存储路径
     env.NINE1BOT_AUTH_PATH = getAuthPath()
 
-    // 使用安装目录的绝对路径
-    const installDir = getInstallDir()
-
     // 设置偏好模块路径
     const preferencesModulePath = resolve(installDir, 'packages/nine1bot/src/preferences/index.ts')
     env.NINE1BOT_PREFERENCES_MODULE = preferencesModulePath
 
     // 设置偏好文件路径（由 instruction.ts 定时读取）
     env.NINE1BOT_PREFERENCES_PATH = getGlobalPreferencesPath()
+
+    // 设置项目目录（用于 opencode 的默认工作目录）
+    // 使用用户运行 nine1bot 命令时的工作目录
+    env.NINE1BOT_PROJECT_DIR = process.env.NINE1BOT_PROJECT_DIR || process.cwd()
+
     const opencodeDir = resolve(installDir, 'opencode/packages/opencode')
     const opencodeEntry = resolve(opencodeDir, 'src/index.ts')
     const args = ['run', opencodeEntry, 'serve', '--port', String(server.port)]

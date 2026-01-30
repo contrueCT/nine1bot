@@ -10,8 +10,9 @@ import InputBox from './components/InputBox.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import FileViewer from './components/FileViewer.vue'
 import TodoList from './components/TodoList.vue'
-import TerminalPanel from './components/TerminalPanel.vue'
+import RightPanel from './components/RightPanel.vue'
 import { useAgentTerminal } from './composables/useAgentTerminal'
+import { useFilePreview } from './composables/useFilePreview'
 
 import { MAX_PARALLEL_AGENTS } from './composables/useParallelSessions'
 
@@ -61,6 +62,9 @@ const {
 // Agent 终端
 const { handleSSEEvent: handleTerminalEvent } = useAgentTerminal()
 
+// 文件预览
+const { handleSSEEvent: handlePreviewEvent } = useFilePreview()
+
 const {
   files,
   isLoading: filesLoading,
@@ -94,12 +98,16 @@ const sidebarTab = ref<'sessions' | 'files'>('sessions')
 // 保存 watch 停止函数以便在 unmount 时清理
 let stopSessionWatch: (() => void) | null = null
 let unregisterTerminalHandler: (() => void) | null = null
+let unregisterPreviewHandler: (() => void) | null = null
 
 onMounted(async () => {
   subscribeToEvents()
 
   // 注册终端事件处理器
   unregisterTerminalHandler = registerEventHandler(handleTerminalEvent)
+
+  // 注册文件预览事件处理器
+  unregisterPreviewHandler = registerEventHandler(handlePreviewEvent)
 
   // 设置会话切换的 watch
   stopSessionWatch = watch(currentSession, async () => {
@@ -137,6 +145,11 @@ onUnmounted(() => {
   if (unregisterTerminalHandler) {
     unregisterTerminalHandler()
     unregisterTerminalHandler = null
+  }
+  // 清理文件预览事件处理器
+  if (unregisterPreviewHandler) {
+    unregisterPreviewHandler()
+    unregisterPreviewHandler = null
   }
 })
 
@@ -287,8 +300,8 @@ function closeFileViewer() {
       </div>
     </div>
 
-    <!-- Terminal Panel (Right Side) -->
-    <TerminalPanel />
+    <!-- Right Panel (Terminal + Preview) -->
+    <RightPanel />
 
     <!-- Settings Modal -->
     <SettingsPanel

@@ -93,14 +93,12 @@ export function getDefaultConfigPath(): string {
 
 /**
  * 获取全局配置目录
- * - Windows: %APPDATA%\nine1bot
+ * 统一使用 ~/.config/nine1bot 路径（跨平台一致性）
+ * - Windows: C:\Users\<user>\.config\nine1bot
  * - Unix: ~/.config/nine1bot
  */
 export function getGlobalConfigDir(): string {
   const home = homedir()
-  if (process.platform === 'win32') {
-    return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'nine1bot')
-  }
   return join(home, '.config', 'nine1bot')
 }
 

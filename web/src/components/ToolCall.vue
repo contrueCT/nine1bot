@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { FileDown, File } from 'lucide-vue-next'
+import { FileDown, File, Eye } from 'lucide-vue-next'
 import type { MessagePart } from '../api/client'
+import { useFilePreview } from '../composables/useFilePreview'
 
 // 附件类型
 interface FileAttachment {
@@ -15,6 +16,8 @@ interface FileAttachment {
 const props = defineProps<{
   tool: MessagePart
 }>()
+
+const { openPreviewByPath } = useFilePreview()
 
 const isExpanded = ref(false)
 
@@ -104,6 +107,41 @@ const attachments = computed<FileAttachment[]>(() => {
   return atts.filter((a: any) => a.type === 'file' && a.url)
 })
 
+// Check if this is a preview_file tool
+const isPreviewTool = computed(() => {
+  return toolName.value.toLowerCase() === 'preview_file'
+})
+
+// Get preview metadata
+const previewMetadata = computed(() => {
+  if (!isPreviewTool.value) return null
+  return props.tool.state?.metadata as {
+    previewId?: string
+    path?: string
+    filename?: string
+    mime?: string
+    size?: number
+    interactive?: boolean
+  } | null
+})
+
+// Open preview from metadata
+const isOpeningPreview = ref(false)
+async function openPreview() {
+  const meta = previewMetadata.value
+  if (!meta?.path) return
+
+  isOpeningPreview.value = true
+  try {
+    await openPreviewByPath(meta.path, {
+      interactive: meta.interactive,
+      sessionID: props.tool.sessionID
+    })
+  } finally {
+    isOpeningPreview.value = false
+  }
+}
+
 // Download file
 function downloadFile(attachment: FileAttachment) {
   const link = document.createElement('a')
@@ -127,6 +165,13 @@ function formatFileSize(url: string): string {
     }
   }
   return ''
+}
+
+// Format size from bytes
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 </script>
 
@@ -179,6 +224,30 @@ function formatFileSize(url: string): string {
       <div v-if="tool.state?.error" class="detail-section error">
         <div class="detail-label">Error</div>
         <pre class="error-text">{{ tool.state.error }}</pre>
+      </div>
+    </div>
+
+    <!-- Preview button for preview_file tool -->
+    <div v-if="isPreviewTool && previewMetadata?.path && status === 'completed'" class="tool-preview">
+      <div class="preview-item">
+        <Eye :size="16" class="preview-icon" />
+        <span class="preview-name">{{ previewMetadata.filename || '文件预览' }}</span>
+        <span class="preview-size">{{ previewMetadata.size ? formatSize(previewMetadata.size) : '' }}</span>
+        <button
+          class="preview-btn"
+          @click="openPreview"
+          :disabled="isOpeningPreview"
+          title="打开预览"
+        >
+          <template v-if="isOpeningPreview">
+            <div class="loading-spinner small"></div>
+            <span>加载中</span>
+          </template>
+          <template v-else>
+            <Eye :size="14" />
+            <span>预览</span>
+          </template>
+        </button>
       </div>
     </div>
 
@@ -300,5 +369,77 @@ function formatFileSize(url: string): string {
 
 .download-btn:active {
   transform: translateY(0);
+}
+
+/* Preview section */
+.tool-preview {
+  margin-top: var(--space-sm);
+  padding: var(--space-sm);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(99, 102, 241, 0.03));
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.preview-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.preview-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.preview-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-size {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.preview-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.preview-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.preview-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.preview-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.loading-spinner.small {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
 }
 </style>

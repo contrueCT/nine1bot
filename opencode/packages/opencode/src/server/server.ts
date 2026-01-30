@@ -135,7 +135,8 @@ export namespace Server {
         )
         .route("/global", GlobalRoutes())
         .use(async (c, next) => {
-          let directory = c.req.query("directory") || c.req.header("x-opencode-directory") || process.cwd()
+          // Nine1Bot: 优先使用 NINE1BOT_PROJECT_DIR 作为默认目录
+          let directory = c.req.query("directory") || c.req.header("x-opencode-directory") || process.env.NINE1BOT_PROJECT_DIR || process.cwd()
           try {
             directory = decodeURIComponent(directory)
           } catch {

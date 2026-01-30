@@ -6,6 +6,7 @@ import { Ripgrep } from "../../file/ripgrep"
 import { LSP } from "../../lsp"
 import { Instance } from "../../project/instance"
 import { lazy } from "../../util/lazy"
+import { PreviewRegistry } from "../../tool/preview-file"
 
 export const FileRoutes = lazy(() =>
   new Hono()
@@ -192,6 +193,130 @@ export const FileRoutes = lazy(() =>
       async (c) => {
         const content = await File.status()
         return c.json(content)
+      },
+    )
+    .get(
+      "/file/preview/:id",
+      describeRoute({
+        summary: "Get file for preview",
+        description: "Get file content for preview panel by preview ID (for large files).",
+        operationId: "file.preview",
+        responses: {
+          200: {
+            description: "File content",
+          },
+          404: {
+            description: "Preview not found",
+          },
+        },
+      }),
+      async (c) => {
+        const previewId = c.req.param("id")
+        const preview = PreviewRegistry.get(previewId)
+        if (!preview) {
+          return c.json({ error: "Preview not found" }, 404)
+        }
+
+        const file = Bun.file(preview.path)
+        if (!(await file.exists())) {
+          PreviewRegistry.delete(previewId)
+          return c.json({ error: "File not found" }, 404)
+        }
+
+        return c.body(await file.arrayBuffer(), {
+          headers: {
+            "Content-Type": preview.mime,
+            "Content-Disposition": `inline; filename="${preview.filename}"`,
+          },
+        })
+      },
+    )
+    .get(
+      "/file/preview-by-path",
+      describeRoute({
+        summary: "Get file preview content by path",
+        description: "Get file content for preview panel by file path. Returns base64 encoded content for rendering.",
+        operationId: "file.previewByPath",
+        responses: {
+          200: {
+            description: "Preview info with base64 content",
+          },
+          404: {
+            description: "File not found",
+          },
+          400: {
+            description: "Unsupported file type",
+          },
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          path: z.string(),
+          interactive: z.enum(["true", "false"]).optional(),
+        }),
+      ),
+      async (c) => {
+        const path = await import("path")
+        const filepath = c.req.valid("query").path
+        const interactive = c.req.valid("query").interactive === "true"
+
+        // Resolve path
+        let fullPath = filepath
+        if (!path.isAbsolute(filepath)) {
+          fullPath = path.resolve(Instance.directory, filepath)
+        }
+
+        const file = Bun.file(fullPath)
+        if (!(await file.exists())) {
+          return c.json({ error: "File not found" }, 404)
+        }
+
+        const filename = path.basename(fullPath)
+        const ext = path.extname(fullPath).toLowerCase()
+        const stat = await file.stat()
+        const size = stat.size
+
+        // MIME type mapping
+        const MIME_TYPES: Record<string, string> = {
+          ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+          ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml",
+          ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          ".md": "text/markdown", ".html": "text/html", ".htm": "text/html",
+          ".json": "application/json", ".yaml": "text/yaml", ".yml": "text/yaml",
+          ".css": "text/css", ".js": "text/javascript", ".ts": "text/typescript",
+          ".tsx": "text/typescript", ".jsx": "text/javascript", ".vue": "text/x-vue",
+          ".py": "text/x-python", ".rs": "text/x-rust", ".go": "text/x-go",
+          ".txt": "text/plain", ".log": "text/plain",
+        }
+
+        const mime = MIME_TYPES[ext] || file.type || "application/octet-stream"
+
+        // Check if supported
+        const isSupported = mime.startsWith("image/") || mime.startsWith("text/") ||
+          mime === "application/json" || mime.includes("wordprocessingml")
+
+        if (!isSupported) {
+          return c.json({ error: `Unsupported file type: ${ext}` }, 400)
+        }
+
+        // Read file content (limit to 10MB for safety)
+        const MAX_SIZE = 10 * 1024 * 1024
+        if (size > MAX_SIZE) {
+          return c.json({ error: "File too large for preview" }, 400)
+        }
+
+        const bytes = await file.bytes()
+        const content = Buffer.from(bytes).toString("base64")
+
+        return c.json({
+          path: fullPath,
+          filename,
+          mime,
+          content,
+          size,
+          interactive,
+        })
       },
     ),
 )

@@ -68,12 +68,13 @@ export namespace Skill {
       const parsed = Info.pick({ name: true, description: true }).safeParse(md.data)
       if (!parsed.success) return
 
-      // Warn on duplicate skill names
+      // Later sources override earlier ones (higher priority sources scanned last)
+      // No warning for duplicates - this is expected when user overrides builtin skills
       if (skills[parsed.data.name]) {
-        log.warn("duplicate skill name", {
+        log.debug("skill override", {
           name: parsed.data.name,
-          existing: skills[parsed.data.name].location,
-          duplicate: match,
+          previous: skills[parsed.data.name].location,
+          newLocation: match,
         })
       }
 
@@ -84,27 +85,11 @@ export namespace Skill {
       }
     }
 
-    // Scan Nine1Bot skills directories (highest priority)
-    // Global: ~/.config/nine1bot/skills/ or %APPDATA%\nine1bot\skills\
-    const nine1botGlobalSkillsDir = process.env.NINE1BOT_SKILLS_DIR
-    if (nine1botGlobalSkillsDir && await Filesystem.isDir(nine1botGlobalSkillsDir)) {
-      const matches = await Array.fromAsync(
-        NINE1BOT_SKILL_GLOB.scan({
-          cwd: nine1botGlobalSkillsDir,
-          absolute: true,
-          onlyFiles: true,
-          followSymlinks: true,
-        }),
-      ).catch((error) => {
-        log.error("failed nine1bot global skills directory scan", { dir: nine1botGlobalSkillsDir, error })
-        return []
-      })
-      for (const match of matches) {
-        await addSkill(match)
-      }
-    }
+    // Scan order: lowest priority first, highest priority last
+    // Priority: builtin < global < project (later scans override earlier ones)
+    // This allows users to override builtin skills with their own versions
 
-    // Scan Nine1Bot built-in skills (from packages/nine1bot/skills/)
+    // 1. Scan Nine1Bot built-in skills (lowest priority)
     const nine1botBuiltinSkillsDir = process.env.NINE1BOT_BUILTIN_SKILLS_DIR
     if (nine1botBuiltinSkillsDir && await Filesystem.isDir(nine1botBuiltinSkillsDir)) {
       const matches = await Array.fromAsync(
@@ -123,7 +108,27 @@ export namespace Skill {
       }
     }
 
-    // Project-level: .nine1bot/skills/
+    // 2. Scan Nine1Bot global skills (medium priority - user can override builtin)
+    // Global: ~/.config/nine1bot/skills/
+    const nine1botGlobalSkillsDir = process.env.NINE1BOT_SKILLS_DIR
+    if (nine1botGlobalSkillsDir && await Filesystem.isDir(nine1botGlobalSkillsDir)) {
+      const matches = await Array.fromAsync(
+        NINE1BOT_SKILL_GLOB.scan({
+          cwd: nine1botGlobalSkillsDir,
+          absolute: true,
+          onlyFiles: true,
+          followSymlinks: true,
+        }),
+      ).catch((error) => {
+        log.error("failed nine1bot global skills directory scan", { dir: nine1botGlobalSkillsDir, error })
+        return []
+      })
+      for (const match of matches) {
+        await addSkill(match)
+      }
+    }
+
+    // 3. Project-level: .nine1bot/skills/ (highest priority)
     const nine1botProjectSkillsDir = path.join(Instance.directory, ".nine1bot", "skills")
     if (await Filesystem.isDir(nine1botProjectSkillsDir)) {
       const matches = await Array.fromAsync(
