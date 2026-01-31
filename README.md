@@ -1,310 +1,314 @@
 # Nine1Bot
 
-[English](./README.en.md)
+[简体中文](./README.zh.md)
 
-多功能个人 AI 助手，提供 Web 界面和隧道支持，可远程访问。
+A versatile personal AI assistant featuring a web interface and tunnel support for remote access.
 
-支持编程开发、文件管理、信息检索、内容创作等多种任务，通过自然语言交互完成复杂操作。
+Supports programming, file management, information retrieval, content creation, and more through natural language interaction.
 
-> **安全警告**
+> **Security Warning**
 >
-> Nine1Bot 具备执行系统命令、读写文件等能力。目前的安全性尚未得到完全保障，请注意：
-> - 避免在存储重要数据的设备上执行复杂任务
-> - 不要让 AI 访问敏感文件或凭据
-> - 建议在虚拟机或测试环境中使用
-> - 定期备份重要数据
+> Nine1Bot can execute system commands and read/write files. Security is not fully guaranteed yet:
+>
+> - Avoid running complex tasks on devices with important data
+> - Don't let AI access sensitive files or credentials
+> - Consider using in a virtual machine or test environment
+> - Back up important data regularly
 
-## 功能特点
+## Features
 
-### 核心能力
+### Core Capabilities
 
-- **编程开发** - 代码编写、调试、重构、代码审查，支持多种编程语言和框架
-- **文件管理** - 读取、创建、编辑、整理文件，批量重命名，目录结构管理
-- **文件预览** - 在 Web 界面预览图片、代码、Markdown、HTML、Office 文档
-- **命令执行** - 运行系统命令，脚本编写，环境配置，自动化任务
-- **信息检索** - 网页搜索，资料整理，数据分析，内容提取与总结
-- **内容创作** - 文档撰写，报告生成，邮件起草，翻译润色，文案优化
-- **日常办公** - 会议纪要整理，日程规划，数据表格处理，格式转换
-- **任务管理** - 待办事项跟踪，工作拆解，进度管理，提醒备忘
-- **问题解答** - 技术咨询，方案建议，故障排查，学习辅导
+- **Programming** - Code writing, debugging, refactoring, code review, supporting multiple languages and frameworks
+- **File Management** - Read, create, edit, organize files, batch rename, directory structure management
+- **File Preview** - Preview images, code, Markdown, HTML, Office documents in Web UI
+- **Command Execution** - Run system commands, script writing, environment configuration, automation
+- **Information Retrieval** - Web search, data analysis, content extraction and summarization
+- **Content Creation** - Document writing, report generation, email drafting, translation, copywriting
+- **Office Tasks** - Meeting notes, scheduling, spreadsheet processing, format conversion
+- **Task Management** - Todo tracking, work breakdown, progress management, reminders
+- **Q&A** - Technical consulting, solution suggestions, troubleshooting, tutoring
 
-### 产品特性
+### Product Features
 
-- **Web 界面** - 现代化的聊天界面，支持 Markdown 渲染、代码高亮、agent控制台监控
-- **多模型支持** - Anthropic Claude、OpenAI、Google Gemini、OpenRouter 等
-- **用户偏好** - 记录个人偏好，AI 会在所有会话中遵循你的习惯
-- **隧道支持** - 内置 ngrok 和 NATAPP 支持，可从公网访问
-- **密码保护** - 可选的 Web 访问密码保护
-- **并行会话** - 支持同时运行至多10个 AI 会话
-- **热更新** - Skills 和 MCP 配置修改后自动生效，无需重启
-- **开箱即用** - 下载即可运行，内置 Bun 运行时
+- **Web Interface** - Modern chat interface with Markdown rendering, code highlighting, agent console monitoring
+- **Multi-Model Support** - Anthropic Claude, OpenAI, Google Gemini, OpenRouter, and more
+- **User Preferences** - Record personal preferences, AI follows your habits across all sessions
+- **Tunnel Support** - Built-in ngrok and NATAPP support for public access
+- **Password Protection** - Optional web access password protection
+- **Parallel Sessions** - Run up to 10 AI sessions simultaneously
+- **Hot Reload** - Skills and MCP config changes take effect automatically without restart
+- **Ready to Use** - Download and run, includes Bun runtime
 
-### 内置 Skills
+### Built-in Skills
 
-Nine1Bot 内置了多个实用技能，通过 `/技能名` 调用：
+Nine1Bot includes several built-in skills, invoked via `/skill-name`:
 
-| 技能 | 说明 |
-|------|------|
-| `/remember` | 记录用户偏好，AI 会在所有会话中遵循 |
-| `/pdf` | PDF 处理：提取文本、合并拆分、表单填写 |
-| `/docx` | Word 文档创建、编辑、修订追踪 |
-| `/pptx` | PowerPoint 演示文稿创建和编辑 |
-| `/mcp-builder` | 创建 MCP 服务器的开发指南 |
-| `/skill-creator` | 创建自定义 Skills 的开发指南 |
+| Skill            | Description                                              |
+| ---------------- | -------------------------------------------------------- |
+| `/remember`      | Record user preferences, AI follows them in all sessions |
+| `/pdf`           | PDF processing: extract text, merge/split, form filling  |
+| `/docx`          | Word document creation, editing, revision tracking       |
+| `/pptx`          | PowerPoint presentation creation and editing             |
+| `/mcp-builder`   | Development guide for creating MCP servers               |
+| `/skill-creator` | Development guide for creating custom Skills             |
 
-你也可以在 `~/.config/nine1bot/skills/` 添加自定义 Skills。
+You can also add custom Skills in `~/.config/nine1bot/skills/`.
 
-### 配置兼容性
+### Configuration Compatibility
 
-Nine1Bot 支持集成以下配置：
+Nine1Bot supports integrating configurations from:
 
-| 配置类型 | OpenCode | Claude Code | 说明 |
-|---------|----------|-------------|------|
-| MCP 服务器 | ✅ | ✅ | 可继承 OpenCode 和 Claude Code 的 MCP 配置 |
-| Skills 技能 | ✅ | ✅ | 可继承 OpenCode 和 Claude Code 的自定义技能 |
-| 服务商认证 | ✅ | ❌ | 可继承 OpenCode 的 API Key 和 OAuth 认证 |
-| 官方服务商 | ❌ | - | 不支持 OpenCode 官方服务商（需要官方授权） |
+| Config Type        | OpenCode | Claude Code | Notes                                                              |
+| ------------------ | -------- | ----------- | ------------------------------------------------------------------ |
+| MCP Servers        | ✅       | ✅          | Can inherit MCP config from OpenCode and Claude Code               |
+| Skills             | ✅       | ✅          | Can inherit custom skills from OpenCode and Claude Code            |
+| Provider Auth      | ✅       | ❌          | Can inherit API Keys and OAuth from OpenCode                       |
+| Official Providers | ❌       | -           | OpenCode official providers not supported (requires authorization) |
 
-可通过配置文件控制是否继承这些配置：
+Control inheritance through config:
 
 ```jsonc
 {
   "isolation": {
-    "inheritOpencode": true,      // 是否继承 OpenCode 配置
-    "inheritClaudeCode": true     // 是否继承 Claude Code 配置
-  }
+    "inheritOpencode": true, // Inherit OpenCode config
+    "inheritClaudeCode": true, // Inherit Claude Code config
+  },
 }
 ```
 
-## 安装
+## Installation
 
-### 方式一：下载 Release（推荐）
+### Option 1: Download Release (Recommended)
 
-从 [Releases](https://github.com/contrueCT/nine1bot/releases) 下载对应平台的压缩包：
+Download from [Releases](https://github.com/contrueCT/nine1bot/releases):
 
-| 平台 | 架构 | 文件名 |
-|------|------|--------|
-| Linux | x64 | `nine1bot-linux-x64-vX.X.X.tar.gz` |
-| Linux | ARM64 | `nine1bot-linux-aarch64-vX.X.X.tar.gz` |
-| macOS | Intel | `nine1bot-darwin-x64-vX.X.X.tar.gz` |
-| macOS | Apple Silicon | `nine1bot-darwin-aarch64-vX.X.X.tar.gz` |
-| Windows | x64 | `nine1bot-windows-x64-vX.X.X.zip` |
+| Platform | Architecture  | Filename                              |
+| -------- | ------------- | ------------------------------------- |
+| Linux    | x64           | `nine1bot-linux-x64-vX.X.X.tar.gz`    |
+| Linux    | ARM64         | `nine1bot-linux-arm64-vX.X.X.tar.gz`  |
+| macOS    | Apple Silicon | `nine1bot-darwin-arm64-vX.X.X.tar.gz` |
+| Windows  | x64           | `nine1bot-windows-x64-vX.X.X.zip`     |
 
 **Linux / macOS:**
 
 ```bash
-# 下载并解压（以 Linux x64 为例）
+# Download and extract (Linux x64 example)
 curl -fsSL https://github.com/contrueCT/nine1bot/releases/latest/download/nine1bot-linux-x64.tar.gz | tar -xz
 cd nine1bot-linux-x64
 
-# 运行
+# Run
 ./nine1bot
 ```
 
 **Windows:**
 
-1. 下载 `nine1bot-windows-x64-vX.X.X.zip`
-2. 解压到任意目录
-3. 双击 `nine1bot.bat` 或在命令行运行
+1. Download `nine1bot-windows-x64-vX.X.X.zip`
+2. Extract to any directory
+3. Double-click `nine1bot.bat` or run from command line
 
-### 方式二：一键安装脚本（Linux / macOS）
+### Option 2: One-Line Install Script (Linux / macOS)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/contrueCT/nine1bot/main/install.sh | bash
 ```
 
-安装完成后，可以在任意目录运行 `nine1bot` 命令。
+After installation, run `nine1bot` from any directory.
 
-### 方式三：从源码安装
+### Option 3: Install from Source
 
-需要先安装 [Bun](https://bun.sh)。
+Requires [Bun](https://bun.sh).
 
 ```bash
-# 克隆仓库
+# Clone repository
 git clone https://github.com/contrueCT/nine1bot.git
 cd nine1bot
 
-# 安装依赖
+# Install dependencies
 cd opencode && bun install && cd ..
 cd packages/nine1bot && bun install && cd ../..
 cd web && bun install && cd ..
 
-# 构建 Web 前端
+# Build web frontend
 cd web && bun run build && cd ..
 
-# 运行
+# Run
 bun run nine1bot
 ```
 
-## 使用
+## Usage
 
-### 首次运行
+### First Run
 
-首次运行时，会提示是否运行配置向导：
+On first run, you'll be prompted to run the setup wizard:
 
 ```
 Welcome to Nine1Bot! Would you like to run the setup wizard?
 ```
 
-配置向导会引导你设置：
-- 服务端口（默认 4096）
-- 密码保护（可选）
-- 隧道配置（可选，用于公网访问）
+The wizard guides you through:
+
+- Server port (default 4096)
+- Password protection (optional)
+- Tunnel configuration (optional, for public access)
 - AI Provider API Key
 
-你也可以跳过向导，之后运行 `nine1bot setup` 单独配置。
+You can skip and run `nine1bot setup` later.
 
-### 命令行
+### Command Line
 
 ```bash
-# 启动服务（默认命令）
+# Start server (default command)
 nine1bot
 
-# 指定端口
+# Specify port
 nine1bot --port 8080
 nine1bot -p 8080
 
-# 启用隧道
+# Enable tunnel
 nine1bot --tunnel
 nine1bot -t
 
-# 不自动打开浏览器
+# Don't open browser automatically
 nine1bot --no-browser
 
-# 运行配置向导
+# Run setup wizard
 nine1bot setup
 
-# 查看配置
+# View config
 nine1bot config show
 
-# 设置配置项
+# Set config value
 nine1bot config set server.port 8080
 
-# 编辑配置文件
+# Edit config file
 nine1bot config edit
 
-# 查看帮助
+# Show help
 nine1bot --help
 ```
 
-### Web 界面
+### Web Interface
 
-启动后，在浏览器打开 `http://127.0.0.1:4096`（或配置的端口）。
+After starting, open `http://127.0.0.1:4096` (or your configured port) in browser.
 
-功能：
-- 创建多个会话
-- 切换不同的 AI 模型
-- 查看和管理文件
-- 实时查看 AI 思考过程
-- 中止正在运行的任务
+Features:
 
-### 用户偏好
+- Create multiple sessions
+- Switch AI models
+- View and manage files
+- Watch AI thinking process in real-time
+- Abort running tasks
 
-Nine1Bot 可以记录你的个人偏好，AI 会在所有会话中自动遵循这些偏好。
+### User Preferences
 
-#### 设置偏好
+Nine1Bot can remember your personal preferences. AI will automatically follow these preferences in all sessions.
 
-**方式一：Web 界面**
+#### Setting Preferences
 
-点击设置面板中的「偏好」标签，可以添加、编辑、删除偏好。
+**Option 1: Web Interface**
 
-**方式二：对话中使用 /remember 命令**
+Click the "Preferences" tab in settings panel to add, edit, or delete preferences.
 
-在对话中直接告诉 AI 你的偏好：
+**Option 2: Use /remember command in chat**
+
+Tell AI your preferences directly in conversation:
 
 ```
-/remember 回复时使用中文
-/remember 代码注释用英文
-/remember 不要使用 emoji
+/remember Reply in English
+/remember Use 4-space indentation for code
+/remember Don't use emoji
 ```
 
-#### 偏好示例
+#### Preference Examples
 
-- `回复时使用中文` - AI 会用中文回复
-- `代码风格使用 4 空格缩进` - 生成的代码会使用 4 空格缩进
-- `解释代码时要详细` - AI 会给出更详细的代码解释
-- `commit message 用英文` - Git 提交信息会用英文
+- `Reply in English` - AI will respond in English
+- `Use 4-space indentation for code` - Generated code uses 4-space indentation
+- `Give detailed code explanations` - AI provides more detailed code explanations
+- `Write commit messages in English` - Git commit messages will be in English
 
-偏好会自动注入到每次对话的提示词中，无需重复说明。
+Preferences are automatically injected into every conversation prompt.
 
-## 配置
+## Configuration
 
-配置文件位置：
-- **项目配置**：`nine1bot.config.jsonc`（安装目录）
-- **全局配置**：`~/.config/nine1bot/config.jsonc`（Linux/macOS）或 `%APPDATA%\nine1bot\config.jsonc`（Windows）
+Config file locations:
 
-### 配置示例
+- **Project config**: `nine1bot.config.jsonc` (installation directory)
+- **Global config**: `~/.config/nine1bot/config.jsonc` (Linux/macOS) or `%APPDATA%\nine1bot\config.jsonc` (Windows)
+
+### Config Example
 
 ```jsonc
 {
-  // 服务器配置
+  // Server config
   "server": {
     "port": 4096,
     "hostname": "127.0.0.1",
-    "openBrowser": true
+    "openBrowser": true,
   },
 
-  // 密码保护
+  // Password protection
   "auth": {
     "enabled": true,
-    "password": "your-password"
+    "password": "your-password",
   },
 
-  // 隧道配置
+  // Tunnel config
   "tunnel": {
     "enabled": true,
-    "provider": "ngrok",  // 或 "natapp"
+    "provider": "ngrok", // or "natapp"
     "ngrok": {
-      "authToken": "your-ngrok-token"
-    }
+      "authToken": "your-ngrok-token",
+    },
   },
 
-  // AI Provider 配置
+  // AI Provider config
   "provider": {
     "anthropic": {
       "options": {
-        "apiKey": "sk-ant-xxxxx"
-      }
-    }
+        "apiKey": "sk-ant-xxxxx",
+      },
+    },
   },
 
-  // 默认模型
-  "model": "anthropic/claude-sonnet-4-20250514"
+  // Default model
+  "model": "anthropic/claude-sonnet-4-20250514",
 }
 ```
 
-### 环境变量
+### Environment Variables
 
-配置文件支持环境变量替换：
+Config files support environment variable substitution:
 
 ```jsonc
 {
   "provider": {
     "anthropic": {
       "options": {
-        "apiKey": "{env:ANTHROPIC_API_KEY}"
-      }
-    }
-  }
+        "apiKey": "{env:ANTHROPIC_API_KEY}",
+      },
+    },
+  },
 }
 ```
 
-### 隧道配置
+### Tunnel Configuration
 
-> **隧道安全警告**
+> **Tunnel Security Warning**
 >
-> 启用隧道会将你的 Nine1Bot 实例暴露到公网，请务必注意以下风险：
-> - **强烈建议启用密码保护**：未设置密码时，任何人都可以通过隧道 URL 访问并控制你的 AI 助手
-> - **隧道 URL 会被记录**：ngrok/NATAPP 等服务商会记录你的隧道访问日志
-> - **不要分享隧道 URL**：除非你信任对方，否则不要将隧道地址分享给他人
-> - **及时关闭不使用的隧道**：长时间暴露在公网增加被攻击的风险
-> - **避免在隧道模式下处理敏感数据**：公网传输存在被拦截的可能
+> Enabling tunnel exposes your Nine1Bot instance to the internet. Please note:
+>
+> - **Strongly recommended to enable password protection**: Without a password, anyone can access and control your AI assistant
+> - **Tunnel URLs are logged**: Services like ngrok/NATAPP record access logs
+> - **Don't share tunnel URLs**: Unless you trust the recipient
+> - **Close unused tunnels promptly**: Prolonged public exposure increases attack risk
+> - **Avoid processing sensitive data in tunnel mode**: Public transmission may be intercepted
 
-#### ngrok（国际）
+#### ngrok (International)
 
-1. 注册 [ngrok](https://ngrok.com) 账号
-2. 获取 [authtoken](https://dashboard.ngrok.com/authtokens)
-3. 配置：
+1. Register at [ngrok](https://ngrok.com)
+2. Get [authtoken](https://dashboard.ngrok.com/authtokens)
+3. Configure:
 
 ```jsonc
 {
@@ -312,18 +316,18 @@ Nine1Bot 可以记录你的个人偏好，AI 会在所有会话中自动遵循�
     "enabled": true,
     "provider": "ngrok",
     "ngrok": {
-      "authToken": "your-ngrok-token"
-    }
-  }
+      "authToken": "your-ngrok-token",
+    },
+  },
 }
 ```
 
-#### NATAPP（国内）
+#### NATAPP (China)
 
-1. 注册 [NATAPP](https://natapp.cn) 账号
-2. 创建隧道，获取 authtoken
-3. 下载 NATAPP 客户端并添加到 PATH
-4. 配置：
+1. Register at [NATAPP](https://natapp.cn)
+2. Create tunnel, get authtoken
+3. Download NATAPP client and add to PATH
+4. Configure:
 
 ```jsonc
 {
@@ -331,109 +335,109 @@ Nine1Bot 可以记录你的个人偏好，AI 会在所有会话中自动遵循�
     "enabled": true,
     "provider": "natapp",
     "natapp": {
-      "authToken": "your-natapp-token"
-    }
-  }
+      "authToken": "your-natapp-token",
+    },
+  },
 }
 ```
 
-## 更新
+## Update
 
-### Release 安装方式
+### Release Installation
 
 ```bash
-# 运行更新脚本
+# Run update script
 ./scripts/update.sh
 ```
 
-### 源码安装方式
+### Source Installation
 
 ```bash
-cd ~/.nine1bot  # 或你的安装目录
+cd ~/.nine1bot  # or your installation directory
 git pull
 cd opencode && bun install && cd ..
 cd packages/nine1bot && bun install && cd ../..
 cd web && bun install && bun run build && cd ..
 ```
 
-## 卸载
+## Uninstall
 
-### Release 安装方式
+### Release Installation
 
-直接删除解压的目录即可。
+Simply delete the extracted directory.
 
-### 脚本安装方式
+### Script Installation
 
 ```bash
 ~/.nine1bot/scripts/uninstall.sh
 ```
 
-或手动删除：
+Or manually:
 
 ```bash
 rm -rf ~/.nine1bot
 rm ~/.local/bin/nine1bot
 ```
 
-## 系统要求
+## System Requirements
 
-- **操作系统**：Linux、macOS、Windows
-- **内存**：建议 4GB 以上
-- **网络**：需要能访问 AI Provider API
+- **OS**: Linux, macOS, Windows
+- **Memory**: 4GB+ recommended
+- **Network**: Access to AI Provider APIs required
 
-## 常见问题
+## FAQ
 
-### 端口被占用
+### Port in use
 
-使用 `--port` 参数指定其他端口：
+Use `--port` to specify another port:
 
 ```bash
 nine1bot --port 8080
 ```
 
-### 命令找不到
+### Command not found
 
-如果使用脚本安装后 `nine1bot` 命令找不到，运行：
+If `nine1bot` command not found after script installation:
 
 ```bash
-source ~/.bashrc  # 或 source ~/.zshrc
+source ~/.bashrc  # or source ~/.zshrc
 ```
 
-或重新打开终端。
+Or restart your terminal.
 
-### 后台运行
+### Run in background
 
 ```bash
 nohup nine1bot --no-browser > nine1bot.log 2>&1 &
 ```
 
-或使用 systemd 服务（参见 [INSTALL.md](./INSTALL.md)）。
+Or use systemd service (see [INSTALL.md](./INSTALL.md)).
 
-## 开发
+## Development
 
 ```bash
-# 启动开发模式
+# Start development mode
 bun run dev
 
-# 启动 Web 开发服务器
+# Start web dev server
 bun run web
 
-# 构建 Web 前端
+# Build web frontend
 bun run build:web
 ```
 
-## 参与贡献
+## Contributing
 
-欢迎参与 Nine1Bot 的开发，一起丰富国内 Agent 生态！
+Welcome to contribute to Nine1Bot!
 
-- 提交 Issue 反馈问题或建议
-- 提交 Pull Request 贡献代码
-- 分享使用经验和最佳实践
-- 帮助完善文档和翻译
+- Submit Issues for bugs or suggestions
+- Submit Pull Requests to contribute code
+- Share usage experiences and best practices
+- Help improve documentation and translations
 
-## 致谢
+## Acknowledgments
 
-感谢 [OpenCode](https://github.com/opencode-ai/opencode) 社区的开源贡献，Nine1Bot 基于 OpenCode 构建。
+Thanks to the [OpenCode](https://github.com/opencode-ai/opencode) community. Nine1Bot is built on OpenCode.
 
 ## License
 
