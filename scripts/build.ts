@@ -31,13 +31,20 @@ interface Target {
   avx2?: false
 }
 
-const allTargets: Target[] = [
+// 发布目标（CI 构建使用 baseline 版本以确保兼容性）
+const releaseTargets: Target[] = [
+  { os: "linux", arch: "x64", avx2: false },   // baseline for older CPUs
+  { os: "linux", arch: "arm64" },
+  { os: "darwin", arch: "arm64" },
+  { os: "windows", arch: "x64", avx2: false }, // baseline for older CPUs
+]
+
+// 本地开发目标（使用当前平台的优化版本）
+const devTargets: Target[] = [
   { os: "linux", arch: "x64" },
-  { os: "linux", arch: "x64", avx2: false },
   { os: "linux", arch: "arm64" },
   { os: "darwin", arch: "arm64" },
   { os: "windows", arch: "x64" },
-  { os: "windows", arch: "x64", avx2: false },
 ]
 
 // 确定要构建的目标
@@ -47,22 +54,20 @@ let targets: Target[]
 const currentPlatform = process.platform === "win32" ? "windows" : process.platform
 
 if (singleFlag) {
-  // 只构建当前平台（非 baseline 版本）
-  targets = allTargets.filter(t =>
+  // 本地开发：构建当前平台的优化版本
+  targets = devTargets.filter(t =>
     t.os === currentPlatform &&
-    t.arch === process.arch &&
-    t.avx2 !== false
+    t.arch === process.arch
   )
 } else if (platformArg && archArg) {
-  // 构建指定平台
-  targets = allTargets.filter(t =>
+  // CI 构建：使用 baseline 版本确保兼容性
+  targets = releaseTargets.filter(t =>
     t.os === platformArg &&
-    t.arch === archArg &&
-    t.avx2 !== false
+    t.arch === archArg
   )
 } else {
-  // 构建所有平台
-  targets = allTargets
+  // 构建所有发布目标
+  targets = releaseTargets
 }
 
 if (targets.length === 0) {
@@ -80,9 +85,11 @@ await $`rm -rf dist`
 // 构建每个目标
 for (const target of targets) {
   const osName = target.os === "win32" ? "windows" : target.os
-  const suffix = target.avx2 === false ? "-baseline" : ""
-  const buildName = `nine1bot-${osName}-${target.arch}${suffix}`
-  const bunTarget = `bun-${osName}-${target.arch}${suffix}`
+  // 目录名不加 -baseline 后缀（发布版统一使用 baseline）
+  const buildName = `nine1bot-${osName}-${target.arch}`
+  // Bun target 需要 -baseline 后缀
+  const bunTargetSuffix = target.avx2 === false ? "-baseline" : ""
+  const bunTarget = `bun-${osName}-${target.arch}${bunTargetSuffix}`
   const outDir = path.join(projectRoot, "dist", buildName)
   const outfile = path.join(outDir, target.os === "win32" || target.os === "windows" ? "nine1bot.exe" : "nine1bot")
 
