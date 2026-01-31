@@ -5,6 +5,10 @@ if (!process.env.NINE1BOT_PROJECT_DIR) {
   process.env.NINE1BOT_PROJECT_DIR = process.cwd()
 }
 
+// 禁用 OpenCode 默认插件（必须在导入 OpenCode 模块之前设置）
+// 这些插件依赖 @openauthjs/openauth，在编译后的二进制中无法正确解析
+process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS = 'true'
+
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
 import { UI } from './cli/ui'

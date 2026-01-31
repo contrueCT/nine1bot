@@ -111,9 +111,6 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   // 设置环境变量
   process.env.OPENCODE_CONFIG = opencodeConfigPath
 
-  // 禁用 OpenCode 默认插件（避免加载依赖 @openauthjs/openauth 的外部插件）
-  process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS = 'true'
-
   // 配置隔离：禁用全局或项目配置
   const isolation = fullConfig.isolation || {}
   if (isolation.disableGlobalConfig) {
