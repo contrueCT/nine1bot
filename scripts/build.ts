@@ -79,8 +79,8 @@ console.log(`Building Nine1Bot v${version}`)
 console.log(`Targets: ${targets.map(t => `${t.os}-${t.arch}${t.avx2 === false ? "-baseline" : ""}`).join(", ")}`)
 console.log("")
 
-// 清理输出目录
-await $`rm -rf dist`
+// 清理输出目录（忽略错误，Windows 可能有文件锁定问题）
+await $`rm -rf dist`.nothrow()
 
 // 构建每个目标
 for (const target of targets) {
