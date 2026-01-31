@@ -31,12 +31,12 @@ interface Target {
   avx2?: false
 }
 
-// 发布目标（CI 构建使用 baseline 版本以确保兼容性）
+// 发布目标（Linux x64 使用 baseline 版本以确保兼容性）
 const releaseTargets: Target[] = [
   { os: "linux", arch: "x64", avx2: false },   // baseline for older CPUs
   { os: "linux", arch: "arm64" },
   { os: "darwin", arch: "arm64" },
-  { os: "windows", arch: "x64", avx2: false }, // baseline for older CPUs
+  { os: "windows", arch: "x64" },              // Windows 不支持 baseline
 ]
 
 // 本地开发目标（使用当前平台的优化版本）
