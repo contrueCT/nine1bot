@@ -544,10 +544,11 @@ export namespace Server {
         .all("/*", async (c) => {
           const requestPath = c.req.path
 
-          // Serve from local app/dist directory for Nine1Bot
+          // Serve from local web/dist directory
+          // Priority: NINE1BOT_WEB_DIR env var > relative path from source
           const __filename = fileURLToPath(import.meta.url)
           const __dirname = nodePath.dirname(__filename)
-          const webDistDir = nodePath.resolve(__dirname, "../../../../../web/dist")
+          const webDistDir = process.env.NINE1BOT_WEB_DIR || nodePath.resolve(__dirname, "../../../../../web/dist")
 
           // Try to serve the requested file
           const filePath = nodePath.join(webDistDir, requestPath)

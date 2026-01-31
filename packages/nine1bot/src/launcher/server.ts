@@ -25,6 +25,16 @@ function getBuiltinSkillsDir(): string {
   return resolve(installDir, isReleaseMode() ? 'skills' : 'packages/nine1bot/skills')
 }
 
+/**
+ * 获取 web 资源目录路径
+ * - 发行版模式：installDir/web/dist
+ * - 开发模式：installDir/web/dist
+ */
+function getWebDistDir(): string {
+  const installDir = getInstallDir()
+  return resolve(installDir, 'web/dist')
+}
+
 export interface ServerInstance {
   url: string
   hostname: string
@@ -177,6 +187,9 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   if (!process.env.NINE1BOT_PROJECT_DIR) {
     process.env.NINE1BOT_PROJECT_DIR = process.cwd()
   }
+
+  // 设置 web 资源目录（供 OpenCode server 提供静态文件）
+  process.env.NINE1BOT_WEB_DIR = getWebDistDir()
 
   // 使用静态导入的 OpenCode 服务器启动
   const serverInstance = await OpencodeServer.listen({
