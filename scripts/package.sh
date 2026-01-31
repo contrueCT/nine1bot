@@ -105,9 +105,20 @@ echo "Creating archive..."
 cd "$PROJECT_ROOT/build"
 
 if [ "$PLATFORM" = "windows" ]; then
-    # Windows 使用 zip
+    # Windows 使用 zip 或 7z
     ARCHIVE_NAME="nine1bot-${PLATFORM}-${ARCH}-v${VERSION}.zip"
-    zip -r "$DIST_DIR/$ARCHIVE_NAME" "$BUILD_NAME"
+    if command -v zip &> /dev/null; then
+        zip -r "$DIST_DIR/$ARCHIVE_NAME" "$BUILD_NAME"
+    elif command -v 7z &> /dev/null; then
+        # 7-Zip (available on GitHub Windows runners)
+        7z a -tzip "$DIST_DIR/$ARCHIVE_NAME" "$BUILD_NAME"
+    elif [ -f "/c/Program Files/7-Zip/7z.exe" ]; then
+        # 7-Zip default install path on Windows
+        "/c/Program Files/7-Zip/7z.exe" a -tzip "$DIST_DIR/$ARCHIVE_NAME" "$BUILD_NAME"
+    else
+        echo "ERROR: No zip tool found (zip, 7z). Cannot create archive."
+        exit 1
+    fi
 else
     # Linux/macOS 使用 tar.gz
     ARCHIVE_NAME="nine1bot-${PLATFORM}-${ARCH}-v${VERSION}.tar.gz"
