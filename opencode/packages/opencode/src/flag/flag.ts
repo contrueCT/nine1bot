@@ -13,7 +13,7 @@ export namespace Flag {
   export const OPENCODE_DISABLE_PRUNE = truthy("OPENCODE_DISABLE_PRUNE")
   export const OPENCODE_DISABLE_TERMINAL_TITLE = truthy("OPENCODE_DISABLE_TERMINAL_TITLE")
   export const OPENCODE_PERMISSION = process.env["OPENCODE_PERMISSION"]
-  export const OPENCODE_DISABLE_DEFAULT_PLUGINS = truthy("OPENCODE_DISABLE_DEFAULT_PLUGINS")
+  export declare const OPENCODE_DISABLE_DEFAULT_PLUGINS: boolean
   export const OPENCODE_DISABLE_LSP_DOWNLOAD = truthy("OPENCODE_DISABLE_LSP_DOWNLOAD")
   export const OPENCODE_ENABLE_EXPERIMENTAL_MODELS = truthy("OPENCODE_ENABLE_EXPERIMENTAL_MODELS")
   export const OPENCODE_DISABLE_AUTOCOMPACT = truthy("OPENCODE_DISABLE_AUTOCOMPACT")
@@ -90,6 +90,17 @@ Object.defineProperty(Flag, "OPENCODE_DISABLE_GLOBAL_CONFIG", {
 Object.defineProperty(Flag, "OPENCODE_CONFIG_DIR", {
   get() {
     return process.env["OPENCODE_CONFIG_DIR"]
+  },
+  enumerable: true,
+  configurable: false,
+})
+
+// Dynamic getter for OPENCODE_DISABLE_DEFAULT_PLUGINS
+// This must be evaluated at access time, not module load time,
+// because external tooling (like Nine1Bot) may set this env var at runtime
+Object.defineProperty(Flag, "OPENCODE_DISABLE_DEFAULT_PLUGINS", {
+  get() {
+    return truthy("OPENCODE_DISABLE_DEFAULT_PLUGINS")
   },
   enumerable: true,
   configurable: false,
