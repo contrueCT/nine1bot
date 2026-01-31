@@ -83,6 +83,13 @@ jobs:
           fi
           ./scripts/package.sh ${{ matrix.platform }} ${{ matrix.arch }}
 
+      - name: Test startup
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          chmod +x scripts/test-startup.sh
+          ./scripts/test-startup.sh ${{ matrix.platform }} ${{ matrix.arch }} build/nine1bot-${{ matrix.platform }}-${{ matrix.arch }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
