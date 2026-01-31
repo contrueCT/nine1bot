@@ -26,9 +26,6 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: arm64
-          - os: macos-13
-            platform: darwin
-            arch: x64
           - os: macos-latest
             platform: darwin
             arch: arm64
@@ -127,7 +124,6 @@ jobs:
             |----------|--------------|----------|
             | Linux | x64 | `nine1bot-linux-x64-*.tar.gz` |
             | Linux | ARM64 | `nine1bot-linux-arm64-*.tar.gz` |
-            | macOS | Intel | `nine1bot-darwin-x64-*.tar.gz` |
             | macOS | Apple Silicon | `nine1bot-darwin-arm64-*.tar.gz` |
             | Windows | x64 | `nine1bot-windows-x64-*.zip` |
 

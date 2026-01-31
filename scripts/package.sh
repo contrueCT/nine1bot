@@ -46,10 +46,10 @@ fi
 # 2. 复制 packages/nine1bot
 echo "Copying nine1bot package..."
 mkdir -p "$BUILD_DIR/packages/nine1bot"
-cp -r "$PROJECT_ROOT/packages/nine1bot/src" "$BUILD_DIR/packages/nine1bot/"
-# 检查 node_modules 是否存在
+cp -rL "$PROJECT_ROOT/packages/nine1bot/src" "$BUILD_DIR/packages/nine1bot/"
+# 检查 node_modules 是否存在（使用 -L 跟随符号链接）
 if [ -d "$PROJECT_ROOT/packages/nine1bot/node_modules" ]; then
-    cp -r "$PROJECT_ROOT/packages/nine1bot/node_modules" "$BUILD_DIR/packages/nine1bot/"
+    cp -rL "$PROJECT_ROOT/packages/nine1bot/node_modules" "$BUILD_DIR/packages/nine1bot/"
 else
     echo "WARNING: packages/nine1bot/node_modules not found! Run 'bun install' in packages/nine1bot first."
 fi
@@ -59,10 +59,11 @@ cp "$PROJECT_ROOT/packages/nine1bot/tsconfig.json" "$BUILD_DIR/packages/nine1bot
 # 3. 复制 opencode
 echo "Copying opencode..."
 mkdir -p "$BUILD_DIR/opencode"
-cp -r "$PROJECT_ROOT/opencode/packages" "$BUILD_DIR/opencode/"
+# 使用 -L 选项跟随符号链接（Windows 兼容）
+cp -rL "$PROJECT_ROOT/opencode/packages" "$BUILD_DIR/opencode/"
 # 检查 node_modules 是否存在
 if [ -d "$PROJECT_ROOT/opencode/node_modules" ]; then
-    cp -r "$PROJECT_ROOT/opencode/node_modules" "$BUILD_DIR/opencode/"
+    cp -rL "$PROJECT_ROOT/opencode/node_modules" "$BUILD_DIR/opencode/"
 else
     echo "WARNING: opencode/node_modules not found! Run 'bun install' in opencode first."
 fi
