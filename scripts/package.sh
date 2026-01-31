@@ -46,10 +46,10 @@ fi
 # 2. 复制 packages/nine1bot
 echo "Copying nine1bot package..."
 mkdir -p "$BUILD_DIR/packages/nine1bot"
-cp -rL "$PROJECT_ROOT/packages/nine1bot/src" "$BUILD_DIR/packages/nine1bot/"
-# 检查 node_modules 是否存在（使用 -L 跟随符号链接）
+tar -chf - -C "$PROJECT_ROOT/packages/nine1bot" src | tar -xf - -C "$BUILD_DIR/packages/nine1bot/"
+# 检查 node_modules 是否存在（使用 tar -h 跟随符号链接）
 if [ -d "$PROJECT_ROOT/packages/nine1bot/node_modules" ]; then
-    cp -rL "$PROJECT_ROOT/packages/nine1bot/node_modules" "$BUILD_DIR/packages/nine1bot/"
+    tar -chf - -C "$PROJECT_ROOT/packages/nine1bot" node_modules | tar -xf - -C "$BUILD_DIR/packages/nine1bot/"
 else
     echo "WARNING: packages/nine1bot/node_modules not found! Run 'bun install' in packages/nine1bot first."
 fi
@@ -59,11 +59,12 @@ cp "$PROJECT_ROOT/packages/nine1bot/tsconfig.json" "$BUILD_DIR/packages/nine1bot
 # 3. 复制 opencode
 echo "Copying opencode..."
 mkdir -p "$BUILD_DIR/opencode"
-# 使用 -L 选项跟随符号链接（Windows 兼容）
-cp -rL "$PROJECT_ROOT/opencode/packages" "$BUILD_DIR/opencode/"
+# 使用 tar 解引用所有符号链接（比 cp -rL 更可靠）
+# -h: 跟随符号链接
+tar -chf - -C "$PROJECT_ROOT/opencode" packages | tar -xf - -C "$BUILD_DIR/opencode/"
 # 检查 node_modules 是否存在
 if [ -d "$PROJECT_ROOT/opencode/node_modules" ]; then
-    cp -rL "$PROJECT_ROOT/opencode/node_modules" "$BUILD_DIR/opencode/"
+    tar -chf - -C "$PROJECT_ROOT/opencode" node_modules | tar -xf - -C "$BUILD_DIR/opencode/"
 else
     echo "WARNING: opencode/node_modules not found! Run 'bun install' in opencode first."
 fi
