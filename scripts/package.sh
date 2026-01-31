@@ -18,8 +18,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# 获取版本号
-VERSION=$(node -p "require('$PROJECT_ROOT/packages/nine1bot/package.json').version")
+# 获取版本号（使用 grep/sed 替代 node 以避免 Windows 路径问题）
+VERSION=$(grep '"version"' "$PROJECT_ROOT/packages/nine1bot/package.json" | head -1 | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 BUILD_NAME="nine1bot-${PLATFORM}-${ARCH}"
 BUILD_DIR="$PROJECT_ROOT/build/$BUILD_NAME"
 DIST_DIR="$PROJECT_ROOT/dist"
