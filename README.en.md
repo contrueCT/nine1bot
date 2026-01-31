@@ -2,7 +2,7 @@
 
 [中文文档](./README.md)
 
-A versatile personal AI assistant built on OpenCode, featuring a web interface and tunnel support for remote access.
+A versatile personal AI assistant featuring a web interface and tunnel support for remote access.
 
 Supports programming, file management, information retrieval, content creation, and more through natural language interaction.
 
