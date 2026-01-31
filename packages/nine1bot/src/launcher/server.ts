@@ -1,38 +1,28 @@
-import { resolve, dirname } from 'path'
+import { resolve, dirname, basename } from 'path'
 import { writeFile, mkdir } from 'fs/promises'
 import { tmpdir } from 'os'
-import { fileURLToPath } from 'url'
-import { spawn as spawnChild, type ChildProcess } from 'child_process'
 import type { ServerConfig, AuthConfig, Nine1BotConfig } from '../config/schema'
 import { getInstallDir, getGlobalSkillsDir, getAuthPath, getGlobalConfigDir } from '../config/loader'
 import { getGlobalPreferencesPath } from '../preferences'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
+// 静态导入 OpenCode 服务器（编译时打包）
+import { Server as OpencodeServer } from '../../../../opencode/packages/opencode/src/server/server'
 
 /**
- * 跨平台杀死进程
+ * 判断是否是发行版模式
  */
-async function killProcess(proc: ChildProcess): Promise<void> {
-  if (!proc.pid) return
+function isReleaseMode(): boolean {
+  const dirName = basename(dirname(process.execPath))
+  return dirName.startsWith('nine1bot-')
+}
 
-  if (process.platform === 'win32') {
-    // Windows: 使用 taskkill 强制终止进程树
-    return new Promise((resolve) => {
-      const killer = spawnChild('taskkill', ['/pid', String(proc.pid), '/f', '/t'], {
-        stdio: 'ignore',
-      })
-      killer.on('exit', () => resolve())
-      killer.on('error', () => resolve())
-    })
-  } else {
-    // Unix: 发送 SIGTERM，如果进程未退出则发送 SIGKILL
-    proc.kill('SIGTERM')
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    if (!proc.killed) {
-      proc.kill('SIGKILL')
-    }
-  }
+/**
+ * 获取内置 skills 目录路径
+ * - 发行版模式：installDir/skills
+ * - 开发模式：installDir/packages/nine1bot/skills
+ */
+function getBuiltinSkillsDir(): string {
+  const installDir = getInstallDir()
+  return resolve(installDir, isReleaseMode() ? 'skills' : 'packages/nine1bot/skills')
 }
 
 export interface ServerInstance {
@@ -76,8 +66,7 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
   }
 
   // 将 skills 目录添加到沙盒白名单
-  const installDir = getInstallDir()
-  const builtinSkillsDir = resolve(installDir, 'packages/nine1bot/skills')
+  const builtinSkillsDir = getBuiltinSkillsDir()
   const globalSkillsDir = getGlobalSkillsDir()
 
   // 确保 sandbox 配置存在
@@ -145,7 +134,7 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   // Skills 配置：设置 Nine1Bot skills 目录
   process.env.NINE1BOT_SKILLS_DIR = getGlobalSkillsDir()
   // 设置内置 skills 目录（包含 /remember 等内置技能）
-  process.env.NINE1BOT_BUILTIN_SKILLS_DIR = resolve(installDir, 'packages/nine1bot/skills')
+  process.env.NINE1BOT_BUILTIN_SKILLS_DIR = getBuiltinSkillsDir()
   const skills = fullConfig.skills || {}
   if (skills.inheritClaudeCode === false) {
     process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = 'true'
@@ -176,9 +165,8 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   await mkdir(getGlobalConfigDir(), { recursive: true })
   process.env.NINE1BOT_AUTH_PATH = getAuthPath()
 
-  // 设置偏好模块路径，让 OpenCode 可以动态加载
-  const preferencesModulePath = resolve(installDir, 'packages/nine1bot/src/preferences/index.ts')
-  process.env.NINE1BOT_PREFERENCES_MODULE = preferencesModulePath
+  // 设置偏好模块路径标志（仅用于检测 Nine1Bot 环境）
+  process.env.NINE1BOT_PREFERENCES_MODULE = 'nine1bot'
 
   // 设置偏好文件路径（由 instruction.ts 定时读取）
   process.env.NINE1BOT_PREFERENCES_PATH = getGlobalPreferencesPath()
@@ -190,215 +178,19 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
     process.env.NINE1BOT_PROJECT_DIR = process.cwd()
   }
 
-  // 动态导入 opencode 服务器模块
-  // 使用安装目录的绝对路径
-  const opencodeServerPath = resolve(installDir, 'opencode/packages/opencode/src/server/server.ts')
-
-  try {
-    // 尝试导入 opencode 服务器
-    const { Server } = await import(opencodeServerPath)
-
-    const serverInstance = await Server.listen({
-      port: server.port,
-      hostname: server.hostname,
-      cors: [],
-    })
-
-    return {
-      url: serverInstance.url,
-      hostname: serverInstance.hostname,
-      port: serverInstance.port,
-      stop: async () => {
-        // OpenCode 服务器的停止逻辑
-        serverInstance.server?.stop?.()
-      },
-    }
-  } catch (error: any) {
-    // 如果直接导入失败，尝试使用子进程启动
-    console.warn('Direct import failed, falling back to subprocess:', error.message)
-    return startServerProcess(options)
-  }
-}
-
-/**
- * 使用子进程启动服务器（备用方案）
- */
-async function startServerProcess(options: StartServerOptions): Promise<ServerInstance> {
-  const { server, auth, fullConfig } = options
-
-  // 生成 opencode 兼容的配置文件
-  const opencodeConfigPath = await generateOpencodeConfig(fullConfig)
-
-  // 确保认证目录存在（必须在 Promise 之前 await）
-  await mkdir(getGlobalConfigDir(), { recursive: true })
-
-  // 使用安装目录的绝对路径（必须在 Promise 之前定义）
-  const installDir = getInstallDir()
-
-  return new Promise((resolvePromise, rejectPromise) => {
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      OPENCODE_CONFIG: opencodeConfigPath,
-    }
-
-    // 配置隔离：禁用全局或项目配置
-    const isolation = fullConfig.isolation || {}
-    if (isolation.disableGlobalConfig) {
-      env.OPENCODE_DISABLE_GLOBAL_CONFIG = 'true'
-    }
-    if (isolation.disableProjectConfig) {
-      env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true'
-    }
-    // 如果不继承 opencode 配置，禁用 opencode 的全局和项目配置
-    if (isolation.inheritOpencode === false) {
-      env.OPENCODE_DISABLE_GLOBAL_CONFIG = 'true'
-      env.OPENCODE_DISABLE_PROJECT_CONFIG = 'true'
-    }
-
-    if (auth.enabled && auth.password) {
-      env.OPENCODE_SERVER_PASSWORD = auth.password
-      env.OPENCODE_SERVER_USERNAME = 'nine1bot'
-    }
-
-    // Skills 配置：设置 Nine1Bot skills 目录
-    env.NINE1BOT_SKILLS_DIR = getGlobalSkillsDir()
-    // 设置内置 skills 目录
-    env.NINE1BOT_BUILTIN_SKILLS_DIR = resolve(installDir, 'packages/nine1bot/skills')
-    const skills = fullConfig.skills || {}
-    if (skills.inheritClaudeCode === false) {
-      env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS = 'true'
-    }
-    if (skills.inheritOpencode === false) {
-      env.OPENCODE_DISABLE_OPENCODE_SKILLS = 'true'
-    }
-
-    // MCP 配置：继承控制
-    const mcpConfig = fullConfig.mcp as any || {}
-    if (mcpConfig.inheritOpencode === false) {
-      env.OPENCODE_DISABLE_OPENCODE_MCP = 'true'
-    }
-    if (mcpConfig.inheritClaudeCode === false) {
-      env.OPENCODE_DISABLE_CLAUDE_CODE_MCP = 'true'
-    }
-
-    // 设置配置文件路径，供 MCP 热更新使用
-    env.NINE1BOT_CONFIG_PATH = options.configPath
-
-    // Provider 认证配置：继承控制
-    const providerConfig = fullConfig.provider as any || {}
-    if (providerConfig.inheritOpencode === false) {
-      env.OPENCODE_DISABLE_OPENCODE_AUTH = 'true'
-    }
-
-    // 设置 Nine1Bot 独立的认证存储路径
-    env.NINE1BOT_AUTH_PATH = getAuthPath()
-
-    // 设置偏好模块路径
-    const preferencesModulePath = resolve(installDir, 'packages/nine1bot/src/preferences/index.ts')
-    env.NINE1BOT_PREFERENCES_MODULE = preferencesModulePath
-
-    // 设置偏好文件路径（由 instruction.ts 定时读取）
-    env.NINE1BOT_PREFERENCES_PATH = getGlobalPreferencesPath()
-
-    // 设置项目目录（用于 opencode 的默认工作目录）
-    // NINE1BOT_PROJECT_DIR 在 index.ts 入口处设置，这里直接使用
-    env.NINE1BOT_PROJECT_DIR = process.env.NINE1BOT_PROJECT_DIR || process.cwd()
-
-    const opencodeDir = resolve(installDir, 'opencode/packages/opencode')
-    const opencodeEntry = resolve(opencodeDir, 'src/index.ts')
-    const args = ['run', opencodeEntry, 'serve', '--port', String(server.port)]
-
-    if (server.hostname !== '127.0.0.1') {
-      args.push('--hostname', server.hostname)
-    }
-
-    // cwd 必须设置为 opencode 包目录，以便 bunfig.toml 的 preload 配置生效
-    const proc = spawnChild('bun', args, {
-      cwd: opencodeDir,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-
-    let output = ''
-    let resolved = false
-    let timeoutId: ReturnType<typeof setTimeout> | null = null
-
-    // 清理函数
-    const cleanup = () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId)
-        timeoutId = null
-      }
-      proc.stdout?.removeAllListeners('data')
-      proc.stderr?.removeAllListeners('data')
-      proc.removeAllListeners('error')
-      proc.removeAllListeners('close')
-    }
-
-    // 杀死进程并拒绝 Promise
-    const killAndReject = (error: Error) => {
-      if (!resolved) {
-        resolved = true
-        cleanup()
-        try {
-          proc.kill('SIGTERM')
-        } catch {
-          // 忽略杀死进程时的错误
-        }
-        rejectPromise(error)
-      }
-    }
-
-    const handleOutput = (data: Buffer) => {
-      output += data.toString()
-      console.log(data.toString())
-
-      // 检测服务器启动成功
-      const urlMatch = output.match(/Local:\s*(https?:\/\/[^\s]+)/)
-      if (urlMatch && !resolved) {
-        resolved = true
-        cleanup()
-        resolvePromise({
-          url: urlMatch[1],
-          hostname: server.hostname,
-          port: server.port,
-          stop: async () => {
-            await killProcess(proc)
-          },
-        })
-      }
-    }
-
-    proc.stdout?.on('data', handleOutput)
-    proc.stderr?.on('data', handleOutput)
-
-    proc.on('error', (error) => {
-      killAndReject(new Error(`Failed to start server: ${error.message}`))
-    })
-
-    proc.on('close', (code) => {
-      if (!resolved && code !== 0) {
-        resolved = true
-        cleanup()
-        rejectPromise(new Error(`Server exited with code ${code}`))
-      }
-    })
-
-    // 超时处理
-    timeoutId = setTimeout(() => {
-      if (!resolved) {
-        resolved = true
-        cleanup()
-        // 假设服务器已启动（进程仍在运行）
-        resolvePromise({
-          url: `http://${server.hostname}:${server.port}`,
-          hostname: server.hostname,
-          port: server.port,
-          stop: async () => {
-            await killProcess(proc)
-          },
-        })
-      }
-    }, 10000)
+  // 使用静态导入的 OpenCode 服务器启动
+  const serverInstance = await OpencodeServer.listen({
+    port: server.port,
+    hostname: server.hostname,
+    cors: [],
   })
+
+  return {
+    url: serverInstance.url,
+    hostname: serverInstance.hostname,
+    port: serverInstance.port,
+    stop: async () => {
+      serverInstance.server?.stop?.()
+    },
+  }
 }

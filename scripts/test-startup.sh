@@ -2,7 +2,7 @@
 set -e
 
 # ============================================
-# Nine1Bot 启动测试脚本
+# Nine1Bot 启动测试脚本（编译后二进制版本）
 # 用法: ./test-startup.sh <platform> <arch> <build_dir>
 # 返回: 0 成功, 1 失败
 # ============================================
@@ -25,6 +25,21 @@ if [ ! -d "$BUILD_DIR" ]; then
     exit 1
 fi
 
+# 根据平台确定二进制文件
+if [ "$PLATFORM" = "windows" ]; then
+    BINARY="$BUILD_DIR/nine1bot.exe"
+else
+    BINARY="$BUILD_DIR/nine1bot"
+fi
+
+# 验证二进制文件存在
+if [ ! -f "$BINARY" ]; then
+    echo "ERROR: Binary not found: $BINARY"
+    exit 1
+fi
+
+echo "Binary: $BINARY"
+
 # 创建最小测试配置 (无需 API key)
 TEST_CONFIG="$BUILD_DIR/nine1bot.config.jsonc"
 
@@ -46,30 +61,6 @@ EOF
 
 echo "Created test config: $TEST_CONFIG"
 
-# 根据平台确定启动命令
-if [ "$PLATFORM" = "windows" ]; then
-    LAUNCHER="$BUILD_DIR/nine1bot.bat"
-    BUN_EXE="$BUILD_DIR/runtime/bun.exe"
-else
-    LAUNCHER="$BUILD_DIR/nine1bot"
-    BUN_EXE="$BUILD_DIR/runtime/bun"
-fi
-
-# 验证启动器存在
-if [ ! -f "$LAUNCHER" ]; then
-    echo "ERROR: Launcher not found: $LAUNCHER"
-    exit 1
-fi
-
-# 验证 Bun 运行时存在
-if [ ! -f "$BUN_EXE" ]; then
-    echo "ERROR: Bun runtime not found: $BUN_EXE"
-    exit 1
-fi
-
-echo "Launcher: $LAUNCHER"
-echo "Bun runtime: $BUN_EXE"
-
 # 超时设置
 TIMEOUT_SECONDS=60
 SUCCESS_PATTERN="Local:.*http"
@@ -80,11 +71,11 @@ LOG_FILE=$(mktemp)
 echo "Starting Nine1Bot with test configuration..."
 echo "Waiting for startup (timeout: ${TIMEOUT_SECONDS}s)..."
 
-# 平台特定的启动方式
+# 启动二进制
 cd "$BUILD_DIR"
 if [ "$PLATFORM" = "windows" ]; then
-    # Windows: 通过 cmd 调用 bat 文件
-    cmd //c "nine1bot.bat" > "$LOG_FILE" 2>&1 &
+    # Windows: 直接运行 exe
+    ./nine1bot.exe > "$LOG_FILE" 2>&1 &
     PROC_PID=$!
 else
     # Unix: 直接执行

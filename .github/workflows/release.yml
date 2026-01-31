@@ -65,22 +65,13 @@ jobs:
           cd web
           bun run build
 
-      - name: Download Bun runtime
+      - name: Compile and package
         shell: bash
         run: |
-          chmod +x scripts/*.sh
-          ./scripts/download-bun.sh ${{ matrix.platform }} ${{ matrix.arch }} build/runtime
-
-      - name: Package release
-        shell: bash
-        run: |
-          # 移动 runtime 到正确位置
-          mkdir -p runtime
-          if [ "${{ matrix.platform }}" = "windows" ]; then
-            cp build/runtime/bun.exe runtime/
-          else
-            cp build/runtime/bun runtime/
-          fi
+          chmod +x scripts/*.sh scripts/*.ts 2>/dev/null || true
+          # 编译二进制
+          bun run scripts/build.ts --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}
+          # 打包
           ./scripts/package.sh ${{ matrix.platform }} ${{ matrix.arch }}
 
       - name: Test startup
@@ -88,7 +79,7 @@ jobs:
         timeout-minutes: 2
         run: |
           chmod +x scripts/test-startup.sh
-          ./scripts/test-startup.sh ${{ matrix.platform }} ${{ matrix.arch }} build/nine1bot-${{ matrix.platform }}-${{ matrix.arch }}
+          ./scripts/test-startup.sh ${{ matrix.platform }} ${{ matrix.arch }} dist/nine1bot-${{ matrix.platform }}-${{ matrix.arch }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir, access, appendFile } from 'fs/promises'
-import { dirname, resolve, join } from 'path'
+import { dirname, resolve, join, basename } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir } from 'os'
 import { Nine1BotConfigSchema, type Nine1BotConfig } from './schema'
@@ -13,10 +13,21 @@ const GLOBAL_CONFIG_FILENAME = 'config.jsonc'
 
 /**
  * 获取程序安装目录
- * 这是 nine1bot 的根目录（包含 packages/, opencode/, web/ 等）
+ * 这是 nine1bot 的根目录
+ * - 开发模式：包含 packages/, opencode/, web/ 等
+ * - 发行版模式：包含 nine1bot 二进制, skills/, web/ 等
  */
 export function getInstallDir(): string {
-  // 从当前文件路径向上查找到安装根目录
+  const execDir = dirname(process.execPath)
+
+  // 判断是否是编译后的发行版
+  // 编译后目录名格式：nine1bot-linux-x64, nine1bot-windows-x64 等
+  const dirName = basename(execDir)
+  if (dirName.startsWith('nine1bot-')) {
+    return execDir
+  }
+
+  // 开发模式：从源码路径计算
   // 当前文件: packages/nine1bot/src/config/loader.ts
   // 安装根目录: 向上 4 级
   const currentFile = fileURLToPath(import.meta.url)
