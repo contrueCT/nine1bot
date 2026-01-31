@@ -25,8 +25,14 @@ if [ "$ARCH" = "arm64" ]; then
     BUN_ARCH="aarch64"
 fi
 
+# Linux x64 使用 baseline 版本以兼容没有 AVX2 的老 CPU
+BUN_SUFFIX=""
+if [ "$PLATFORM" = "linux" ] && [ "$ARCH" = "x64" ]; then
+    BUN_SUFFIX="-baseline"
+fi
+
 # 构建下载 URL
-BUN_URL="https://github.com/oven-sh/bun/releases/latest/download/bun-${PLATFORM}-${BUN_ARCH}.zip"
+BUN_URL="https://github.com/oven-sh/bun/releases/latest/download/bun-${PLATFORM}-${BUN_ARCH}${BUN_SUFFIX}.zip"
 
 echo "Downloading Bun for ${PLATFORM}-${ARCH}..."
 echo "URL: $BUN_URL"
