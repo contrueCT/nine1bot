@@ -26,6 +26,22 @@ DIST_DIR="$PROJECT_ROOT/dist"
 
 echo "Packaging Nine1Bot v${VERSION} for ${PLATFORM}-${ARCH}..."
 
+# 跨平台复制函数，解引用所有符号链接
+# rsync 更可靠地处理 Bun 的多层嵌套符号链接结构
+copy_with_deref() {
+    local src="$1"
+    local dest="$2"
+
+    mkdir -p "$dest"
+    if command -v rsync &> /dev/null; then
+        # rsync -aL: 归档模式 + 解引用符号链接
+        rsync -aL "$src/" "$dest/"
+    else
+        # Windows 回退：使用 cp -rL
+        cp -rL "$src"/* "$dest/" 2>/dev/null || cp -rL "$src"/. "$dest/"
+    fi
+}
+
 # 清理并创建构建目录
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
@@ -46,10 +62,10 @@ fi
 # 2. 复制 packages/nine1bot
 echo "Copying nine1bot package..."
 mkdir -p "$BUILD_DIR/packages/nine1bot"
-tar -chf - -C "$PROJECT_ROOT/packages/nine1bot" src | tar -xf - -C "$BUILD_DIR/packages/nine1bot/"
-# 检查 node_modules 是否存在（使用 tar -h 跟随符号链接）
+copy_with_deref "$PROJECT_ROOT/packages/nine1bot/src" "$BUILD_DIR/packages/nine1bot/src"
+# 检查 node_modules 是否存在
 if [ -d "$PROJECT_ROOT/packages/nine1bot/node_modules" ]; then
-    tar -chf - -C "$PROJECT_ROOT/packages/nine1bot" node_modules | tar -xf - -C "$BUILD_DIR/packages/nine1bot/"
+    copy_with_deref "$PROJECT_ROOT/packages/nine1bot/node_modules" "$BUILD_DIR/packages/nine1bot/node_modules"
 else
     echo "WARNING: packages/nine1bot/node_modules not found! Run 'bun install' in packages/nine1bot first."
 fi
@@ -59,12 +75,11 @@ cp "$PROJECT_ROOT/packages/nine1bot/tsconfig.json" "$BUILD_DIR/packages/nine1bot
 # 3. 复制 opencode
 echo "Copying opencode..."
 mkdir -p "$BUILD_DIR/opencode"
-# 使用 tar 解引用所有符号链接（比 cp -rL 更可靠）
-# -h: 跟随符号链接
-tar -chf - -C "$PROJECT_ROOT/opencode" packages | tar -xf - -C "$BUILD_DIR/opencode/"
+# 使用 rsync/cp 解引用所有符号链接（处理 Bun 的嵌套符号链接）
+copy_with_deref "$PROJECT_ROOT/opencode/packages" "$BUILD_DIR/opencode/packages"
 # 检查 node_modules 是否存在
 if [ -d "$PROJECT_ROOT/opencode/node_modules" ]; then
-    tar -chf - -C "$PROJECT_ROOT/opencode" node_modules | tar -xf - -C "$BUILD_DIR/opencode/"
+    copy_with_deref "$PROJECT_ROOT/opencode/node_modules" "$BUILD_DIR/opencode/node_modules"
 else
     echo "WARNING: opencode/node_modules not found! Run 'bun install' in opencode first."
 fi
