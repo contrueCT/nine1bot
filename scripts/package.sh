@@ -26,22 +26,6 @@ DIST_DIR="$PROJECT_ROOT/dist"
 
 echo "Packaging Nine1Bot v${VERSION} for ${PLATFORM}-${ARCH}..."
 
-# 跨平台复制函数，解引用所有符号链接
-# rsync 更可靠地处理 Bun 的多层嵌套符号链接结构
-copy_with_deref() {
-    local src="$1"
-    local dest="$2"
-
-    mkdir -p "$dest"
-    if command -v rsync &> /dev/null; then
-        # rsync -aL: 归档模式 + 解引用符号链接
-        rsync -aL "$src/" "$dest/"
-    else
-        # Windows 回退：使用 cp -rL
-        cp -rL "$src"/* "$dest/" 2>/dev/null || cp -rL "$src"/. "$dest/"
-    fi
-}
-
 # 清理并创建构建目录
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
@@ -59,33 +43,55 @@ else
     chmod +x "$BUILD_DIR/runtime/bun"
 fi
 
-# 2. 复制 packages/nine1bot
+# 2. 复制 packages/nine1bot（不包括 node_modules，之后用 bun install）
 echo "Copying nine1bot package..."
 mkdir -p "$BUILD_DIR/packages/nine1bot"
-copy_with_deref "$PROJECT_ROOT/packages/nine1bot/src" "$BUILD_DIR/packages/nine1bot/src"
-# 检查 node_modules 是否存在
-if [ -d "$PROJECT_ROOT/packages/nine1bot/node_modules" ]; then
-    copy_with_deref "$PROJECT_ROOT/packages/nine1bot/node_modules" "$BUILD_DIR/packages/nine1bot/node_modules"
-else
-    echo "WARNING: packages/nine1bot/node_modules not found! Run 'bun install' in packages/nine1bot first."
+# 复制源代码
+cp -r "$PROJECT_ROOT/packages/nine1bot/src" "$BUILD_DIR/packages/nine1bot/"
+# 复制 skills 目录
+if [ -d "$PROJECT_ROOT/packages/nine1bot/skills" ]; then
+    cp -r "$PROJECT_ROOT/packages/nine1bot/skills" "$BUILD_DIR/packages/nine1bot/"
 fi
+# 复制配置文件
 cp "$PROJECT_ROOT/packages/nine1bot/package.json" "$BUILD_DIR/packages/nine1bot/"
 cp "$PROJECT_ROOT/packages/nine1bot/tsconfig.json" "$BUILD_DIR/packages/nine1bot/" 2>/dev/null || true
+# 安装依赖
+echo "Installing nine1bot dependencies..."
+cd "$BUILD_DIR/packages/nine1bot"
+bun install --frozen-lockfile 2>/dev/null || bun install
+cd "$PROJECT_ROOT"
 
-# 3. 复制 opencode
+# 3. 复制 opencode（不包括 node_modules，之后用 bun install）
 echo "Copying opencode..."
 mkdir -p "$BUILD_DIR/opencode"
-# 使用 rsync/cp 解引用所有符号链接（处理 Bun 的嵌套符号链接）
-copy_with_deref "$PROJECT_ROOT/opencode/packages" "$BUILD_DIR/opencode/packages"
-# 检查 node_modules 是否存在
-if [ -d "$PROJECT_ROOT/opencode/node_modules" ]; then
-    copy_with_deref "$PROJECT_ROOT/opencode/node_modules" "$BUILD_DIR/opencode/node_modules"
+# 复制 packages 目录（排除 node_modules）
+if command -v rsync &> /dev/null; then
+    rsync -a --exclude='node_modules' "$PROJECT_ROOT/opencode/packages/" "$BUILD_DIR/opencode/packages/"
 else
-    echo "WARNING: opencode/node_modules not found! Run 'bun install' in opencode first."
+    # Windows 回退：手动复制排除 node_modules
+    mkdir -p "$BUILD_DIR/opencode/packages"
+    for dir in "$PROJECT_ROOT/opencode/packages"/*/; do
+        pkg_name=$(basename "$dir")
+        mkdir -p "$BUILD_DIR/opencode/packages/$pkg_name"
+        # 复制除 node_modules 外的所有内容
+        for item in "$dir"*; do
+            item_name=$(basename "$item")
+            if [ "$item_name" != "node_modules" ]; then
+                cp -r "$item" "$BUILD_DIR/opencode/packages/$pkg_name/"
+            fi
+        done
+    done
 fi
+# 复制配置文件
 cp "$PROJECT_ROOT/opencode/package.json" "$BUILD_DIR/opencode/"
-cp "$PROJECT_ROOT/opencode/tsconfig.json" "$BUILD_DIR/opencode/" 2>/dev/null || true
+cp "$PROJECT_ROOT/opencode/bun.lock" "$BUILD_DIR/opencode/" 2>/dev/null || true
 cp "$PROJECT_ROOT/opencode/bunfig.toml" "$BUILD_DIR/opencode/" 2>/dev/null || true
+cp "$PROJECT_ROOT/opencode/tsconfig.json" "$BUILD_DIR/opencode/" 2>/dev/null || true
+# 安装依赖
+echo "Installing opencode dependencies..."
+cd "$BUILD_DIR/opencode"
+bun install --frozen-lockfile 2>/dev/null || bun install
+cd "$PROJECT_ROOT"
 
 # 4. 复制 web/dist
 echo "Copying web assets..."
