@@ -191,6 +191,10 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   // 设置 web 资源目录（供 OpenCode server 提供静态文件）
   process.env.NINE1BOT_WEB_DIR = getWebDistDir()
 
+  // 设置捆绑的 ripgrep 路径（发行版中 bin/rg）
+  const rgPath = resolve(installDir, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg')
+  process.env.OPENCODE_RIPGREP_PATH = rgPath
+
   // 使用静态导入的 OpenCode 服务器启动
   const serverInstance = await OpencodeServer.listen({
     port: server.port,

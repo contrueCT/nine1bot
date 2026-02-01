@@ -122,9 +122,27 @@ export namespace Ripgrep {
     }),
   )
 
+  export const NetworkError = NamedError.create(
+    "RipgrepNetworkError",
+    z.object({
+      url: z.string(),
+      message: z.string(),
+      code: z.string().optional(),
+    }),
+  )
+
   const state = lazy(async () => {
+    // 1. 先检查系统 PATH
     let filepath = Bun.which("rg")
     if (filepath) return { filepath }
+
+    // 2. 检查环境变量指定的捆绑版本（由 nine1bot 设置）
+    const bundledPath = process.env.OPENCODE_RIPGREP_PATH
+    if (bundledPath && await Bun.file(bundledPath).exists()) {
+      return { filepath: bundledPath }
+    }
+
+    // 3. 检查用户缓存目录
     filepath = path.join(Global.Path.bin, "rg" + (process.platform === "win32" ? ".exe" : ""))
 
     const file = Bun.file(filepath)
@@ -137,7 +155,18 @@ export namespace Ripgrep {
       const filename = `ripgrep-${version}-${config.platform}.${config.extension}`
       const url = `https://github.com/BurntSushi/ripgrep/releases/download/${version}/${filename}`
 
-      const response = await fetch(url)
+      let response: Response
+      try {
+        response = await fetch(url)
+      } catch (e) {
+        const error = e as Error & { code?: string }
+        log.warn("ripgrep download failed", { url, error: error.message, code: error.code })
+        throw new NetworkError({
+          url,
+          message: error.message,
+          code: error.code,
+        })
+      }
       if (!response.ok) throw new DownloadFailedError({ url, status: response.status })
 
       const buffer = await response.arrayBuffer()

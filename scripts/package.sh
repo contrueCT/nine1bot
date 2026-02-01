@@ -61,7 +61,42 @@ chmod +x "$BUILD_DIR/scripts/update.sh" 2>/dev/null || true
 # 5. 写入 VERSION 文件
 echo "v${VERSION}" > "$BUILD_DIR/VERSION"
 
-# 6. 打包
+# 6. 下载并捆绑 ripgrep
+echo "Downloading ripgrep for ${PLATFORM}-${ARCH}..."
+RG_VERSION="14.1.1"
+mkdir -p "$BUILD_DIR/bin"
+
+case "${PLATFORM}-${ARCH}" in
+    linux-x64)
+        curl -sL "https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/ripgrep-${RG_VERSION}-x86_64-unknown-linux-musl.tar.gz" | \
+            tar xz --strip-components=1 -C "$BUILD_DIR/bin" --wildcards "*/rg"
+        ;;
+    linux-arm64)
+        curl -sL "https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/ripgrep-${RG_VERSION}-aarch64-unknown-linux-gnu.tar.gz" | \
+            tar xz --strip-components=1 -C "$BUILD_DIR/bin" --wildcards "*/rg"
+        ;;
+    darwin-arm64)
+        curl -sL "https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/ripgrep-${RG_VERSION}-aarch64-apple-darwin.tar.gz" | \
+            tar xz --strip-components=1 -C "$BUILD_DIR/bin" --include="*/rg"
+        ;;
+    windows-x64)
+        curl -sL "https://github.com/BurntSushi/ripgrep/releases/download/${RG_VERSION}/ripgrep-${RG_VERSION}-x86_64-pc-windows-msvc.zip" -o "$BUILD_DIR/bin/rg.zip"
+        unzip -j "$BUILD_DIR/bin/rg.zip" "*/rg.exe" -d "$BUILD_DIR/bin"
+        rm "$BUILD_DIR/bin/rg.zip"
+        ;;
+    *)
+        echo "WARNING: Unsupported platform ${PLATFORM}-${ARCH} for ripgrep bundling"
+        ;;
+esac
+
+if [ -f "$BUILD_DIR/bin/rg" ] || [ -f "$BUILD_DIR/bin/rg.exe" ]; then
+    chmod +x "$BUILD_DIR/bin/rg" 2>/dev/null || true
+    echo "Ripgrep bundled successfully"
+else
+    echo "WARNING: Failed to bundle ripgrep. Users will need to install it manually or have network access."
+fi
+
+# 7. 创建发布包
 echo "Creating archive..."
 cd "$PROJECT_ROOT/dist"
 

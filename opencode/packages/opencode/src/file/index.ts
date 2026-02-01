@@ -167,18 +167,23 @@ export namespace File {
       }
 
       const set = new Set<string>()
-      for await (const file of Ripgrep.files({ cwd: Instance.directory })) {
-        result.files.push(file)
-        let current = file
-        while (true) {
-          const dir = path.dirname(current)
-          if (dir === ".") break
-          if (dir === current) break
-          current = dir
-          if (set.has(dir)) continue
-          set.add(dir)
-          result.dirs.push(dir + "/")
+      try {
+        for await (const file of Ripgrep.files({ cwd: Instance.directory })) {
+          result.files.push(file)
+          let current = file
+          while (true) {
+            const dir = path.dirname(current)
+            if (dir === ".") break
+            if (dir === current) break
+            current = dir
+            if (set.has(dir)) continue
+            set.add(dir)
+            result.dirs.push(dir + "/")
+          }
         }
+      } catch (e) {
+        log.warn("file scanning failed, ripgrep may be unavailable", { error: e })
+        // 不抛出，让程序继续运行，文件列表将为空
       }
       cache = result
       fetching = false
