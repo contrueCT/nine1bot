@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    name: Typecheck
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: |
+          cd opencode && bun install --frozen-lockfile || bun install
+          cd ../packages/nine1bot && bun install --frozen-lockfile || bun install
+          cd ../../web && bun install --frozen-lockfile || bun install
+
+      - name: Typecheck opencode
+        run: cd opencode && bun run typecheck
+
+      - name: Typecheck nine1bot
+        run: cd packages/nine1bot && bun run typecheck
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            can_test: true
+          - os: windows-latest
+            platform: windows
+            arch: x64
+            can_test: true
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.platform }}-${{ matrix.arch }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies (opencode)
+        run: |
+          cd opencode
+          bun install --frozen-lockfile || bun install
+
+      - name: Install dependencies (nine1bot)
+        run: |
+          cd packages/nine1bot
+          bun install --frozen-lockfile || bun install
+
+      - name: Install dependencies (web)
+        run: |
+          cd web
+          bun install --frozen-lockfile || bun install
+
+      - name: Build web frontend
+        run: |
+          cd web
+          bun run build
+
+      - name: Compile and package
+        shell: bash
+        run: |
+          chmod +x scripts/*.sh scripts/*.ts 2>/dev/null || true
+          bun run scripts/build.ts --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}
+          ./scripts/package.sh ${{ matrix.platform }} ${{ matrix.arch }}
+
+      - name: Test startup
+        if: matrix.can_test
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          chmod +x scripts/test-startup.sh
+          ./scripts/test-startup.sh ${{ matrix.platform }} ${{ matrix.arch }} dist/nine1bot-${{ matrix.platform }}-${{ matrix.arch }}
