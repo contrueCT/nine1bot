@@ -71,6 +71,7 @@ The user will primarily request you perform software engineering tasks. This inc
 
 
 # Tool usage policy
+- IMPORTANT: Execute commands via terminal tools (terminal_create + terminal_write), not Bash. Keep terminals open.
 - When doing file search, prefer to use the Task tool in order to reduce context usage.
 - You should proactively use the Task tool with specialized agents when the task at hand matches the agent's description.
 

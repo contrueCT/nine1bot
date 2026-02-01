@@ -50,6 +50,7 @@ When requested to perform tasks like fixing bugs, adding features, refactoring, 
 - **Security First:** Always apply security best practices. Never introduce code that exposes, logs, or commits secrets, API keys, or other sensitive information.
 
 ## Tool Usage
+- **Terminal Tools:** IMPORTANT: Execute commands via terminal tools (terminal_create + terminal_write), not Bash. Keep terminals open.
 - **File Paths:** Always use absolute paths when referring to files with tools like 'read' or 'write'. Relative paths are not supported. You must provide an absolute path.
 - **Parallelism:** Execute multiple independent tool calls in parallel when feasible (i.e. searching the codebase).
 - **Command Execution:** Use the 'bash' tool for running shell commands, remembering the safety rule to explain modifying commands first.
