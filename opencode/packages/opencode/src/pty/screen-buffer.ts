@@ -87,6 +87,123 @@ export namespace ScreenBuffer {
     }
 
     /**
+     * 获取带 ANSI 转义序列的屏幕内容（用于前端渲染）
+     *
+     * 遍历每个单元格，提取文本和样式属性，生成 ANSI 序列
+     */
+    getScreenAnsi(): string {
+      const lines: string[] = []
+      const buffer = this.term.buffer.active
+
+      for (let y = 0; y < this.term.rows; y++) {
+        const line = buffer.getLine(y)
+        if (!line) {
+          lines.push("")
+          continue
+        }
+
+        let lineStr = ""
+        let lastFg: number | undefined
+        let lastBg: number | undefined
+        let lastBold = false
+        let lastItalic = false
+        let lastUnderline = false
+        let lastDim = false
+
+        for (let x = 0; x < line.length; x++) {
+          const cell = line.getCell(x)
+          if (!cell) continue
+
+          const char = cell.getChars()
+          if (!char) continue
+
+          // 获取样式属性
+          const fg = cell.getFgColor()
+          const bg = cell.getBgColor()
+          const bold = cell.isBold() === 1
+          const italic = cell.isItalic() === 1
+          const underline = cell.isUnderline() === 1
+          const dim = cell.isDim() === 1
+
+          // 检查样式是否变化
+          const styleChanged =
+            fg !== lastFg ||
+            bg !== lastBg ||
+            bold !== lastBold ||
+            italic !== lastItalic ||
+            underline !== lastUnderline ||
+            dim !== lastDim
+
+          if (styleChanged) {
+            // 重置并应用新样式
+            const codes: number[] = [0] // 先重置
+
+            if (bold) codes.push(1)
+            if (dim) codes.push(2)
+            if (italic) codes.push(3)
+            if (underline) codes.push(4)
+
+            // 前景色
+            if (fg !== undefined && fg !== -1) {
+              if (cell.isFgRGB()) {
+                // 真彩色
+                const r = (fg >> 16) & 0xff
+                const g = (fg >> 8) & 0xff
+                const b = fg & 0xff
+                codes.push(38, 2, r, g, b)
+              } else if (cell.isFgPalette()) {
+                if (fg < 8) {
+                  codes.push(30 + fg)
+                } else if (fg < 16) {
+                  codes.push(90 + (fg - 8))
+                } else {
+                  codes.push(38, 5, fg)
+                }
+              }
+            }
+
+            // 背景色
+            if (bg !== undefined && bg !== -1) {
+              if (cell.isBgRGB()) {
+                const r = (bg >> 16) & 0xff
+                const g = (bg >> 8) & 0xff
+                const b = bg & 0xff
+                codes.push(48, 2, r, g, b)
+              } else if (cell.isBgPalette()) {
+                if (bg < 8) {
+                  codes.push(40 + bg)
+                } else if (bg < 16) {
+                  codes.push(100 + (bg - 8))
+                } else {
+                  codes.push(48, 5, bg)
+                }
+              }
+            }
+
+            lineStr += `\x1b[${codes.join(";")}m`
+
+            lastFg = fg
+            lastBg = bg
+            lastBold = bold
+            lastItalic = italic
+            lastUnderline = underline
+            lastDim = dim
+          }
+
+          lineStr += char
+        }
+
+        // 重置样式并去除尾部空格
+        if (lastFg !== undefined || lastBg !== undefined || lastBold || lastItalic || lastUnderline || lastDim) {
+          lineStr += "\x1b[0m"
+        }
+        lines.push(lineStr.trimEnd())
+      }
+
+      return lines.join("\n")
+    }
+
+    /**
      * 获取滚动历史
      */
     getScrollback(lines?: number): string[] {

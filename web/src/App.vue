@@ -101,13 +101,12 @@ let unregisterTerminalHandler: (() => void) | null = null
 let unregisterPreviewHandler: (() => void) | null = null
 
 onMounted(async () => {
-  subscribeToEvents()
-
-  // 注册终端事件处理器
+  // 先注册事件处理器，确保在 SSE 连接建立时能接收到 server.connected 事件
   unregisterTerminalHandler = registerEventHandler(handleTerminalEvent)
-
-  // 注册文件预览事件处理器
   unregisterPreviewHandler = registerEventHandler(handlePreviewEvent)
+
+  // 然后建立 SSE 连接
+  subscribeToEvents()
 
   // 设置会话切换的 watch
   stopSessionWatch = watch(currentSession, async () => {
@@ -157,7 +156,7 @@ onUnmounted(() => {
 // 所以这里不再监听 currentDirectory 的变化来重新加载文件
 // 文件浏览始终显示项目根目录的内容
 
-async function handleSend(content: string) {
+async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>) {
   if (!currentSession.value) {
     await createSession(currentDirectory.value || '.')
   }
@@ -165,7 +164,7 @@ async function handleSend(content: string) {
   const model = currentProvider.value && currentModel.value
     ? { providerID: currentProvider.value, modelID: currentModel.value }
     : undefined
-  await sendMessage(content, model)
+  await sendMessage(content, model, files)
 }
 
 function handleNewSession() {

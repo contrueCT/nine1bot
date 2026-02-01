@@ -77,6 +77,7 @@ export namespace AgentTerminal {
       z.object({
         id: Identifier.schema("agt"),
         screen: z.string(),
+        screenAnsi: z.string(),
         cursor: z.object({ row: z.number(), col: z.number() }),
       })
     ),
@@ -259,10 +260,12 @@ export namespace AgentTerminal {
    */
   function publishScreen(session: ActiveSession) {
     const screen = session.buffer.getScreenText()
+    const screenAnsi = session.buffer.getScreenAnsi()
     const cursor = session.buffer.getCursor()
     Bus.publish(Event.Screen, {
       id: session.info.id,
       screen,
+      screenAnsi,
       cursor,
     })
   }
@@ -287,6 +290,15 @@ export namespace AgentTerminal {
     const session = state().get(id)
     if (!session) return undefined
     return session.buffer.getScreenText()
+  }
+
+  /**
+   * 获取带 ANSI 转义序列的屏幕内容
+   */
+  export function getScreenAnsi(id: string): string | undefined {
+    const session = state().get(id)
+    if (!session) return undefined
+    return session.buffer.getScreenAnsi()
   }
 
   /**

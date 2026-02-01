@@ -12,6 +12,7 @@ const {
   isPanelOpen,
   selectTerminal,
   closePanel,
+  closeTerminal,
 } = useAgentTerminal()
 
 const terminalViewerRef = ref<InstanceType<typeof AgentTerminalViewer> | null>(null)
@@ -35,6 +36,12 @@ function formatTime(ts: number): string {
   if (diff < 60000) return `${Math.floor(diff / 1000)}s`
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m`
   return `${Math.floor(diff / 3600000)}h`
+}
+
+// 关闭终端
+async function handleCloseTerminal(id: string, e: Event) {
+  e.stopPropagation()
+  await closeTerminal(id)
 }
 
 // 清理 resize 事件监听器
@@ -121,12 +128,15 @@ watch(panelWidth, () => {
         v-for="term in terminals"
         :key="term.id"
         class="terminal-tab"
-        :class="{ active: activeTerminalId === term.id }"
+        :class="{ active: activeTerminalId === term.id, exited: term.status === 'exited' }"
         @click="selectTerminal(term.id)"
       >
         <span class="status-dot" :style="{ background: getStatusColor(term.status) }"></span>
         <span class="tab-name">{{ term.name }}</span>
         <span class="tab-time">{{ formatTime(term.lastActivity) }}</span>
+        <button class="close-tab-btn" @click="handleCloseTerminal(term.id, $event)" title="关闭终端">
+          <X :size="12" />
+        </button>
       </button>
     </div>
 
@@ -141,13 +151,23 @@ watch(panelWidth, () => {
           <span :style="{ color: getStatusColor(activeTerminal.status) }">
             {{ activeTerminal.status }}
           </span>
+          <button
+            class="close-single-btn"
+            @click="closeTerminal(activeTerminal.id)"
+            title="关闭终端"
+          >
+            <X :size="14" />
+          </button>
         </div>
         <AgentTerminalViewer
           ref="terminalViewerRef"
+          :terminal-id="activeTerminal.id"
           :screen="activeScreen.screen"
+          :screen-ansi="activeScreen.screenAnsi"
           :cursor="activeScreen.cursor"
           :rows="activeTerminal.rows"
           :cols="activeTerminal.cols"
+          :status="activeTerminal.status"
         />
       </template>
       <template v-else-if="terminals.length === 0">
@@ -284,6 +304,10 @@ watch(panelWidth, () => {
   color: white;
 }
 
+.terminal-tab.exited {
+  opacity: 0.7;
+}
+
 .terminal-tab.active .status-dot {
   border: 1px solid white;
 }
@@ -307,6 +331,27 @@ watch(panelWidth, () => {
   opacity: 0.7;
 }
 
+.close-tab-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.5;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: all var(--transition-fast);
+}
+
+.close-tab-btn:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.2);
+}
+
 .terminal-content {
   flex: 1;
   display: flex;
@@ -326,6 +371,27 @@ watch(panelWidth, () => {
   color: var(--text-muted);
   margin-bottom: var(--space-sm);
   flex-shrink: 0;
+}
+
+.close-single-btn {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.close-single-btn:hover {
+  background: var(--danger, #f7768e);
+  color: white;
 }
 
 .separator {
