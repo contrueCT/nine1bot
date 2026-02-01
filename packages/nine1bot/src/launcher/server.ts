@@ -87,15 +87,17 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
     opencodeConfig.sandbox.allowedPaths = []
   }
 
-  // 添加 skills 目录到白名单（使用通配符匹配所有子目录和文件）
-  const skillsPaths = [
-    `${builtinSkillsDir}/*`,  // 内置 skills
-    `${globalSkillsDir}/*`,   // 全局 skills (~/.config/nine1bot/skills)
+  // 添加 skills 和全局配置目录到沙盒白名单
+  const globalConfigDir = getGlobalConfigDir()
+  const allowedPaths = [
+    `${builtinSkillsDir}/*`,   // 内置 skills
+    `${globalSkillsDir}/*`,    // 全局 skills (~/.config/nine1bot/skills)
+    `${globalConfigDir}/*`,    // 全局配置目录（用于添加 MCP、Skills 等）
   ]
 
-  for (const skillPath of skillsPaths) {
-    if (!opencodeConfig.sandbox.allowedPaths.includes(skillPath)) {
-      opencodeConfig.sandbox.allowedPaths.push(skillPath)
+  for (const allowedPath of allowedPaths) {
+    if (!opencodeConfig.sandbox.allowedPaths.includes(allowedPath)) {
+      opencodeConfig.sandbox.allowedPaths.push(allowedPath)
     }
   }
 
