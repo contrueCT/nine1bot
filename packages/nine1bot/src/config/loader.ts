@@ -130,12 +130,32 @@ export function getGlobalSkillsDir(): string {
 }
 
 /**
+ * 获取数据目录（用于存储认证等敏感数据）
+ * 遵循 XDG 规范，与 config 目录分离
+ * - Windows: %LOCALAPPDATA%\nine1bot (如 C:\Users\<user>\AppData\Local\nine1bot)
+ * - Unix: ~/.local/share/nine1bot
+ */
+export function getDataDir(): string {
+  const home = homedir()
+  if (process.platform === 'win32') {
+    // Windows: 使用 LOCALAPPDATA
+    return process.env.LOCALAPPDATA
+      ? join(process.env.LOCALAPPDATA, 'nine1bot')
+      : join(home, 'AppData', 'Local', 'nine1bot')
+  }
+  // Unix: 使用 XDG_DATA_HOME 或默认 ~/.local/share
+  return process.env.XDG_DATA_HOME
+    ? join(process.env.XDG_DATA_HOME, 'nine1bot')
+    : join(home, '.local', 'share', 'nine1bot')
+}
+
+/**
  * 获取认证文件路径
- * - Windows: %APPDATA%\nine1bot\auth.json
- * - Unix: ~/.config/nine1bot/auth.json
+ * - Windows: %LOCALAPPDATA%\nine1bot\auth.json
+ * - Unix: ~/.local/share/nine1bot/auth.json
  */
 export function getAuthPath(): string {
-  return join(getGlobalConfigDir(), 'auth.json')
+  return join(getDataDir(), 'auth.json')
 }
 
 /**

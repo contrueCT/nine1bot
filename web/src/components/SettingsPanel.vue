@@ -121,7 +121,6 @@ function handleOverlayClick(e: MouseEvent) {
         <!-- Auth Tab -->
         <AuthManager
           v-if="activeTab === 'auth'"
-          :providers="providers"
           :loading="loadingProviders"
           @oauth="startOAuth"
           @set-api-key="setApiKey"

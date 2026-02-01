@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { providerApi, configApi, mcpApi, skillApi, authApi } from '../api/client'
 import type { Provider, McpServer, Skill, Config, McpConfig } from '../api/client'
 
@@ -12,6 +12,16 @@ const connectedProviders = ref<string[]>([])
 const currentProvider = ref<string>('')
 const currentModel = ref<string>('')
 const loadingProviders = ref(false)
+const providerSearchQuery = ref('')
+
+// 供应商优先级（热门供应商排在前面）
+const PROVIDER_PRIORITY: Record<string, number> = {
+  anthropic: 1,
+  openai: 2,
+  google: 3,
+  'github-copilot': 4,
+  openrouter: 5,
+}
 
 // MCP servers
 const mcpServers = ref<McpServer[]>([])
@@ -50,14 +60,20 @@ export function useSettings() {
       providerDefaults.value = providerData.defaults
       connectedProviders.value = providerData.connected
 
-      // 合并 authMethods 到 providers
-      providers.value = providerData.providers.map(p => ({
-        ...p,
-        authMethods: authMethods[p.id]?.map((m: any) => ({
+      // 合并 authMethods 到 providers，为没有 authMethods 的供应商添加默认的 API Key 方法
+      providers.value = providerData.providers.map(p => {
+        const methods = authMethods[p.id]?.map((m: any) => ({
           type: m.type,
           name: m.name
         })) || []
-      }))
+
+        // 如果没有认证方法，默认添加 API Key（几乎所有供应商都支持）
+        if (methods.length === 0) {
+          methods.push({ type: 'apiKey', name: 'API Key' })
+        }
+
+        return { ...p, authMethods: methods }
+      })
     } catch (e) {
       console.error('Failed to load providers:', e)
     } finally {
@@ -192,10 +208,33 @@ export function useSettings() {
     }
   }
 
+  // 过滤并排序后的供应商
+  const filteredProviders = computed(() => {
+    const query = providerSearchQuery.value.toLowerCase().trim()
+    let list = providers.value
+
+    if (query) {
+      list = list.filter(p =>
+        p.name.toLowerCase().includes(query) ||
+        p.id.toLowerCase().includes(query)
+      )
+    }
+
+    // 按优先级排序
+    return [...list].sort((a, b) => {
+      const pa = PROVIDER_PRIORITY[a.id] ?? 99
+      const pb = PROVIDER_PRIORITY[b.id] ?? 99
+      if (pa !== pb) return pa - pb
+      return a.name.localeCompare(b.name)
+    })
+  })
+
   return {
     showSettings,
     activeTab,
     providers,
+    filteredProviders,
+    providerSearchQuery,
     currentProvider,
     currentModel,
     loadingProviders,

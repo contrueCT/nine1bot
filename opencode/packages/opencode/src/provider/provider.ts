@@ -11,6 +11,7 @@ import { NamedError } from "@opencode-ai/util/error"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { Instance } from "../project/instance"
+import { State } from "../project/state"
 import { Flag } from "../flag/flag"
 import { iife } from "@/util/iife"
 
@@ -650,7 +651,8 @@ export namespace Provider {
     }
   }
 
-  const state = Instance.state(async () => {
+  // Named init function for state refresh capability
+  const stateInit = async () => {
     using _ = log.time("state")
     const config = await Config.get()
     const modelsDev = await ModelsDev.get()
@@ -928,7 +930,17 @@ export namespace Provider {
       sdk,
       modelLoaders,
     }
-  })
+  }
+
+  const state = Instance.state(stateInit)
+
+  /**
+   * Refresh provider state by invalidating the cache.
+   * Call this after auth changes to ensure Provider.list() returns updated data.
+   */
+  export function refresh() {
+    State.invalidate(Instance.directory, stateInit)
+  }
 
   export async function list() {
     return state().then((state) => state.providers)

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { Provider } from '../api/client'
+import { useSettings } from '../composables/useSettings'
 
 defineProps<{
-  providers: Provider[]
   loading: boolean
 }>()
 
@@ -12,6 +11,8 @@ const emit = defineEmits<{
   'set-api-key': [providerId: string, apiKey: string]
   remove: [providerId: string]
 }>()
+
+const { filteredProviders, providerSearchQuery } = useSettings()
 
 const apiKeyInputs = ref<Record<string, string>>({})
 const showApiKeyInput = ref<Record<string, boolean>>({})
@@ -27,6 +28,10 @@ function submitApiKey(providerId: string) {
     apiKeyInputs.value[providerId] = ''
     showApiKeyInput.value[providerId] = false
   }
+}
+
+function clearSearch() {
+  providerSearchQuery.value = ''
 }
 </script>
 
@@ -44,24 +49,48 @@ function submitApiKey(providerId: string) {
       </div>
     </div>
 
+    <!-- 搜索框 -->
+    <div class="search-box">
+      <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/>
+        <path d="M21 21l-4.35-4.35"/>
+      </svg>
+      <input
+        v-model="providerSearchQuery"
+        type="text"
+        placeholder="搜索供应商..."
+        class="search-input"
+      />
+      <button v-if="providerSearchQuery" class="clear-btn" @click="clearSearch">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
     <div v-if="loading" class="loading-state">
       <div class="loading-spinner"></div>
       <span class="text-muted">加载中...</span>
     </div>
 
-    <div v-else-if="providers.length === 0" class="empty-state">
+    <div v-else-if="filteredProviders.length === 0" class="empty-state">
       <div class="empty-state-icon">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <svg v-if="providerSearchQuery" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="11" cy="11" r="8"/>
+          <path d="M21 21l-4.35-4.35"/>
+        </svg>
+        <svg v-else width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
           <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
         </svg>
       </div>
-      <p class="empty-state-title">暂无可用提供者</p>
-      <p class="empty-state-description">配置将在这里显示</p>
+      <p class="empty-state-title">{{ providerSearchQuery ? '未找到匹配的供应商' : '暂无可用提供者' }}</p>
+      <p class="empty-state-description">{{ providerSearchQuery ? '尝试其他关键词' : '配置将在这里显示' }}</p>
     </div>
 
     <div v-else class="list">
-      <div v-for="provider in providers" :key="provider.id" class="list-item auth-item">
+      <div v-for="provider in filteredProviders" :key="provider.id" class="list-item auth-item">
         <div class="list-item-icon">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
@@ -171,6 +200,55 @@ function submitApiKey(providerId: string) {
 .auth-hint svg {
   flex-shrink: 0;
   color: var(--success);
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.search-box:focus-within {
+  border-color: var(--accent);
+}
+
+.search-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.clear-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.clear-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
 }
 
 .loading-state {
