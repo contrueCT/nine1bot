@@ -194,12 +194,24 @@ export const api = {
     content: string,
     onEvent: (event: SSEEvent) => void,
     onError?: (error: Error) => void,
-    model?: { providerID: string; modelID: string }
+    model?: { providerID: string; modelID: string },
+    files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>
   ): Promise<void> {
     try {
-      const body: Record<string, any> = {
-        parts: [{ type: 'text', text: content }]
+      const parts: any[] = []
+
+      // Add text content if not empty
+      if (content.trim()) {
+        parts.push({ type: 'text', text: content })
       }
+
+      // Add file parts
+      if (files && files.length > 0) {
+        parts.push(...files)
+      }
+
+      const body: Record<string, any> = { parts }
+
       // 如果指定了模型，添加到请求体
       if (model) {
         body.model = model
@@ -850,5 +862,85 @@ export const preferencesApi = {
     }
     const data = await res.json()
     return data.prompt || ''
+  }
+}
+
+// === Agent Terminal API ===
+export interface AgentTerminalInfo {
+  id: string
+  name: string
+  sessionID: string
+  status: 'running' | 'exited'
+  rows: number
+  cols: number
+  createdAt: number
+  lastActivity: number
+}
+
+export const agentTerminalApi = {
+  // 获取终端列表
+  async list(sessionID?: string): Promise<AgentTerminalInfo[]> {
+    const params = new URLSearchParams()
+    if (sessionID) params.set('sessionID', sessionID)
+    const res = await fetchWithTimeout(`${BASE_URL}/agent-terminal?${params}`)
+    if (!res.ok) {
+      throw new Error('Failed to fetch agent terminals')
+    }
+    return res.json()
+  },
+
+  // 获取终端信息
+  async get(id: string): Promise<AgentTerminalInfo> {
+    const res = await fetchWithTimeout(`${BASE_URL}/agent-terminal/${encodeURIComponent(id)}`)
+    if (!res.ok) {
+      throw new Error('Failed to fetch agent terminal')
+    }
+    return res.json()
+  },
+
+  // 调整终端大小
+  async resize(id: string, rows: number, cols: number): Promise<boolean> {
+    const res = await fetchWithTimeout(`${BASE_URL}/agent-terminal/${encodeURIComponent(id)}/resize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows, cols })
+    })
+    if (!res.ok) {
+      throw new Error('Failed to resize agent terminal')
+    }
+    return true
+  },
+
+  // 获取终端屏幕内容
+  async getScreen(id: string): Promise<{ screen: string; screenAnsi: string; cursor: { row: number; col: number } }> {
+    const res = await fetchWithTimeout(`${BASE_URL}/agent-terminal/${encodeURIComponent(id)}/screen`)
+    if (!res.ok) {
+      throw new Error('Failed to fetch agent terminal screen')
+    }
+    return res.json()
+  },
+
+  // 向终端发送输入
+  async write(id: string, data: string): Promise<boolean> {
+    const res = await fetchWithTimeout(`${BASE_URL}/agent-terminal/${encodeURIComponent(id)}/write`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data })
+    })
+    if (!res.ok) {
+      throw new Error('Failed to write to agent terminal')
+    }
+    return true
+  },
+
+  // 关闭终端
+  async close(id: string): Promise<boolean> {
+    const res = await fetchWithTimeout(`${BASE_URL}/agent-terminal/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    })
+    if (!res.ok) {
+      throw new Error('Failed to close agent terminal')
+    }
+    return true
   }
 }

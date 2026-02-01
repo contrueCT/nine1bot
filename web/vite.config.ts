@@ -16,6 +16,7 @@ export default defineConfig({
       '/provider': 'http://localhost:4096',
       '/config': 'http://localhost:4096',
       '/auth': 'http://localhost:4096',
+      '/agent-terminal': 'http://localhost:4096',
     }
   }
 })
