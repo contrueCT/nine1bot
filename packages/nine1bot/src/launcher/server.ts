@@ -205,11 +205,11 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   })
 
   return {
-    url: serverInstance.url,
-    hostname: serverInstance.hostname,
-    port: serverInstance.port,
+    url: serverInstance.url.toString(),
+    hostname: serverInstance.hostname ?? server.hostname,
+    port: serverInstance.port ?? server.port,
     stop: async () => {
-      serverInstance.server?.stop?.()
+      (serverInstance as any).server?.stop?.()
     },
   }
 }

@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "bun run --conditions=browser ./src/index.ts",
     "build": "bun build ./src/index.ts --outdir=./dist --target=node",
-    "start": "bun run ./src/index.ts"
+    "start": "bun run ./src/index.ts",
+    "typecheck": "tsc --project tsconfig.check.json"
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
