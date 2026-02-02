@@ -261,10 +261,8 @@ export namespace SessionPrompt {
   export const loop = fn(Identifier.schema("session"), async (sessionID) => {
     const abort = start(sessionID)
     if (!abort) {
-      return new Promise<MessageV2.WithParts>((resolve, reject) => {
-        const callbacks = state()[sessionID].callbacks
-        callbacks.push({ resolve, reject })
-      })
+      // Directly reject with BusyError instead of waiting indefinitely
+      throw new Session.BusyError(sessionID)
     }
 
     using _ = defer(() => cancel(sessionID))

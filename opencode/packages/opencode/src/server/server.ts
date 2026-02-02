@@ -25,6 +25,7 @@ import { Command } from "../command"
 import { Global } from "../global"
 import { ProjectRoutes } from "./routes/project"
 import { SessionRoutes } from "./routes/session"
+import { Session } from "../session"
 import { PtyRoutes } from "./routes/pty"
 import { McpRoutes } from "./routes/mcp"
 import { FileRoutes } from "./routes/file"
@@ -67,6 +68,14 @@ export namespace Server {
           log.error("failed", {
             error: err,
           })
+          // Handle Session.BusyError with 409 Conflict
+          if (err instanceof Session.BusyError) {
+            return c.json({
+              name: "BusyError",
+              message: err.message,
+              data: { sessionID: err.sessionID }
+            }, { status: 409 })
+          }
           if (err instanceof NamedError) {
             let status: ContentfulStatusCode
             if (err instanceof Storage.NotFoundError) status = 404

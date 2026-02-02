@@ -23,6 +23,14 @@ async function fetchWithTimeout(
   }
 }
 
+// Session busy error - thrown when another client is using the session
+export class SessionBusyError extends Error {
+  constructor(public sessionID: string) {
+    super(`Session ${sessionID} is busy`)
+    this.name = 'SessionBusyError'
+  }
+}
+
 export interface Session {
   id: string
   slug?: string
@@ -224,6 +232,11 @@ export const api = {
       })
 
       if (!res.ok) {
+        // Handle session busy error (409 Conflict)
+        if (res.status === 409) {
+          const error = await res.json().catch(() => ({}))
+          throw new SessionBusyError(error.data?.sessionID || sessionId)
+        }
         throw new Error(`HTTP error! status: ${res.status}`)
       }
 

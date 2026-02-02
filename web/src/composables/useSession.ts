@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, type TodoItem, questionApi, permissionApi } from '../api/client'
+import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, type TodoItem, questionApi, permissionApi, SessionBusyError } from '../api/client'
 import { useParallelSessions, MAX_PARALLEL_AGENTS } from './useParallelSessions'
 
 export function useSession() {
@@ -194,6 +194,17 @@ export function useSession() {
       const errorMessage = error.message?.toLowerCase() || ''
       if (errorMessage.includes('aborted') || errorMessage.includes('abort') || error.name === 'AbortError') {
         console.log('Request aborted')
+        return
+      }
+      // Handle session busy error
+      if (error instanceof SessionBusyError) {
+        console.log('Session is busy:', error.sessionID)
+        sessionError.value = {
+          message: '该会话正在被其他客户端使用中，请稍后重试或创建新会话',
+          dismissable: true
+        }
+        // Mark session as stopped since we couldn't start
+        setSessionRunning(sessionId, false)
         return
       }
       console.error('Failed to send message:', error)
