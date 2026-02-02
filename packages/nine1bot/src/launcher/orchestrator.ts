@@ -82,10 +82,14 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
 
   // 3. 打开浏览器（如果启用）
   if (!options.noBrowser && config.server.openBrowser) {
+    // 包裹在 try-catch 中处理同步错误（如 spawn ENOENT）
+    // 使用 .catch() 处理异步错误
     try {
-      await open(localUrl)
+      open(localUrl, { wait: false }).catch(() => {
+        // 忽略打开浏览器失败（如 Linux 无图形环境）
+      })
     } catch {
-      // 忽略打开浏览器失败
+      // 忽略同步错误（如可执行文件不存在）
     }
   }
 
