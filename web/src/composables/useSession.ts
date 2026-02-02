@@ -364,6 +364,16 @@ export function useSession() {
       case 'session.idle':
         // Note: session running state is handled by handleGlobalSSEEvent
         break
+
+      case 'todo.updated':
+        // 待办事项更新事件
+        if (properties?.sessionID && properties?.todos) {
+          // 只处理当前会话的 todo 更新
+          if (currentSession.value && properties.sessionID === currentSession.value.id) {
+            todoItems.value = properties.todos
+          }
+        }
+        break
     }
   }
 
