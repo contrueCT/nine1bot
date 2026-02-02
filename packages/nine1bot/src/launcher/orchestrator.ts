@@ -1,8 +1,12 @@
 import open from 'open'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import type { Nine1BotConfig } from '../config/schema'
 import { loadConfig, findConfigPath, getDefaultConfigPath } from '../config/loader'
 import { startServer, type ServerInstance } from './server'
 import { createTunnel, type TunnelManager } from '../tunnel'
+
+const execFileAsync = promisify(execFile)
 
 export interface LaunchOptions {
   port?: number
@@ -82,14 +86,12 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
 
   // 3. 打开浏览器（如果启用）
   if (!options.noBrowser && config.server.openBrowser) {
-    // 包裹在 try-catch 中处理同步错误（如 spawn ENOENT）
-    // 使用 .catch() 处理异步错误
     try {
-      open(localUrl, { wait: false }).catch(() => {
-        // 忽略打开浏览器失败（如 Linux 无图形环境）
-      })
+      await execFileAsync('which', ['xdg-open'])
+      open(localUrl, { wait: false }).catch(() => {})
     } catch {
-      // 忽略同步错误（如可执行文件不存在）
+      console.log(`\nℹ️  Server running at ${localUrl}`)
+      console.log('   (Browser auto-open skipped: xdg-open not found)\n')
     }
   }
 
