@@ -8,6 +8,7 @@ defineProps<{
   collapsed: boolean
   sessions: Session[]
   currentSession: Session | null
+  isDraftSession: boolean
   files: FileItem[]
   filesLoading: boolean
   activeTab: 'sessions' | 'files'
@@ -135,12 +136,25 @@ function getSessionTitle(session: Session): string {
     <div class="sidebar-content" v-if="!collapsed">
       <!-- Sessions Tab -->
       <div v-if="activeTab === 'sessions'" class="session-list">
+        <!-- 草稿会话（新对话） -->
+        <div
+          v-if="isDraftSession"
+          class="session-item active draft"
+        >
+          <div class="session-icon">
+            <Plus :size="16" />
+          </div>
+          <div class="session-item-content">
+            <span class="session-item-title">新对话</span>
+            <span class="session-item-time">未保存</span>
+          </div>
+        </div>
         <div
           v-for="session in sessions"
           :key="session.id"
           class="session-item"
           :class="{
-            active: currentSession?.id === session.id,
+            active: !isDraftSession && currentSession?.id === session.id,
             running: isSessionRunning(session.id)
           }"
           @click="emit('select-session', session)"
@@ -385,6 +399,22 @@ function getSessionTitle(session: Session): string {
   background: var(--accent);
   color: white;
   box-shadow: 0 2px 8px var(--accent-glow);
+}
+
+/* 草稿会话样式 */
+.session-item.draft {
+  border-style: dashed;
+  opacity: 0.9;
+}
+
+.session-item.draft .session-icon {
+  background: var(--bg-tertiary);
+  color: var(--accent);
+}
+
+.session-item.draft .session-item-time {
+  color: var(--accent);
+  font-style: italic;
 }
 
 .session-item-content {

@@ -9,6 +9,9 @@ export function useSession() {
   const isLoading = ref(false)
   const currentDirectory = ref('')
 
+  // 是否处于草稿模式（新建会话但未发送消息）
+  const isDraftSession = ref(false)
+
   // Use parallel sessions for streaming state tracking
   const {
     isSessionRunning,
@@ -70,14 +73,29 @@ export function useSession() {
     }
   }
 
-  async function createSession(directory: string) {
+  /**
+   * 创建新会话（草稿模式）
+   * 不会立即调用后端 API，只有发送消息时才真正创建
+   */
+  function createSession(directory: string) {
+    // 进入草稿模式，清空当前会话状态
+    isDraftSession.value = true
+    currentSession.value = null
+    currentDirectory.value = directory || '.'
+    messages.value = []
+  }
+
+  /**
+   * 实际创建会话（内部方法，发送消息时调用）
+   */
+  async function _createSessionInternal(directory: string): Promise<Session> {
     try {
       isLoading.value = true
       const session = await api.createSession(directory)
       currentSession.value = session
       // 使用服务器返回的实际目录，而不是传入的参数
       currentDirectory.value = session.directory
-      messages.value = []
+      isDraftSession.value = false
       // 重新加载所有会话，不过滤目录
       await loadSessions()
       return session
@@ -92,6 +110,8 @@ export function useSession() {
   async function selectSession(session: Session) {
     try {
       isLoading.value = true
+      // 切换到已存在的会话，退出草稿模式
+      isDraftSession.value = false
       currentSession.value = session
       currentDirectory.value = session.directory
       messages.value = await api.getMessages(session.id)
@@ -105,7 +125,25 @@ export function useSession() {
   // 用于防止用户消息重复
   const seenUserMessageIds = new Set<string>()
 
-  async function sendMessage(content: string, model?: { providerID: string; modelID: string }) {
+  async function sendMessage(
+    content: string,
+    model?: { providerID: string; modelID: string },
+    files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>
+  ) {
+    // 如果是草稿模式或没有当前会话，先创建会话
+    if (isDraftSession.value || !currentSession.value) {
+      try {
+        await _createSessionInternal(currentDirectory.value || '.')
+      } catch (error) {
+        console.error('Failed to create session before sending message:', error)
+        sessionError.value = {
+          message: '创建会话失败，请重试',
+          dismissable: true
+        }
+        return
+      }
+    }
+
     if (!currentSession.value) return
 
     // Check if this session is already streaming
@@ -148,7 +186,8 @@ export function useSession() {
           // Mark session as stopped on error
           setSessionRunning(sessionId, false)
         },
-        model
+        model,
+        files
       )
     } catch (error: any) {
       // Ignore abort errors
@@ -633,6 +672,7 @@ export function useSession() {
     messages,
     isLoading,
     isStreaming,
+    isDraftSession,
     currentDirectory,
     streamingMessage,
     pendingQuestions,

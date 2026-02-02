@@ -22,6 +22,7 @@ const {
   messages,
   isLoading,
   isStreaming,
+  isDraftSession,
   currentDirectory,
   pendingQuestions,
   pendingPermissions,
@@ -125,8 +126,8 @@ onMounted(async () => {
   if (sessions.value.length > 0) {
     await selectSession(sessions.value[0])
   } else {
-    // 创建新会话时使用当前工作目录
-    await createSession('.')
+    // 进入草稿模式，不实际创建会话
+    createSession('.')
   }
 
   // 加载待处理的问题和权限请求
@@ -157,10 +158,7 @@ onUnmounted(() => {
 // 文件浏览始终显示项目根目录的内容
 
 async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>) {
-  if (!currentSession.value) {
-    await createSession(currentDirectory.value || '.')
-  }
-  // 如果选择了模型，传递给 sendMessage
+  // sendMessage 会自动处理草稿模式，在发送前创建会话
   const model = currentProvider.value && currentModel.value
     ? { providerID: currentProvider.value, modelID: currentModel.value }
     : undefined
@@ -230,6 +228,7 @@ function closeFileViewer() {
       :collapsed="sidebarCollapsed"
       :sessions="sessions"
       :currentSession="currentSession"
+      :isDraftSession="isDraftSession"
       :files="files"
       :filesLoading="filesLoading"
       :activeTab="sidebarTab"
