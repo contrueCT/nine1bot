@@ -1,4 +1,6 @@
 import { Ripgrep } from "../file/ripgrep"
+import os from "os"
+import path from "path"
 
 import { Instance } from "../project/instance"
 import { Config } from "../config/config"
@@ -65,27 +67,20 @@ export namespace SystemPrompt {
       prompts.push(PROMPT_AUTONOMOUS)
     }
 
-    // Sandbox environment information
-    if (config.sandbox?.enabled !== false) {
-      const sandboxRoot = config.sandbox?.directory || Instance.directory
-      const allowedPaths = config.sandbox?.allowedPaths || []
-      const denyPaths = config.sandbox?.denyPaths || []
-
-      prompts.push(
-        [
-          "",
-          "# Sandbox Environment",
-          "",
-          "IMPORTANT: You are operating in a sandboxed environment with restricted file access.",
-          "",
-          `- Sandbox root: ${sandboxRoot}`,
-          `- Additional allowed paths: ${allowedPaths.length > 0 ? allowedPaths.join(", ") : "none"}`,
-          `- Blocked paths: ${denyPaths.length > 0 ? denyPaths.join(", ") : "none"}`,
-          "",
-          "All file operations outside the sandbox will be blocked. Do not attempt to access restricted paths.",
-        ].join("\n"),
-      )
-    }
+    // Nine1Bot global config directory (injected at runtime)
+    const globalConfigDir = process.env.NINE1BOT_GLOBAL_CONFIG_DIR || path.join(os.homedir(), ".config", "nine1bot")
+    prompts.push(
+      [
+        "",
+        "# Nine1Bot Configuration Paths",
+        "",
+        `- Global config directory: ${globalConfigDir}`,
+        `- Global config file: ${path.join(globalConfigDir, "config.jsonc")}`,
+        `- Global skills directory: ${path.join(globalConfigDir, "skills")}`,
+        "",
+        "Use these exact paths when reading or writing Nine1Bot configuration files.",
+      ].join("\n"),
+    )
 
     return prompts
   }

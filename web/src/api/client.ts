@@ -776,7 +776,10 @@ export const questionApi = {
 export const permissionApi = {
   // 获取待处理的权限请求列表
   async list(): Promise<PermissionRequest[]> {
-    const res = await fetch(`${BASE_URL}/permission`)
+    const res = await fetchWithTimeout(`${BASE_URL}/permission`, {}, 10000)
+    if (!res.ok) {
+      throw new Error(`Failed to list permissions: ${res.status}`)
+    }
     const data = await res.json()
     return Array.isArray(data) ? data : []
   },
@@ -784,11 +787,18 @@ export const permissionApi = {
   // 回复权限请求
   // reply: 'once' | 'always' | 'reject'
   async reply(requestId: string, reply: 'once' | 'always' | 'reject', message?: string): Promise<void> {
-    await fetch(`${BASE_URL}/permission/${encodeURIComponent(requestId)}/reply`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reply, message })
-    })
+    const res = await fetchWithTimeout(
+      `${BASE_URL}/permission/${encodeURIComponent(requestId)}/reply`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reply, message })
+      },
+      10000  // 10秒超时
+    )
+    if (!res.ok) {
+      throw new Error(`Permission reply failed: ${res.status}`)
+    }
   }
 }
 

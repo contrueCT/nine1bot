@@ -16,7 +16,6 @@ import { Shell } from "@/shell/shell"
 
 import { BashArity } from "@/permission/arity"
 import { Truncate } from "./truncation"
-import { Sandbox } from "./sandbox"
 
 const MAX_METADATA_LENGTH = 30_000
 const DEFAULT_TIMEOUT = Flag.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 2 * 60 * 1000
@@ -135,12 +134,6 @@ export const BashTool = Tool.define("bash", async () => {
           patterns.add(command.join(" "))
           always.add(BashArity.prefix(command).join(" ") + "*")
         }
-      }
-
-      // Sandbox check for cwd and detected directories
-      await Sandbox.assertPath(ctx, cwd)
-      for (const dir of directories) {
-        await Sandbox.assertPath(ctx, dir)
       }
 
       if (directories.size > 0) {

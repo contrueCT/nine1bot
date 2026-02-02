@@ -14,6 +14,7 @@ const emit = defineEmits<{
 const isSubmitting = ref(false)
 const isResponded = ref(false)
 const responseType = ref<'once' | 'always' | 'reject' | null>(null)
+const errorMessage = ref('')
 
 const permissionLabel = computed(() => {
   const labels: Record<string, string> = {
@@ -28,7 +29,6 @@ const permissionLabel = computed(() => {
     task: 'Run Task',
     external_directory: 'Access External Directory',
     doom_loop: 'Repeat Tool Call',
-    sandbox: 'Access Outside Sandbox',
   }
   return labels[props.request.permission] || props.request.permission
 })
@@ -39,7 +39,6 @@ const permissionIcon = computed(() => {
     edit: 'edit',
     read: 'file',
     external_directory: 'folder',
-    sandbox: 'shield',
   }
   return icons[props.request.permission] || 'lock'
 })
@@ -54,12 +53,15 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
 
   isSubmitting.value = true
   responseType.value = reply
+  errorMessage.value = ''
+
   try {
     await permissionApi.reply(props.request.id, reply)
     isResponded.value = true
     emit('responded', reply)
   } catch (error) {
     console.error('Failed to respond to permission:', error)
+    errorMessage.value = error instanceof Error ? error.message : 'Operation failed, please retry'
     responseType.value = null
   } finally {
     isSubmitting.value = false
@@ -85,9 +87,6 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
         </svg>
         <svg v-else-if="permissionIcon === 'folder'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-        </svg>
-        <svg v-else-if="permissionIcon === 'shield'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
         </svg>
         <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
@@ -132,6 +131,15 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
         <span v-if="isSubmitting && responseType === 'always'" class="loading-spinner small"></span>
         <span v-else>Always Allow</span>
       </button>
+    </div>
+
+    <div v-if="errorMessage" class="permission-error">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <span>{{ errorMessage }}</span>
     </div>
 
     <div v-else class="permission-responded" :class="responseType">
@@ -278,5 +286,22 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
 .loading-spinner.small {
   width: 14px;
   height: 14px;
+}
+
+.permission-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-sm);
+  color: var(--error);
+  font-size: 0.8125rem;
+}
+
+.permission-error svg {
+  flex-shrink: 0;
 }
 </style>

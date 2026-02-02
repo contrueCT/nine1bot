@@ -1065,21 +1065,6 @@ export namespace Config {
           prune: z.boolean().optional().describe("Enable pruning of old tool outputs (default: true)"),
         })
         .optional(),
-      sandbox: z
-        .object({
-          enabled: z.boolean().default(true).describe("Enable sandbox mode to restrict file system access (default: true)"),
-          directory: z.string().optional().describe("Sandbox root directory (defaults to project directory)"),
-          allowedPaths: z
-            .array(z.string())
-            .optional()
-            .describe("Additional allowed path patterns (e.g., '/tmp/*', '~/.cache/*')"),
-          denyPaths: z
-            .array(z.string())
-            .optional()
-            .describe("Explicitly denied path patterns (e.g., '*.env', '*.key', '*.pem')"),
-        })
-        .optional()
-        .describe("Sandbox configuration - restricts file system access only, network access is not limited"),
       autonomous: z
         .object({
           enabled: z.boolean().default(true).describe("Enable autonomous mode to reduce human intervention (default: true)"),

@@ -162,8 +162,8 @@ Users may ask you to help configure MCP (Model Context Protocol) servers to exte
 ## Configuration Locations (priority from low to high)
 
 **Global config** (applies to all projects):
-- Linux/macOS: `~/.config/nine1bot/config.jsonc`
-- Windows: `%APPDATA%\nine1bot\config.jsonc`
+- Path is provided in the "Nine1Bot Configuration Paths" section of the system prompt
+- Use the exact path from there, do NOT guess the username or home directory
 
 **Project config** (only applies to current project, highest priority):
 - `nine1bot.config.jsonc` (in project root)
@@ -206,7 +206,7 @@ Skills extend your capabilities with predefined instructions. They can be:
 
 ## Storage Locations
 
-- Global: `~/.config/nine1bot/skills/<skill-name>/SKILL.md` (Unix) or `%APPDATA%\nine1bot\skills\` (Windows)
+- Global: Use the "Global skills directory" path from the "Nine1Bot Configuration Paths" section
 - Project: `.nine1bot/skills/<skill-name>/SKILL.md`
 
 ## Installing Skills from URLs

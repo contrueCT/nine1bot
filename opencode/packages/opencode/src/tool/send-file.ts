@@ -4,7 +4,6 @@ import { Tool } from "./tool"
 import { Identifier } from "../id/id"
 import { Instance } from "../project/instance"
 import { assertExternalDirectory } from "./external-directory"
-import { Sandbox } from "./sandbox"
 
 export const SendFileTool = Tool.define("send_file", {
   description: `Send a file to the user for download.
@@ -37,9 +36,6 @@ Example:
 
     const filename = path.basename(filepath)
     const title = `Send file: ${filename}`
-
-    // Sandbox check
-    await Sandbox.assertPath(ctx, filepath)
 
     // External directory check
     await assertExternalDirectory(ctx, filepath, {

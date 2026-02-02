@@ -6,7 +6,6 @@ import DESCRIPTION from "./grep.txt"
 import { Instance } from "../project/instance"
 import path from "path"
 import { assertExternalDirectory } from "./external-directory"
-import { Sandbox } from "./sandbox"
 
 const MAX_LINE_LENGTH = 2000
 
@@ -35,9 +34,6 @@ export const GrepTool = Tool.define("grep", {
 
     let searchPath = params.path ?? Instance.directory
     searchPath = path.isAbsolute(searchPath) ? searchPath : path.resolve(Instance.directory, searchPath)
-
-    // Sandbox check (must be before external directory check)
-    await Sandbox.assertPath(ctx, searchPath)
 
     await assertExternalDirectory(ctx, searchPath, { kind: "directory" })
 

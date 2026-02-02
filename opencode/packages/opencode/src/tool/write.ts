@@ -12,7 +12,6 @@ import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { trimDiff } from "./edit"
 import { assertExternalDirectory } from "./external-directory"
-import { Sandbox } from "./sandbox"
 
 const MAX_DIAGNOSTICS_PER_FILE = 20
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -25,9 +24,6 @@ export const WriteTool = Tool.define("write", {
   }),
   async execute(params, ctx) {
     const filepath = path.isAbsolute(params.filePath) ? params.filePath : path.join(Instance.directory, params.filePath)
-
-    // Sandbox check (must be before external directory check)
-    await Sandbox.assertPath(ctx, filepath)
 
     await assertExternalDirectory(ctx, filepath)
 

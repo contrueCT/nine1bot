@@ -17,7 +17,6 @@ import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectory } from "./external-directory"
-import { Sandbox } from "./sandbox"
 
 const MAX_DIAGNOSTICS_PER_FILE = 20
 
@@ -43,9 +42,6 @@ export const EditTool = Tool.define("edit", {
     }
 
     const filePath = path.isAbsolute(params.filePath) ? params.filePath : path.join(Instance.directory, params.filePath)
-
-    // Sandbox check (must be before external directory check)
-    await Sandbox.assertPath(ctx, filePath)
 
     await assertExternalDirectory(ctx, filePath)
 

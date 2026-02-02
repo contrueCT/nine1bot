@@ -56,7 +56,7 @@ const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills']
 
 /**
  * 生成 opencode 兼容的配置文件
- * 过滤掉 nine1bot 特有的字段，并添加 skills 目录到沙盒白名单
+ * 过滤掉 nine1bot 特有的字段
  */
 async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
   const opencodeConfig: Record<string, any> = {}
@@ -72,32 +72,6 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
       } else {
         opencodeConfig[key] = value
       }
-    }
-  }
-
-  // 将 skills 目录添加到沙盒白名单
-  const builtinSkillsDir = getBuiltinSkillsDir()
-  const globalSkillsDir = getGlobalSkillsDir()
-
-  // 确保 sandbox 配置存在
-  if (!opencodeConfig.sandbox) {
-    opencodeConfig.sandbox = {}
-  }
-  if (!opencodeConfig.sandbox.allowedPaths) {
-    opencodeConfig.sandbox.allowedPaths = []
-  }
-
-  // 添加 skills 和全局配置目录到沙盒白名单
-  const globalConfigDir = getGlobalConfigDir()
-  const allowedPaths = [
-    `${builtinSkillsDir}/*`,   // 内置 skills
-    `${globalSkillsDir}/*`,    // 全局 skills (~/.config/nine1bot/skills)
-    `${globalConfigDir}/*`,    // 全局配置目录（用于添加 MCP、Skills 等）
-  ]
-
-  for (const allowedPath of allowedPaths) {
-    if (!opencodeConfig.sandbox.allowedPaths.includes(allowedPath)) {
-      opencodeConfig.sandbox.allowedPaths.push(allowedPath)
     }
   }
 

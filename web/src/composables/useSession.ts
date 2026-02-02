@@ -503,13 +503,28 @@ export function useSession() {
     }
   }
 
+  // 刷新权限列表
+  async function refreshPermissions() {
+    try {
+      const permissions = await permissionApi.list()
+      pendingPermissions.value = permissions.filter(
+        p => currentSession.value && p.sessionID === currentSession.value.id
+      )
+    } catch (e) {
+      console.error('Failed to refresh permissions:', e)
+    }
+  }
+
   // 响应权限请求
   async function respondPermission(requestId: string, reply: 'once' | 'always' | 'reject', message?: string) {
     try {
       await permissionApi.reply(requestId, reply, message)
+      // 立即从列表移除
       pendingPermissions.value = pendingPermissions.value.filter(p => p.id !== requestId)
     } catch (error) {
       console.error('Failed to respond to permission:', error)
+      // 刷新权限列表以恢复正确状态
+      await refreshPermissions()
       throw error
     }
   }

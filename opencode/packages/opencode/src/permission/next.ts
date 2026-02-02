@@ -162,10 +162,25 @@ export namespace PermissionNext {
               id,
               ...request,
             }
+
+            // 5分钟超时，防止权限请求永远等待
+            const PERMISSION_TIMEOUT = 5 * 60 * 1000
+            const timeout = setTimeout(() => {
+              delete s.pending[id]
+              log.warn("permission request timeout", { id, permission: request.permission })
+              reject(new Error(`Permission request timeout after 5 minutes: ${request.permission}`))
+            }, PERMISSION_TIMEOUT)
+
             s.pending[id] = {
               info,
-              resolve,
-              reject,
+              resolve: () => {
+                clearTimeout(timeout)
+                resolve()
+              },
+              reject: (err) => {
+                clearTimeout(timeout)
+                reject(err)
+              },
             }
             Bus.publish(Event.Asked, info)
           })

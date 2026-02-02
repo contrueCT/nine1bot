@@ -5,7 +5,6 @@ import DESCRIPTION from "./glob.txt"
 import { Ripgrep } from "../file/ripgrep"
 import { Instance } from "../project/instance"
 import { assertExternalDirectory } from "./external-directory"
-import { Sandbox } from "./sandbox"
 
 export const GlobTool = Tool.define("glob", {
   description: DESCRIPTION,
@@ -31,9 +30,6 @@ export const GlobTool = Tool.define("glob", {
 
     let search = params.path ?? Instance.directory
     search = path.isAbsolute(search) ? search : path.resolve(Instance.directory, search)
-
-    // Sandbox check (must be before external directory check)
-    await Sandbox.assertPath(ctx, search)
 
     await assertExternalDirectory(ctx, search, { kind: "directory" })
 

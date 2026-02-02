@@ -6,7 +6,6 @@ import { Instance } from "../project/instance"
 import { Bus } from "../bus"
 import { BusEvent } from "../bus/bus-event"
 import { assertExternalDirectory } from "./external-directory"
-import { Sandbox } from "./sandbox"
 
 // 定义 SSE 事件
 export const FilePreviewEvent = {
@@ -171,7 +170,6 @@ Example:
     const title = params.title || `Preview: ${filename}`
 
     // 安全检查
-    await Sandbox.assertPath(ctx, filepath)
     await assertExternalDirectory(ctx, filepath, {
       bypass: Boolean(ctx.extra?.["bypassCwdCheck"]),
     })
