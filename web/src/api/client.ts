@@ -155,6 +155,7 @@ export const api = {
   async getSessions(directory?: string): Promise<Session[]> {
     const params = new URLSearchParams()
     if (directory) params.set('directory', directory)
+    params.set('roots', 'true')  // 只获取主会话，过滤掉 subagent 会话
     const res = await fetchWithTimeout(`${BASE_URL}/session?${params}`)
     const data = await res.json()
     const sessions = Array.isArray(data) ? data : (data.data || [])
