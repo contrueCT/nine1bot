@@ -504,13 +504,19 @@ export namespace MessageV2 {
               text: part.text,
             })
           // text/plain and directory files are converted into text parts, ignore them
-          if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory")
-            userMessage.parts.push({
-              type: "file",
-              url: part.url,
-              mediaType: part.mime,
-              filename: part.filename,
-            })
+          // file:// URLs are saved to disk with text prompts, Agent uses Read tool to access them
+          if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory") {
+            // Only send data: URLs directly to the model
+            // file:// URLs have accompanying text prompts, Agent will use Read tool
+            if (part.url.startsWith("data:")) {
+              userMessage.parts.push({
+                type: "file",
+                url: part.url,
+                mediaType: part.mime,
+                filename: part.filename,
+              })
+            }
+          }
 
           if (part.type === "compaction") {
             userMessage.parts.push({

@@ -964,42 +964,33 @@ export namespace SessionPrompt {
                   },
                 ]
               }
-              // Handle document files (docx, pptx, xlsx, pdf) - save to temp and let AI use skills
-              const documentMimes = [
-                "application/pdf",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // docx
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation", // pptx
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // xlsx
-                "application/msword", // doc
-                "application/vnd.ms-powerpoint", // ppt
-                "application/vnd.ms-excel", // xls
-              ]
-              if (documentMimes.includes(part.mime)) {
-                // Extract base64 data from data URL
+              // Handle all non-text files (images, documents, etc.) - save to uploads directory
+              {
                 const base64Match = part.url.match(/^data:[^;]+;base64,(.+)$/)
                 if (base64Match) {
                   const base64Data = base64Match[1]
                   const buffer = Buffer.from(base64Data, "base64")
 
-                  // Save to project's .opencode/uploads directory (within sandbox)
-                  const uploadsDir = path.join(Instance.directory, ".opencode", "uploads", input.sessionID)
+                  // Save to current working directory's uploads folder
+                  const uploadsDir = path.join(process.cwd(), "uploads", input.sessionID)
                   await fs.mkdir(uploadsDir, { recursive: true })
                   const uploadFilePath = path.join(uploadsDir, part.filename || `upload-${Date.now()}`)
                   await fs.writeFile(uploadFilePath, buffer)
 
-                  log.info("saved uploaded document", { path: uploadFilePath, mime: part.mime })
+                  log.info("saved uploaded file", { path: uploadFilePath, mime: part.mime })
 
-                  // Determine file type description and skill hint
-                  const fileTypeMap: Record<string, { type: string; skill: string }> = {
-                    "application/pdf": { type: "PDF", skill: "pdf" },
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": { type: "Word document", skill: "docx" },
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation": { type: "PowerPoint presentation", skill: "pptx" },
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": { type: "Excel spreadsheet", skill: "xlsx" },
-                    "application/msword": { type: "Word document (legacy)", skill: "docx" },
-                    "application/vnd.ms-powerpoint": { type: "PowerPoint presentation (legacy)", skill: "pptx" },
-                    "application/vnd.ms-excel": { type: "Excel spreadsheet (legacy)", skill: "xlsx" },
-                  }
-                  const fileInfo = fileTypeMap[part.mime] || { type: "document", skill: "" }
+                  // Generate file type description
+                  const fileTypeDesc = part.mime.startsWith("image/")
+                    ? "an image"
+                    : part.mime === "application/pdf"
+                      ? "a PDF document"
+                      : part.mime.includes("wordprocessingml")
+                        ? "a Word document"
+                        : part.mime.includes("presentationml")
+                          ? "a PowerPoint presentation"
+                          : part.mime.includes("spreadsheetml")
+                            ? "an Excel spreadsheet"
+                            : "a file"
 
                   return [
                     {
@@ -1008,14 +999,13 @@ export namespace SessionPrompt {
                       sessionID: input.sessionID,
                       type: "text",
                       synthetic: true,
-                      text: `User uploaded a ${fileInfo.type}: ${part.filename}\nFile saved to: ${uploadFilePath}\n\nTo read or process this file, use the Read tool with the file path, or invoke the appropriate skill (e.g., /${fileInfo.skill}) for advanced operations.`,
+                      text: `User uploaded ${fileTypeDesc}: ${part.filename}\nFile saved to: ${uploadFilePath}\n\nUse the Read tool to view this file.`,
                     },
                     {
                       ...part,
                       id: part.id ?? Identifier.ascending("part"),
                       messageID: info.id,
                       sessionID: input.sessionID,
-                      // Replace data URL with file URL to avoid sending large base64 to model
                       url: `file://${uploadFilePath}`,
                     },
                   ]
