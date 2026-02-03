@@ -81,6 +81,14 @@ export namespace AgentTerminal {
         cursor: z.object({ row: z.number(), col: z.number() }),
       })
     ),
+    /** 原始数据输出事件 - 用于前端 xterm 直接渲染和保持滚动历史 */
+    Output: BusEvent.define(
+      "agent-terminal.output",
+      z.object({
+        id: Identifier.schema("agt"),
+        data: z.string(),
+      })
+    ),
     Exited: BusEvent.define(
       "agent-terminal.exited",
       z.object({ id: Identifier.schema("agt"), exitCode: z.number() })
@@ -212,6 +220,9 @@ export namespace AgentTerminal {
 
       // 写入屏幕缓冲区
       session.buffer.writeSync(data)
+
+      // 发送原始数据输出事件（前端可以用来保持滚动历史）
+      Bus.publish(Event.Output, { id, data })
 
       // 节流屏幕更新事件
       scheduleScreenUpdate(session)

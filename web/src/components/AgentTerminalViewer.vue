@@ -13,6 +13,8 @@ const props = defineProps<{
   rows?: number
   cols?: number
   status?: 'running' | 'exited'  // 终端状态
+  /** 原始输出增量数据 - 用于保持滚动历史 */
+  outputData?: string
 }>()
 
 const emit = defineEmits<{
@@ -29,8 +31,10 @@ let resizeTimeout: ReturnType<typeof setTimeout> | null = null
 // 当前后端终端的尺寸
 let currentBackendRows = props.rows || 24
 let currentBackendCols = props.cols || 120
+// 标记是否已初始化（已加载历史缓冲）
+let isInitialized = false
 
-onMounted(() => {
+onMounted(async () => {
   if (!terminalRef.value) return
 
   // 根据终端状态决定是否允许输入
@@ -41,6 +45,7 @@ onMounted(() => {
     cols: props.cols || 120,
     cursorBlink: isRunning,  // 运行中时光标闪烁
     disableStdin: false,  // 允许输入
+    scrollback: 5000,  // 增加滚动历史行数
     theme: {
       background: '#1a1b26',
       foreground: '#a9b1d6',
@@ -89,8 +94,19 @@ onMounted(() => {
     emit('input', data)
   })
 
-  // 初始显示（使用带 ANSI 的内容）
-  updateScreen(props.screenAnsi)
+  // 从后端加载完整的历史缓冲区
+  try {
+    const { buffer } = await agentTerminalApi.getBuffer(props.terminalId)
+    if (buffer && terminal) {
+      terminal.write(buffer)
+    }
+    isInitialized = true
+  } catch (e) {
+    console.warn('Failed to load terminal buffer, falling back to screen:', e)
+    // 回退到屏幕内容
+    updateScreen(props.screenAnsi)
+    isInitialized = true
+  }
 
   // 适应容器大小并设置 ResizeObserver
   nextTick(() => {
@@ -160,8 +176,19 @@ async function fitAndSync() {
   }
 }
 
-// 监听屏幕内容变化（使用带 ANSI 的内容）
+// 监听原始输出增量数据
+watch(() => props.outputData, (newData) => {
+  if (!terminal || !isInitialized || !newData) return
+  // 直接追加新数据，保持滚动历史
+  terminal.write(newData)
+})
+
+// 监听屏幕内容变化（仅在没有 outputData 时作为回退）
+// 注意：如果使用了 outputData 模式，screenAnsi 的变化会被忽略
 watch(() => props.screenAnsi, (newScreen) => {
+  // 如果已初始化并且有 outputData 支持，不再使用 screen 更新
+  // 因为 outputData 会直接追加原始数据
+  if (isInitialized && props.outputData !== undefined) return
   updateScreen(newScreen)
 })
 

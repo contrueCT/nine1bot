@@ -131,6 +131,40 @@ export const AgentTerminalRoutes = lazy(() =>
         return c.json({ screen, screenAnsi, cursor })
       },
     )
+    .get(
+      "/:id/buffer",
+      describeRoute({
+        summary: "Get Agent Terminal Raw Buffer",
+        description: "Get the raw output buffer of an agent terminal for history replay.",
+        operationId: "agentTerminal.buffer",
+        responses: {
+          200: {
+            description: "Raw buffer content",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    buffer: z.string(),
+                  })
+                ),
+              },
+            },
+          },
+          ...errors(404),
+        },
+      }),
+      validator("param", z.object({ id: z.string() })),
+      async (c) => {
+        const { id } = c.req.valid("param")
+        const buffer = AgentTerminal.getRawBuffer(id)
+
+        if (buffer === undefined) {
+          throw new Storage.NotFoundError({ message: "Agent terminal not found" })
+        }
+
+        return c.json({ buffer })
+      },
+    )
     .post(
       "/:id/write",
       describeRoute({
