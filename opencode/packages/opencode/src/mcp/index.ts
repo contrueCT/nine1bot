@@ -23,7 +23,7 @@ import { BusEvent } from "../bus/bus-event"
 import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import open from "open"
-import { checkAndReloadMcpConfig } from "./hot-reload"
+import { checkAndReloadMcpConfig, startMcpConfigWatcher, stopMcpConfigWatcher } from "./hot-reload"
 
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
@@ -191,12 +191,19 @@ export namespace MCP {
           }
         }),
       )
+
+      // 启动配置文件监听（用于热更新）
+      startMcpConfigWatcher()
+
       return {
         status,
         clients,
       }
     },
     async (state) => {
+      // 停止配置文件监听
+      stopMcpConfigWatcher()
+
       await Promise.all(
         Object.values(state.clients).map((client) =>
           client.close().catch((error) => {
