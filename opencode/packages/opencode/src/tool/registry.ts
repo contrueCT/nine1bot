@@ -28,7 +28,7 @@ import { Truncate } from "./truncation"
 import { PlanExitTool, PlanEnterTool } from "./plan"
 import { ApplyPatchTool } from "./apply_patch"
 import { SendFileTool } from "./send-file"
-import { PreviewFileTool } from "./preview-file"
+import { DisplayFileTool } from "./preview-file"
 import {
   TerminalCreateTool,
   TerminalViewTool,
@@ -126,7 +126,7 @@ export namespace ToolRegistry {
       SkillTool,
       ApplyPatchTool,
       SendFileTool,
-      PreviewFileTool,
+      DisplayFileTool,
       TerminalCreateTool,
       TerminalViewTool,
       TerminalWriteTool,

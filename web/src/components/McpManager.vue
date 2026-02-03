@@ -23,6 +23,11 @@ const formUrl = ref('')
 const formError = ref('')
 const isSubmitting = ref(false)
 
+// JSON 编辑模式
+const editMode = ref<'form' | 'json'>('form')
+const jsonInput = ref('')
+const jsonError = ref('')
+
 function getStatusBadge(status: string) {
   switch (status) {
     case 'connected': return 'badge-success'
@@ -57,6 +62,9 @@ function resetForm() {
   formCommand.value = ''
   formUrl.value = ''
   formError.value = ''
+  editMode.value = 'form'
+  jsonInput.value = ''
+  jsonError.value = ''
 }
 
 function openForm() {
@@ -149,6 +157,162 @@ function parseCommand(cmd: string): string[] {
   return result
 }
 
+// 验证 MCP 配置格式
+function validateMcpConfig(config: any): string | null {
+  // 验证 type 字段
+  if (!config.type) {
+    return '缺少必要字段: type'
+  }
+  if (config.type !== 'local' && config.type !== 'remote') {
+    return 'type 必须是 "local" 或 "remote"'
+  }
+
+  // 验证 local 类型
+  if (config.type === 'local') {
+    if (!config.command) {
+      return 'local 类型缺少必要字段: command'
+    }
+    if (!Array.isArray(config.command)) {
+      return 'command 必须是字符串数组'
+    }
+    if (config.command.length === 0) {
+      return 'command 数组不能为空'
+    }
+    if (!config.command.every((c: any) => typeof c === 'string')) {
+      return 'command 数组中的元素必须是字符串'
+    }
+
+    // 验证 environment（可选）
+    if (config.environment !== undefined) {
+      if (typeof config.environment !== 'object' || config.environment === null || Array.isArray(config.environment)) {
+        return 'environment 必须是对象'
+      }
+      for (const [key, value] of Object.entries(config.environment)) {
+        if (typeof value !== 'string') {
+          return `environment.${key} 的值必须是字符串`
+        }
+      }
+    }
+  }
+
+  // 验证 remote 类型
+  if (config.type === 'remote') {
+    if (!config.url) {
+      return 'remote 类型缺少必要字段: url'
+    }
+    if (typeof config.url !== 'string') {
+      return 'url 必须是字符串'
+    }
+    // 简单的 URL 格式验证
+    if (!config.url.startsWith('http://') && !config.url.startsWith('https://')) {
+      return 'url 必须以 http:// 或 https:// 开头'
+    }
+
+    // 验证 headers（可选）
+    if (config.headers !== undefined) {
+      if (typeof config.headers !== 'object' || config.headers === null || Array.isArray(config.headers)) {
+        return 'headers 必须是对象'
+      }
+      for (const [key, value] of Object.entries(config.headers)) {
+        if (typeof value !== 'string') {
+          return `headers.${key} 的值必须是字符串`
+        }
+      }
+    }
+  }
+
+  // 验证公共可选字段
+  if (config.enabled !== undefined && typeof config.enabled !== 'boolean') {
+    return 'enabled 必须是布尔值'
+  }
+  if (config.timeout !== undefined) {
+    if (typeof config.timeout !== 'number' || !Number.isInteger(config.timeout) || config.timeout <= 0) {
+      return 'timeout 必须是正整数'
+    }
+  }
+
+  // 检查是否有未知字段
+  const localAllowedFields = ['type', 'command', 'environment', 'enabled', 'timeout']
+  const remoteAllowedFields = ['type', 'url', 'headers', 'enabled', 'timeout', 'oauth']
+  const allowedFields = config.type === 'local' ? localAllowedFields : remoteAllowedFields
+
+  for (const key of Object.keys(config)) {
+    if (!allowedFields.includes(key)) {
+      return `未知字段: ${key}（${config.type} 类型允许的字段: ${allowedFields.join(', ')}）`
+    }
+  }
+
+  return null // 验证通过
+}
+
+// 验证服务器名称
+function validateServerName(name: string): string | null {
+  if (!name || name.trim() === '') {
+    return '服务器名称不能为空'
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    return '服务器名称只能包含字母、数字、下划线和连字符'
+  }
+  if (name.length > 64) {
+    return '服务器名称不能超过 64 个字符'
+  }
+  return null
+}
+
+// JSON 模式提交
+function submitJson() {
+  jsonError.value = ''
+
+  try {
+    // 尝试解析为 { "name": config } 格式
+    const trimmed = jsonInput.value.trim()
+    if (!trimmed) {
+      jsonError.value = '请输入 MCP 配置'
+      return
+    }
+
+    const wrapped = `{${trimmed}}`
+    let parsed: any
+    try {
+      parsed = JSON.parse(wrapped)
+    } catch (e: any) {
+      jsonError.value = 'JSON 格式错误: ' + e.message
+      return
+    }
+
+    const entries = Object.entries(parsed)
+    if (entries.length === 0) {
+      jsonError.value = '请输入 MCP 配置'
+      return
+    }
+    if (entries.length > 1) {
+      jsonError.value = '一次只能添加一个 MCP 配置'
+      return
+    }
+
+    const [name, config] = entries[0] as [string, any]
+
+    // 验证服务器名称
+    const nameError = validateServerName(name)
+    if (nameError) {
+      jsonError.value = nameError
+      return
+    }
+
+    // 验证配置格式
+    const configError = validateMcpConfig(config)
+    if (configError) {
+      jsonError.value = configError
+      return
+    }
+
+    emit('add', name, config)
+    closeForm()
+  } catch (e: any) {
+    jsonError.value = '发生错误: ' + e.message
+  }
+}
+
 function confirmRemove(name: string) {
   if (confirm(`确定要删除 MCP 服务器 "${name}" 吗？`)) {
     emit('remove', name)
@@ -182,7 +346,26 @@ function confirmRemove(name: string) {
         </button>
       </div>
 
-      <div class="form-body">
+      <!-- 模式切换 -->
+      <div class="mode-switch">
+        <button
+          class="mode-btn"
+          :class="{ active: editMode === 'form' }"
+          @click="editMode = 'form'"
+        >
+          表单模式
+        </button>
+        <button
+          class="mode-btn"
+          :class="{ active: editMode === 'json' }"
+          @click="editMode = 'json'"
+        >
+          JSON 模式
+        </button>
+      </div>
+
+      <!-- 表单模式 -->
+      <div v-if="editMode === 'form'" class="form-body">
         <div class="form-group">
           <label class="form-label">名称</label>
           <input
@@ -234,9 +417,36 @@ function confirmRemove(name: string) {
         <div v-if="formError" class="form-error">{{ formError }}</div>
       </div>
 
+      <!-- JSON 模式 -->
+      <div v-if="editMode === 'json'" class="form-body">
+        <div class="json-hint">
+          输入 MCP 配置 JSON，格式: <code>"server-name": { "type": "local", "command": [...] }</code>
+        </div>
+        <div class="form-group">
+          <textarea
+            v-model="jsonInput"
+            class="json-textarea"
+            rows="10"
+            placeholder='"my-server": {
+  "type": "local",
+  "command": ["npx", "-y", "@some/mcp-server"],
+  "environment": {
+    "API_KEY": "{env:SOME_API_KEY}"
+  },
+  "enabled": true
+}'
+          ></textarea>
+        </div>
+        <div v-if="jsonError" class="form-error">{{ jsonError }}</div>
+      </div>
+
       <div class="form-footer">
         <button class="btn btn-ghost" @click="closeForm">取消</button>
-        <button class="btn btn-primary" @click="submitForm" :disabled="isSubmitting">
+        <button
+          class="btn btn-primary"
+          @click="editMode === 'json' ? submitJson() : submitForm()"
+          :disabled="isSubmitting"
+        >
           {{ isSubmitting ? '添加中...' : '添加服务器' }}
         </button>
       </div>
@@ -491,6 +701,76 @@ function confirmRemove(name: string) {
   padding: var(--space-sm) var(--space-md);
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-secondary);
+}
+
+/* 模式切换 */
+.mode-switch {
+  display: flex;
+  padding: var(--space-sm) var(--space-md);
+  gap: var(--space-xs);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mode-btn {
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.mode-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.mode-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+/* JSON 编辑 */
+.json-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: var(--space-sm);
+  line-height: 1.5;
+}
+
+.json-hint code {
+  background: var(--bg-secondary);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.json-textarea {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 200px;
+  transition: border-color var(--transition-fast);
+}
+
+.json-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.json-textarea::placeholder {
+  color: var(--text-muted);
 }
 
 .list-item-meta {

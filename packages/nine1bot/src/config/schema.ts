@@ -140,8 +140,8 @@ export const Nine1BotConfigSchema = z.object({
   enabled_providers: z.array(z.string()).optional(),
 
   agent: z.record(AgentConfigSchema).optional(),
-  mcp: z.record(McpConfigSchema).optional(),
-  provider: z.record(ProviderConfigSchema).optional(),
+  mcp: McpConfigSchema.optional(),
+  provider: ProviderConfigSchema.optional(),
 
   permission: z.object({
     read: PermissionRuleSchema.optional(),

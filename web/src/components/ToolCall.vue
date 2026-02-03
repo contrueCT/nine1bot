@@ -144,8 +144,16 @@ async function openPreview() {
 
 // Download file
 function downloadFile(attachment: FileAttachment) {
+  let downloadUrl = attachment.url
+
+  // If it's a file:// URL, convert to API download endpoint
+  if (attachment.url.startsWith('file://')) {
+    const filepath = attachment.url.slice(7) // Remove "file://"
+    downloadUrl = `/api/file/download?path=${encodeURIComponent(filepath)}`
+  }
+
   const link = document.createElement('a')
-  link.href = attachment.url
+  link.href = downloadUrl
   link.download = attachment.filename || 'download'
   document.body.appendChild(link)
   link.click()

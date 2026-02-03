@@ -445,17 +445,34 @@ export namespace MessageV2 {
       if (typeof output === "object") {
         const outputObject = output as {
           text: string
-          attachments?: Array<{ mime: string; url: string }>
+          attachments?: Array<{ mime: string; url: string; filename?: string }>
         }
-        const attachments = (outputObject.attachments ?? []).filter((attachment) => {
+
+        const allAttachments = outputObject.attachments ?? []
+
+        // Only process data: URL attachments (inline base64)
+        const dataUrlAttachments = allAttachments.filter((attachment) => {
           return attachment.url.startsWith("data:") && attachment.url.includes(",")
         })
+
+        // Filter to only AI model supported MIME types (images and PDF)
+        const supportedAttachments = dataUrlAttachments.filter((a) =>
+          a.mime.startsWith("image/") || a.mime === "application/pdf"
+        )
+
+        // Count unsupported attachments (file:// URLs and unsupported MIME types)
+        const unsupportedCount = allAttachments.length - supportedAttachments.length
+
+        // Generate text description for unsupported/non-inline attachments
+        const unsupportedText = unsupportedCount > 0
+          ? `\n\n[${unsupportedCount} file(s) sent to user for download - content not available for analysis]`
+          : ""
 
         return {
           type: "content",
           value: [
-            { type: "text", text: outputObject.text },
-            ...attachments.map((attachment) => ({
+            { type: "text", text: outputObject.text + unsupportedText },
+            ...supportedAttachments.map((attachment) => ({
               type: "media",
               mediaType: attachment.mime,
               data: iife(() => {
@@ -487,13 +504,19 @@ export namespace MessageV2 {
               text: part.text,
             })
           // text/plain and directory files are converted into text parts, ignore them
-          if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory")
-            userMessage.parts.push({
-              type: "file",
-              url: part.url,
-              mediaType: part.mime,
-              filename: part.filename,
-            })
+          // file:// URLs are saved to disk with text prompts, Agent uses Read tool to access them
+          if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory") {
+            // Only send data: URLs directly to the model
+            // file:// URLs have accompanying text prompts, Agent will use Read tool
+            if (part.url.startsWith("data:")) {
+              userMessage.parts.push({
+                type: "file",
+                url: part.url,
+                mediaType: part.mime,
+                filename: part.filename,
+              })
+            }
+          }
 
           if (part.type === "compaction") {
             userMessage.parts.push({

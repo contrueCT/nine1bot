@@ -48,11 +48,9 @@ Example:
       throw new Error(`File not found: ${filepath}`)
     }
 
-    // Read file content
-    const content = await file.bytes()
+    // Get file metadata without reading content
     const mime = file.type || "application/octet-stream"
-    const base64 = Buffer.from(content).toString("base64")
-    const size = content.length
+    const size = file.size
 
     // Format size for display
     const formatSize = (bytes: number): string => {
@@ -65,6 +63,8 @@ Example:
       ? `${params.description}\n\nFile: ${filename} (${formatSize(size)})`
       : `File ready for download: ${filename} (${formatSize(size)})`
 
+    // Store file path instead of base64 content to save storage space
+    // The file will be served via /file/download endpoint when user downloads
     return {
       title,
       output,
@@ -83,7 +83,7 @@ Example:
           type: "file" as const,
           mime,
           filename,
-          url: `data:${mime};base64,${base64}`,
+          url: `file://${filepath}`,
         },
       ],
     }

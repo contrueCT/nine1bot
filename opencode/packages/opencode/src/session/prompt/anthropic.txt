@@ -71,7 +71,8 @@ The user will primarily request you perform software engineering tasks. This inc
 
 
 # Tool usage policy
-- IMPORTANT: Execute commands via terminal tools (terminal_create + terminal_write), not Bash. Keep terminals open.
+- Prefer interactive terminal tools (terminal_create + terminal_write) over Bash for command execution. Terminals persist state and support interactive programs.
+- After generating or creating files (images, documents, code, etc.), use the display_file tool to show them to the user.
 - When doing file search, prefer to use the Task tool in order to reduce context usage.
 - You should proactively use the Task tool with specialized agents when the task at hand matches the agent's description.
 
