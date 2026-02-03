@@ -134,7 +134,7 @@ function isPreviewSupported(mime: string, ext: string): boolean {
 }
 
 export const PreviewFileTool = Tool.define("preview_file", {
-  description: `Show a file preview to the user in the web interface.
+  description: `Preview LOCAL files in the web interface. This is NOT a web/network tool.
 
 Use this tool to display files visually to the user, such as:
 - Images (PNG, JPG, WebP, GIF, SVG)

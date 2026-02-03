@@ -5,50 +5,16 @@ import path from "path"
 import DESCRIPTION from "./bash.txt"
 import { Log } from "../util/log"
 import { Instance } from "../project/instance"
-import { lazy } from "@/util/lazy"
-import { Language } from "web-tree-sitter"
+import { Flag } from "../flag/flag"
+import { Shell } from "../shell/shell"
 
-import { $ } from "bun"
-import { Filesystem } from "@/util/filesystem"
-import { fileURLToPath } from "url"
-import { Flag } from "@/flag/flag.ts"
-import { Shell } from "@/shell/shell"
-
-import { BashArity } from "@/permission/arity"
 import { Truncate } from "./truncation"
+import { CommandAnalyzer } from "./command-analyzer"
 
 const MAX_METADATA_LENGTH = 30_000
 const DEFAULT_TIMEOUT = Flag.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 2 * 60 * 1000
 
 export const log = Log.create({ service: "bash-tool" })
-
-const resolveWasm = (asset: string) => {
-  if (asset.startsWith("file://")) return fileURLToPath(asset)
-  if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
-  const url = new URL(asset, import.meta.url)
-  return fileURLToPath(url)
-}
-
-const parser = lazy(async () => {
-  const { Parser } = await import("web-tree-sitter")
-  const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
-    with: { type: "wasm" },
-  })
-  const treePath = resolveWasm(treeWasm)
-  await Parser.init({
-    locateFile() {
-      return treePath
-    },
-  })
-  const { default: bashWasm } = await import("tree-sitter-bash/tree-sitter-bash.wasm" as string, {
-    with: { type: "wasm" },
-  })
-  const bashPath = resolveWasm(bashWasm)
-  const bashLanguage = await Language.load(bashPath)
-  const p = new Parser()
-  p.setLanguage(bashLanguage)
-  return p
-})
 
 // TODO: we may wanna rename this tool so it works better on other shells
 export const BashTool = Tool.define("bash", async () => {
@@ -80,76 +46,26 @@ export const BashTool = Tool.define("bash", async () => {
         throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
       }
       const timeout = params.timeout ?? DEFAULT_TIMEOUT
-      const tree = await parser().then((p) => p.parse(params.command))
-      if (!tree) {
-        throw new Error("Failed to parse command")
-      }
-      const directories = new Set<string>()
-      if (!Instance.containsPath(cwd)) directories.add(cwd)
-      const patterns = new Set<string>()
-      const always = new Set<string>()
 
-      for (const node of tree.rootNode.descendantsOfType("command")) {
-        if (!node) continue
-        const command = []
-        for (let i = 0; i < node.childCount; i++) {
-          const child = node.child(i)
-          if (!child) continue
-          if (
-            child.type !== "command_name" &&
-            child.type !== "word" &&
-            child.type !== "string" &&
-            child.type !== "raw_string" &&
-            child.type !== "concatenation"
-          ) {
-            continue
-          }
-          command.push(child.text)
-        }
+      // Use shared command analyzer for parsing and permission checking
+      const analysis = await CommandAnalyzer.analyze(params.command, cwd)
 
-        // not an exhaustive list, but covers most common cases
-        if (["cd", "rm", "cp", "mv", "mkdir", "touch", "chmod", "chown", "cat"].includes(command[0])) {
-          for (const arg of command.slice(1)) {
-            if (arg.startsWith("-") || (command[0] === "chmod" && arg.startsWith("+"))) continue
-            const resolved = await $`realpath ${arg}`
-              .cwd(cwd)
-              .quiet()
-              .nothrow()
-              .text()
-              .then((x) => x.trim())
-            log.info("resolved path", { arg, resolved })
-            if (resolved) {
-              // Git Bash on Windows returns Unix-style paths like /c/Users/...
-              const normalized =
-                process.platform === "win32" && resolved.match(/^\/[a-z]\//)
-                  ? resolved.replace(/^\/([a-z])\//, (_, drive) => `${drive.toUpperCase()}:\\`).replace(/\//g, "\\")
-                  : resolved
-              if (!Instance.containsPath(normalized)) directories.add(normalized)
-            }
-          }
-        }
-
-        // cd covered by above check
-        if (command.length && command[0] !== "cd") {
-          patterns.add(command.join(" "))
-          always.add(BashArity.prefix(command).join(" ") + "*")
-        }
-      }
-
-      if (directories.size > 0) {
+      // Request external_directory permission if accessing paths outside project
+      if (analysis.externalDirectories.length > 0) {
         await ctx.ask({
           permission: "external_directory",
-          patterns: Array.from(directories),
-          always: Array.from(directories).map((x) => path.dirname(x) + "*"),
+          patterns: analysis.externalDirectories,
+          always: analysis.externalDirectories.map((x) => path.dirname(x) + "*"),
           metadata: {},
         })
       }
 
-      if (patterns.size > 0) {
+      // Request bash permission for command execution
+      if (analysis.commands.length > 0) {
         await ctx.ask({
           permission: "bash",
-          patterns: Array.from(patterns),
-          always: Array.from(always),
+          patterns: analysis.commands.map((c) => c.pattern),
+          always: analysis.commands.map((c) => c.alwaysPattern),
           metadata: {},
         })
       }
