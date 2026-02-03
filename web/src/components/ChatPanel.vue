@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
-import { MessagesSquare } from 'lucide-vue-next'
+import { MessagesSquare, FolderOpen } from 'lucide-vue-next'
 import type { Message, QuestionRequest, PermissionRequest } from '../api/client'
 import MessageItem from './MessageItem.vue'
 import AgentQuestion from './AgentQuestion.vue'
@@ -13,6 +13,8 @@ const props = defineProps<{
   pendingQuestions?: QuestionRequest[]
   pendingPermissions?: PermissionRequest[]
   sessionError?: { message: string; dismissable?: boolean } | null
+  currentDirectory?: string
+  canChangeDirectory?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -23,9 +25,36 @@ const emit = defineEmits<{
   (e: 'openSettings'): void
   (e: 'deletePart', messageId: string, partId: string): void
   (e: 'updatePart', messageId: string, partId: string, updates: { text?: string }): void
+  (e: 'changeDirectory', path: string): void
 }>()
 
 const scrollContainer = ref<HTMLDivElement>()
+const folderInputRef = ref<HTMLInputElement>()
+
+// 打开系统原生的文件夹选择器
+function openFolderSelector() {
+  folderInputRef.value?.click()
+}
+
+// 处理文件夹选择
+function handleFolderSelect(e: Event) {
+  const target = e.target as HTMLInputElement
+  if (target.files && target.files.length > 0) {
+    // webkitdirectory 会返回选中文件夹中的所有文件
+    // 我们需要从文件路径中提取目录路径
+    const firstFile = target.files[0]
+    // webkitRelativePath 格式: "foldername/subfolder/file.txt"
+    const relativePath = (firstFile as any).webkitRelativePath || ''
+    if (relativePath) {
+      // 获取选中的文件夹名称（相对路径的第一部分）
+      const folderName = relativePath.split('/')[0]
+      // 由于浏览器安全限制，无法获取完整的绝对路径
+      // 我们只能传递文件夹名称，让后端在当前工作目录下查找
+      emit('changeDirectory', folderName)
+    }
+    target.value = ''  // 重置以允许重新选择相同文件夹
+  }
+}
 
 watch(() => props.messages, async () => {
   await nextTick()
@@ -43,8 +72,8 @@ function scrollToBottom() {
   if (scrollContainer.value) {
     // Check if user is already near bottom to avoid annoying auto-scroll if they are reading history
     const isNearBottom = scrollContainer.value.scrollHeight - scrollContainer.value.scrollTop - scrollContainer.value.clientHeight < 100
-    
-    if (isNearBottom || props.messages.length <= 1) { 
+
+    if (isNearBottom || props.messages.length <= 1) {
        // Always scroll on simple cases
        scrollContainer.value.scrollTo({
         top: scrollContainer.value.scrollHeight,
@@ -80,6 +109,26 @@ function scrollToBottom() {
       </div>
       <p class="empty-state-title">Hello, I'm Nine1Bot</p>
       <p class="empty-state-description">How can I help you today?</p>
+
+      <!-- Directory Selector Button (shown only for draft/new sessions) -->
+      <div v-if="canChangeDirectory" class="directory-selector-section">
+        <!-- 隐藏的文件夹选择 input -->
+        <input
+          ref="folderInputRef"
+          type="file"
+          webkitdirectory
+          style="display: none"
+          @change="handleFolderSelect"
+        />
+
+        <button class="directory-btn" @click="openFolderSelector">
+          <FolderOpen :size="20" />
+          <span class="directory-btn-text">
+            {{ currentDirectory ? `工作目录: ${currentDirectory.split('/').pop()}` : '选择工作目录' }}
+          </span>
+        </button>
+        <p class="directory-hint">选择一个工作目录来开始你的项目</p>
+      </div>
     </div>
 
     <!-- Messages -->
@@ -172,6 +221,56 @@ function scrollToBottom() {
   font-size: 16px;
 }
 
+.directory-selector-section {
+  margin-top: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.directory-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 32px;
+  background: var(--bg-secondary);
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.directory-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.directory-btn:hover svg {
+  color: var(--accent);
+}
+
+.directory-btn svg {
+  color: var(--text-muted);
+  transition: color 0.2s ease;
+}
+
+.directory-btn-text {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.directory-hint {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
 .bottom-spacer {
   height: 48px;
 }
@@ -226,4 +325,3 @@ function scrollToBottom() {
   to { opacity: 1; transform: translateY(0); }
 }
 </style>
-

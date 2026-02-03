@@ -311,15 +311,16 @@ export const api = {
     return true
   },
 
-  // 更新会话（重命名等）
-  async updateSession(sessionId: string, updates: { title?: string }): Promise<Session> {
+  // 更新会话（重命名、修改工作目录等）
+  async updateSession(sessionId: string, updates: { title?: string; directory?: string }): Promise<Session> {
     const res = await fetch(`${BASE_URL}/session/${sessionId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates)
     })
     if (!res.ok) {
-      throw new Error(`Failed to update session: ${res.status}`)
+      const errorData = await res.json().catch(() => ({}))
+      throw new Error(errorData.error || `Failed to update session: ${res.status}`)
     }
     const data = await res.json()
     const session = data.data || data
@@ -414,6 +415,27 @@ export const api = {
     const res = await fetch(`${BASE_URL}/project`)
     const data = await res.json()
     return data.data || []
+  },
+
+  // 浏览目录（用于目录选择器）
+  async browseDirectory(path: string = '~'): Promise<{
+    path: string
+    parent: string | null
+    items: Array<{
+      name: string
+      path: string
+      type: 'file' | 'directory'
+      size?: number
+      modified?: number
+    }>
+  }> {
+    const params = new URLSearchParams({ path })
+    const res = await fetch(`${BASE_URL}/browse?${params}`)
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to browse directory: ${res.status}`)
+    }
+    return res.json()
   },
 
   // 订阅事件流（带自动重连）

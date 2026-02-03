@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { ChevronsLeft, ChevronsRight, MessageSquare, Plus, Folder, MessagesSquare, Pencil, Trash2, X, Check, Loader2, Square } from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
 import FileTree from './FileTree.vue'
+import DirectorySelector from './DirectorySelector.vue'
 
 defineProps<{
   collapsed: boolean
@@ -12,6 +13,9 @@ defineProps<{
   files: FileItem[]
   filesLoading: boolean
   activeTab: 'sessions' | 'files'
+  // Working directory
+  currentDirectory: string
+  canChangeDirectory: boolean
   // Parallel session props
   isSessionRunning: (sessionId: string) => boolean
   runningCount: number
@@ -28,6 +32,7 @@ const emit = defineEmits<{
   'rename-session': [sessionId: string, title: string]
   'file-click': [path: string]
   'abort-session': [sessionId: string]
+  'change-directory': [directory: string]
 }>()
 
 // 重命名状态
@@ -136,18 +141,23 @@ function getSessionTitle(session: Session): string {
     <div class="sidebar-content" v-if="!collapsed">
       <!-- Sessions Tab -->
       <div v-if="activeTab === 'sessions'" class="session-list">
-        <!-- 草稿会话（新对话） -->
-        <div
-          v-if="isDraftSession"
-          class="session-item active draft"
-        >
-          <div class="session-icon">
-            <Plus :size="16" />
+        <!-- 草稿会话（新对话）+ 目录选择器 -->
+        <div v-if="isDraftSession" class="draft-session-container">
+          <div class="session-item active draft">
+            <div class="session-icon">
+              <Plus :size="16" />
+            </div>
+            <div class="session-item-content">
+              <span class="session-item-title">新对话</span>
+              <span class="session-item-time">未保存</span>
+            </div>
           </div>
-          <div class="session-item-content">
-            <span class="session-item-title">新对话</span>
-            <span class="session-item-time">未保存</span>
-          </div>
+          <!-- 目录选择器 -->
+          <DirectorySelector
+            :model-value="currentDirectory"
+            :disabled="!canChangeDirectory"
+            @update:model-value="(val) => emit('change-directory', val)"
+          />
         </div>
         <div
           v-for="session in sessions"
@@ -399,6 +409,20 @@ function getSessionTitle(session: Session): string {
   background: var(--accent);
   color: white;
   box-shadow: 0 2px 8px var(--accent-glow);
+}
+
+/* 草稿会话容器样式 */
+.draft-session-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  margin-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.draft-session-container .session-item {
+  margin: 0;
 }
 
 /* 草稿会话样式 */

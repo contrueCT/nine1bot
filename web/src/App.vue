@@ -42,6 +42,9 @@ const {
   clearSessionError,
   deleteSession,
   renameSession,
+  // 工作目录管理
+  changeDirectory,
+  canChangeDirectory,
   // 新增功能
   deleteMessagePart,
   updateMessagePart,
@@ -239,6 +242,8 @@ function closeFileViewer() {
       :files="files"
       :filesLoading="filesLoading"
       :activeTab="sidebarTab"
+      :currentDirectory="currentDirectory"
+      :canChangeDirectory="canChangeDirectory()"
       :isSessionRunning="isSessionRunning"
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
@@ -251,6 +256,7 @@ function closeFileViewer() {
       @rename-session="renameSession"
       @file-click="handleFileClick"
       @abort-session="abortSession"
+      @change-directory="changeDirectory"
     />
 
     <!-- Main Content -->
@@ -277,6 +283,8 @@ function closeFileViewer() {
           :pendingQuestions="pendingQuestions"
           :pendingPermissions="pendingPermissions"
           :sessionError="sessionError"
+          :currentDirectory="currentDirectory"
+          :canChangeDirectory="canChangeDirectory()"
           @question-answered="(id, answers) => answerQuestion(id, answers)"
           @question-rejected="rejectQuestion"
           @permission-responded="respondPermission"
@@ -284,6 +292,7 @@ function closeFileViewer() {
           @open-settings="openSettings"
           @delete-part="handleDeletePart"
           @update-part="handleUpdatePart"
+          @change-directory="changeDirectory"
         />
         <InputBox
           :disabled="isLoading"
