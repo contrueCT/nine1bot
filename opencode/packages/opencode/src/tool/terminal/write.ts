@@ -1,6 +1,9 @@
 import z from "zod"
+import path from "path"
 import { Tool } from "../tool"
 import { AgentTerminal } from "../../pty/agent-terminal"
+import { CommandAnalyzer } from "../command-analyzer"
+import { Instance } from "../../project/instance"
 
 export const TerminalWriteTool = Tool.define("terminal_write", {
   description: `Send input to a terminal session.
@@ -60,6 +63,39 @@ Examples:
     // Add Enter key if requested (default: true)
     if (params.pressEnter !== false && !input.endsWith("\n") && !input.endsWith("\r")) {
       input += "\n"
+    }
+
+    // Security check: analyze command and request permissions if needed
+    const analysis = await CommandAnalyzer.analyze(input, Instance.directory)
+
+    if (analysis.isCommand && analysis.requiresPermission) {
+      // Request external_directory permission if accessing paths outside project
+      if (analysis.externalDirectories.length > 0) {
+        await ctx.ask({
+          permission: "external_directory",
+          patterns: analysis.externalDirectories,
+          always: analysis.externalDirectories.map((x) => path.dirname(x) + "*"),
+          metadata: {
+            tool: "terminal_write",
+            terminalId: params.id,
+            terminalName: info.name,
+          },
+        })
+      }
+
+      // Request bash permission for command execution
+      if (analysis.commands.length > 0) {
+        await ctx.ask({
+          permission: "bash",
+          patterns: analysis.commands.map((c) => c.pattern),
+          always: analysis.commands.map((c) => c.alwaysPattern),
+          metadata: {
+            tool: "terminal_write",
+            terminalId: params.id,
+            terminalName: info.name,
+          },
+        })
+      }
     }
 
     const success = AgentTerminal.write(params.id, input)

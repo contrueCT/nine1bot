@@ -136,6 +136,8 @@ export interface TodoItem {
   content: string  // 任务内容
   status: string   // pending, in_progress, completed, cancelled
   priority: string // high, medium, low
+  activeForm?: string  // 任务执行时显示的进行时态描述 (e.g., 'Running tests')
+  planMode?: boolean   // 是否为规划模式中的任务
 }
 
 // === File Content Types ===

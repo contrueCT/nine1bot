@@ -157,12 +157,19 @@ onUnmounted(() => {
 // 所以这里不再监听 currentDirectory 的变化来重新加载文件
 // 文件浏览始终显示项目根目录的内容
 
-async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>) {
+async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean) {
   // sendMessage 会自动处理草稿模式，在发送前创建会话
   const model = currentProvider.value && currentModel.value
     ? { providerID: currentProvider.value, modelID: currentModel.value }
     : undefined
-  await sendMessage(content, model, files)
+
+  // 如果是规划模式，在消息前添加指令
+  let finalContent = content
+  if (planMode) {
+    finalContent = `[规划模式] 请先制定详细的执行计划，列出所有待办事项，等待我确认后再执行。\n\n${content}`
+  }
+
+  await sendMessage(finalContent, model, files)
 }
 
 function handleNewSession() {
