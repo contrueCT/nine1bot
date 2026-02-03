@@ -318,5 +318,50 @@ export const FileRoutes = lazy(() =>
           interactive,
         })
       },
+    )
+    .get(
+      "/file/download",
+      describeRoute({
+        summary: "Download file",
+        description: "Download a file by path. Used for files sent via send_file tool.",
+        operationId: "file.download",
+        responses: {
+          200: {
+            description: "File content",
+          },
+          404: {
+            description: "File not found",
+          },
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          path: z.string(),
+        }),
+      ),
+      async (c) => {
+        const path = await import("path")
+        const filepath = c.req.valid("query").path
+
+        // Normalize path for security
+        const normalizedPath = path.normalize(filepath)
+
+        const file = Bun.file(normalizedPath)
+        if (!(await file.exists())) {
+          return c.json({ error: "File not found" }, 404)
+        }
+
+        const filename = path.basename(normalizedPath)
+        const mime = file.type || "application/octet-stream"
+
+        return c.body(await file.arrayBuffer(), {
+          headers: {
+            "Content-Type": mime,
+            "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
+            "Content-Length": String(file.size),
+          },
+        })
+      },
     ),
 )
