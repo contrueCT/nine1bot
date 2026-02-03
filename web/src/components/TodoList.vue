@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ListTodo, Circle, CheckCircle2, Loader2, X } from 'lucide-vue-next'
+import { computed } from 'vue'
+import { ListTodo, Circle, CheckCircle2, Loader2, X, ClipboardList } from 'lucide-vue-next'
 import type { TodoItem } from '../api/client'
 
-defineProps<{
+const props = defineProps<{
   items: TodoItem[]
   isLoading?: boolean
 }>()
@@ -11,6 +12,21 @@ const emit = defineEmits<{
   close: []
   refresh: []
 }>()
+
+// 检测是否有 plan mode 任务
+const hasPlanMode = computed(() => props.items.some(item => item.planMode))
+
+// 获取当前进行中的任务
+const currentTask = computed(() => props.items.find(item => item.status === 'in_progress'))
+
+// 任务统计
+const stats = computed(() => {
+  const total = props.items.length
+  const completed = props.items.filter(item => item.status === 'completed').length
+  const pending = props.items.filter(item => item.status === 'pending').length
+  const inProgress = props.items.filter(item => item.status === 'in_progress').length
+  return { total, completed, pending, inProgress }
+})
 
 function getStatusIcon(status: string) {
   switch (status) {
@@ -68,15 +84,24 @@ function getPriorityText(priority: string) {
       return '低'
   }
 }
+
+// 获取显示文本（进行中的任务显示 activeForm，否则显示 content）
+function getDisplayText(item: TodoItem): string {
+  if (item.status === 'in_progress' && item.activeForm) {
+    return item.activeForm
+  }
+  return item.content
+}
 </script>
 
 <template>
-  <div class="todo-panel">
+  <div class="todo-panel" :class="{ 'plan-mode': hasPlanMode }">
     <div class="todo-header">
       <div class="todo-title">
-        <ListTodo :size="18" />
-        <span>待办事项</span>
-        <span class="todo-count" v-if="items.length">{{ items.length }}</span>
+        <ClipboardList v-if="hasPlanMode" :size="18" class="plan-icon" />
+        <ListTodo v-else :size="18" />
+        <span>{{ hasPlanMode ? '规划模式' : '待办事项' }}</span>
+        <span class="todo-count" v-if="items.length">{{ stats.completed }}/{{ stats.total }}</span>
       </div>
       <div class="todo-actions">
         <button class="action-btn" @click="emit('refresh')" :disabled="isLoading" title="刷新">
@@ -92,6 +117,17 @@ function getPriorityText(priority: string) {
           <X :size="16" />
         </button>
       </div>
+    </div>
+
+    <!-- 当前任务进度显示 -->
+    <div v-if="currentTask" class="current-task">
+      <Loader2 :size="14" class="spinning" />
+      <span class="current-task-text">{{ currentTask.activeForm || currentTask.content }}</span>
+    </div>
+
+    <!-- 进度条 -->
+    <div v-if="items.length > 0" class="progress-bar">
+      <div class="progress-fill" :style="{ width: `${(stats.completed / stats.total) * 100}%` }"></div>
     </div>
 
     <div class="todo-body custom-scrollbar">
@@ -110,7 +146,7 @@ function getPriorityText(priority: string) {
           v-for="item in items"
           :key="item.id"
           class="todo-item"
-          :class="getStatusClass(item.status)"
+          :class="[getStatusClass(item.status), { 'plan-item': item.planMode }]"
         >
           <component
             :is="getStatusIcon(item.status)"
@@ -119,12 +155,13 @@ function getPriorityText(priority: string) {
             :class="{ spinning: item.status === 'in_progress' }"
           />
           <div class="todo-content">
-            <div class="todo-text">{{ item.content }}</div>
+            <div class="todo-text">{{ getDisplayText(item) }}</div>
             <div class="todo-meta">
               <span class="todo-status">{{ getStatusText(item.status) }}</span>
               <span class="todo-priority" :class="getPriorityClass(item.priority)">
                 {{ getPriorityText(item.priority) }}
               </span>
+              <span v-if="item.planMode" class="todo-plan-badge">规划</span>
             </div>
           </div>
         </div>
@@ -142,6 +179,15 @@ function getPriorityText(priority: string) {
   flex-direction: column;
   max-height: 400px;
   box-shadow: var(--shadow-md);
+}
+
+.todo-panel.plan-mode {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 99, 102, 241), 0.2), var(--shadow-md);
+}
+
+.plan-icon {
+  color: var(--accent);
 }
 
 .todo-header {
@@ -335,5 +381,51 @@ function getPriorityText(priority: string) {
 .priority-low {
   background: var(--bg-tertiary);
   color: var(--text-muted);
+}
+
+/* Current task indicator */
+.current-task {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.current-task-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Progress bar */
+.progress-bar {
+  height: 3px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+/* Plan mode specific styles */
+.plan-item {
+  border-left: 2px solid var(--accent);
+}
+
+.todo-plan-badge {
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(var(--accent-rgb, 99, 102, 241), 0.15);
+  color: var(--accent);
 }
 </style>

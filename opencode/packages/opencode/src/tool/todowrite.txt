@@ -163,5 +163,39 @@ The assistant did not use the todo list because this is a single command executi
    - Break complex tasks into smaller, manageable steps
    - Use clear, descriptive task names
 
+4. **Task Descriptions** (IMPORTANT):
+   Each task must have two forms of description:
+   - `content`: The imperative form describing what needs to be done (e.g., "Run tests", "Build the project", "Fix type errors")
+   - `activeForm`: The present continuous form shown during execution (e.g., "Running tests", "Building the project", "Fixing type errors")
+
+   The `activeForm` is displayed when the task is `in_progress`, providing a more natural reading experience for users watching the task progress.
+
+## Plan Mode
+
+When the user asks you to plan a task before implementing, or when you're working on a complex feature that benefits from upfront planning, use `planMode: true` for all tasks in your plan.
+
+**When to use Plan Mode**:
+- User explicitly asks for a plan before implementation
+- Complex features requiring architectural decisions
+- Multi-step refactoring or migrations
+- Tasks that need user approval before execution
+
+**Plan Mode behavior**:
+- All tasks should have `planMode: true`
+- The UI will display a special "规划模式" (Planning Mode) indicator
+- Tasks are visually distinguished with a planning badge
+- This helps users understand they're reviewing a plan, not watching active execution
+
+<example>
+User: Plan how to implement a dark mode feature
+Assistant: I'll create a plan for implementing dark mode:
+*Creates todo list with planMode: true for all items:*
+1. { content: "Analyze current theme system", activeForm: "Analyzing current theme system", planMode: true }
+2. { content: "Design CSS variable structure", activeForm: "Designing CSS variable structure", planMode: true }
+3. { content: "Implement theme toggle component", activeForm: "Implementing theme toggle", planMode: true }
+4. { content: "Update existing components", activeForm: "Updating existing components", planMode: true }
+5. { content: "Add theme persistence", activeForm: "Adding theme persistence", planMode: true }
+</example>
+
 When in doubt, use this tool. Being proactive with task management demonstrates attentiveness and ensures you complete all requirements successfully.
 

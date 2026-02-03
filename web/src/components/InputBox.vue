@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { Send, Square } from 'lucide-vue-next'
+import { ref, watch, computed } from 'vue'
+import { Send, Square, Paperclip, X, FileText, ClipboardList } from 'lucide-vue-next'
+import { useFileUpload } from '../composables/useFileUpload'
 
 const props = defineProps<{
   disabled: boolean
@@ -8,23 +9,46 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  send: [content: string]
+  send: [content: string, files: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode: boolean]
   abort: []
 }>()
 
+// Plan Mode 状态
+const isPlanMode = ref(false)
+
 const input = ref('')
 const textareaRef = ref<HTMLTextAreaElement>()
+const fileInputRef = ref<HTMLInputElement>()
+const isDragging = ref(false)
+
+const { attachments, addFiles, removeFile, clearAll, toMessageParts } = useFileUpload()
+
+// Can send if has text or has ready attachments
+const canSend = computed(() => {
+  const hasText = input.value.trim().length > 0
+  const hasFiles = attachments.value.some(a => a.status === 'ready')
+  return (hasText || hasFiles) && !props.disabled
+})
 
 function handleSend() {
-  const content = input.value.trim()
-  if (!content || props.disabled) return
+  if (!canSend.value) return
 
-  emit('send', content)
+  const content = input.value.trim()
+  const fileParts = toMessageParts()
+
+  emit('send', content, fileParts, isPlanMode.value)
   input.value = ''
+  clearAll()
+  // 发送后关闭规划模式
+  isPlanMode.value = false
 
   if (textareaRef.value) {
     textareaRef.value.style.height = 'auto'
   }
+}
+
+function togglePlanMode() {
+  isPlanMode.value = !isPlanMode.value
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -46,12 +70,174 @@ function adjustHeight() {
 }
 
 watch(input, adjustHeight)
+
+// File upload handlers
+function handleFileSelect() {
+  fileInputRef.value?.click()
+}
+
+function handleFileChange(e: Event) {
+  const target = e.target as HTMLInputElement
+  if (target.files) {
+    addFiles(target.files)
+    target.value = ''  // Reset for same file selection
+  }
+}
+
+function handleDrop(e: DragEvent) {
+  e.preventDefault()
+  isDragging.value = false
+  if (e.dataTransfer?.files) {
+    addFiles(e.dataTransfer.files)
+  }
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault()
+  isDragging.value = true
+}
+
+function handleDragLeave(e: DragEvent) {
+  // Only set to false if leaving the container entirely
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const x = e.clientX
+  const y = e.clientY
+  if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+    isDragging.value = false
+  }
+}
+
+// Paste handler for images
+function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+
+  const imageFiles: File[] = []
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) {
+        imageFiles.push(file)
+      }
+    }
+  }
+
+  if (imageFiles.length > 0) {
+    e.preventDefault()
+    addFiles(imageFiles)
+  }
+}
+
+// Format file size
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+}
 </script>
 
 <template>
-  <div class="input-container">
-    <div class="input-glass-wrapper">
+  <div
+    class="input-container"
+    @drop="handleDrop"
+    @dragover="handleDragOver"
+    @dragleave="handleDragLeave"
+  >
+    <!-- Drag overlay -->
+    <div v-if="isDragging" class="drag-overlay">
+      <div class="drag-content">
+        <Paperclip :size="32" />
+        <span>Drop files here</span>
+      </div>
+    </div>
+
+    <!-- File attachments preview -->
+    <div v-if="attachments.length > 0" class="attachments-container">
+      <div class="attachments-list">
+        <div
+          v-for="file in attachments"
+          :key="file.id"
+          class="attachment-chip"
+          :class="{ 'error': file.status === 'error' }"
+        >
+          <!-- Image thumbnail or document icon -->
+          <img
+            v-if="file.preview"
+            :src="file.preview"
+            :alt="file.filename"
+            class="attachment-thumb"
+          />
+          <div v-else class="attachment-icon">
+            <FileText :size="16" />
+          </div>
+
+          <div class="attachment-info">
+            <span class="attachment-name">{{ file.filename }}</span>
+            <span class="attachment-size">{{ formatSize(file.size) }}</span>
+          </div>
+
+          <!-- Status indicator -->
+          <span v-if="file.status === 'processing'" class="attachment-status processing">
+            ...
+          </span>
+          <span v-else-if="file.status === 'error'" class="attachment-status error">
+            !
+          </span>
+
+          <!-- Remove button -->
+          <button
+            @click.stop="removeFile(file.id)"
+            class="attachment-remove"
+            title="Remove"
+          >
+            <X :size="14" />
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Plan Mode 指示器 -->
+    <div v-if="isPlanMode" class="plan-mode-indicator">
+      <ClipboardList :size="14" />
+      <span>规划模式已启用 - AI 将先制定计划再执行</span>
+      <button class="plan-mode-close" @click="isPlanMode = false" title="关闭规划模式">
+        <X :size="14" />
+      </button>
+    </div>
+
+    <div class="input-glass-wrapper" :class="{ 'plan-mode-active': isPlanMode }">
       <div class="input-box glass-input">
+        <!-- Hidden file input -->
+        <input
+          ref="fileInputRef"
+          type="file"
+          multiple
+          accept="image/*,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.txt,.md,.csv,.json,.xml"
+          style="display: none"
+          @change="handleFileChange"
+        />
+
+        <!-- Plan Mode 切换按钮 -->
+        <button
+          class="action-btn plan-btn"
+          :class="{ active: isPlanMode }"
+          @click="togglePlanMode"
+          :disabled="disabled && !isStreaming"
+          title="切换规划模式 - 让 AI 先制定计划再执行"
+        >
+          <ClipboardList :size="18" />
+        </button>
+
+        <!-- File upload button -->
+        <button
+          class="action-btn attach-btn"
+          @click="handleFileSelect"
+          :disabled="disabled && !isStreaming"
+          title="Attach file (images, PDF, Word, PPT, Excel, etc.)"
+        >
+          <Paperclip :size="18" />
+        </button>
+
         <textarea
           ref="textareaRef"
           v-model="input"
@@ -59,13 +245,14 @@ watch(input, adjustHeight)
           :placeholder="isStreaming ? '按 Enter 停止响应...' : 'Message Nine1Bot...'"
           rows="1"
           @keydown="handleKeydown"
+          @paste="handlePaste"
           class="custom-textarea"
         ></textarea>
         <div class="input-actions">
           <button
             class="action-btn"
             :class="isStreaming ? 'abort-btn' : 'send-btn'"
-            :disabled="(!input.trim() && !isStreaming) || (disabled && !isStreaming)"
+            :disabled="(!canSend && !isStreaming) || (disabled && !isStreaming)"
             @click="isStreaming ? emit('abort') : handleSend()"
             :title="isStreaming ? '停止' : '发送'"
           >
@@ -86,16 +273,136 @@ watch(input, adjustHeight)
 <style scoped>
 .input-container {
   width: 100%;
-  max-width: 800px; /* Limit width for better readability on large screens */
+  max-width: 800px;
   margin: 0 auto;
   position: relative;
   padding: 0 var(--space-md);
 }
 
+/* Drag overlay */
+.drag-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.drag-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* Attachments */
+.attachments-container {
+  margin-bottom: 8px;
+}
+
+.attachments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  font-size: 12px;
+  max-width: 200px;
+}
+
+.attachment-chip.error {
+  border-color: var(--error);
+  background: rgba(var(--error-rgb, 239, 68, 68), 0.1);
+}
+
+.attachment-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.attachment-icon {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.attachment-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.attachment-size {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.attachment-status {
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.attachment-status.processing {
+  color: var(--text-muted);
+}
+
+.attachment-status.error {
+  color: var(--error);
+}
+
+.attachment-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all var(--transition-fast);
+}
+
+.attachment-remove:hover {
+  background: var(--bg-secondary);
+  color: var(--error);
+}
+
 .input-glass-wrapper {
   position: relative;
-  border-radius: 24px; /* More capsule-like */
-  background: var(--bg-tertiary); /* Fallback */
+  border-radius: 24px;
+  background: var(--bg-tertiary);
   background: var(--bg-glass-strong);
   box-shadow: var(--shadow-lg);
   transition: all var(--transition-normal);
@@ -104,7 +411,7 @@ watch(input, adjustHeight)
 
 .input-glass-wrapper:focus-within {
   border-color: var(--accent-glow);
-  box-shadow: 0 0 24px -4px var(--accent-subtle); /* Softer glow */
+  box-shadow: 0 0 24px -4px var(--accent-subtle);
   transform: translateY(-2px);
 }
 
@@ -134,6 +441,11 @@ watch(input, adjustHeight)
   color: var(--text-muted);
 }
 
+.input-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .action-btn {
   display: flex;
   align-items: center;
@@ -144,6 +456,84 @@ watch(input, adjustHeight)
   border: none;
   cursor: pointer;
   transition: all var(--transition-fast);
+}
+
+.attach-btn {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.attach-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Plan Mode Button */
+.plan-btn {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.plan-btn:hover:not(:disabled) {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
+}
+
+.plan-btn.active {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb, 99, 102, 241), 0.15);
+}
+
+.plan-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Plan Mode Indicator */
+.plan-mode-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  margin-bottom: 8px;
+  background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
+  border: 1px solid rgba(var(--accent-rgb, 99, 102, 241), 0.3);
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.plan-mode-indicator span {
+  flex: 1;
+}
+
+.plan-mode-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all var(--transition-fast);
+}
+
+.plan-mode-close:hover {
+  background: rgba(var(--accent-rgb, 99, 102, 241), 0.2);
+}
+
+/* Plan Mode Active State */
+.input-glass-wrapper.plan-mode-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 99, 102, 241), 0.2);
 }
 
 .send-btn {
@@ -183,4 +573,3 @@ watch(input, adjustHeight)
   opacity: 0.6;
 }
 </style>
-

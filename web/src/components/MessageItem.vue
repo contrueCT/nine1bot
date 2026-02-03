@@ -67,10 +67,29 @@ const displayParts = computed(() => {
       result.push({ type: 'tool', part, index })
     } else if (part.type === 'reasoning') {
       result.push({ type: 'reasoning', part, index })
+    } else if (part.type === 'file') {
+      result.push({ type: 'file', part, index })
     }
   })
   return result
 })
+
+// Check if a file part is an image
+function isImageFile(part: MessagePart): boolean {
+  const mime = (part as any).mime || ''
+  return mime.startsWith('image/')
+}
+
+// Image preview state
+const previewImageUrl = ref<string | null>(null)
+
+function openImagePreview(url: string) {
+  previewImageUrl.value = url
+}
+
+function closeImagePreview() {
+  previewImageUrl.value = null
+}
 
 // Thinking block state
 const thinkingExpanded = ref(false)
@@ -119,6 +138,21 @@ function formatText(text: string): string {
               <div v-else class="loading-wave">
                 <span>.</span><span>.</span><span>.</span>
               </div>
+            </div>
+          </div>
+
+          <!-- File Attachment (Image) -->
+          <div v-else-if="item.type === 'file'" class="file-attachment">
+            <img
+              v-if="isImageFile(item.part)"
+              :src="(item.part as any).url"
+              :alt="(item.part as any).filename || 'Uploaded image'"
+              class="uploaded-image"
+              @click="openImagePreview((item.part as any).url)"
+            />
+            <div v-else class="file-badge">
+              <span class="file-icon">📄</span>
+              <span class="file-name">{{ (item.part as any).filename || 'File' }}</span>
             </div>
           </div>
 
@@ -171,6 +205,16 @@ function formatText(text: string): string {
       </div>
     </div>
   </div>
+
+  <!-- 图片预览模态框 -->
+  <Teleport to="body">
+    <div v-if="previewImageUrl" class="image-preview-overlay" @click="closeImagePreview">
+      <img :src="previewImageUrl" class="preview-image" @click.stop />
+      <button class="preview-close" @click="closeImagePreview">
+        <X :size="24" />
+      </button>
+    </div>
+  </Teleport>
 
   <!-- 删除确认对话框 - 使用 Teleport 移到 body 避免 transform 影响 -->
   <Teleport to="body">
@@ -536,6 +580,47 @@ function formatText(text: string): string {
   background: #dc2626;
 }
 
+/* File Attachment */
+.file-attachment {
+  margin: 8px 0;
+}
+
+.uploaded-image {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+  border: 1px solid var(--border-subtle);
+}
+
+.uploaded-image:hover {
+  transform: scale(1.02);
+}
+
+.file-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+
+.file-icon {
+  font-size: 18px;
+}
+
+.file-name {
+  color: var(--text-primary);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 </style>
 
 <!-- Non-scoped styles for Teleported dialog -->
@@ -641,6 +726,47 @@ function formatText(text: string): string {
 
 .dialog-footer .btn-danger:hover {
   background: #dc2626;
+}
+
+/* Image Preview Modal */
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+  cursor: pointer;
+}
+
+.preview-image {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  cursor: default;
+}
+
+.preview-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 50%;
+  color: white;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.preview-close:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 </style>
 
