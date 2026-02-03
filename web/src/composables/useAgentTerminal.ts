@@ -18,6 +18,8 @@ export interface TerminalScreen {
   screen: string
   screenAnsi: string
   cursor: { row: number; col: number }
+  /** 原始输出增量数据 */
+  outputData?: string
 }
 
 const terminals = ref<Map<string, AgentTerminalInfo>>(new Map())
@@ -115,7 +117,35 @@ export function useAgentTerminal() {
 
       case 'agent-terminal.screen': {
         const screen = properties as TerminalScreen
-        terminalScreens.value.set(screen.id, screen)
+        // 保留已有的 outputData，只更新其他字段
+        const existing = terminalScreens.value.get(screen.id)
+        terminalScreens.value.set(screen.id, {
+          ...screen,
+          outputData: existing?.outputData
+        })
+        break
+      }
+
+      case 'agent-terminal.output': {
+        // 原始输出增量事件
+        const { id, data } = properties as { id: string; data: string }
+        const existing = terminalScreens.value.get(id)
+        if (existing) {
+          // 更新 outputData，触发前端追加
+          terminalScreens.value.set(id, {
+            ...existing,
+            outputData: data
+          })
+        } else {
+          // 终端尚未初始化，创建占位
+          terminalScreens.value.set(id, {
+            id,
+            screen: '',
+            screenAnsi: '',
+            cursor: { row: 0, col: 0 },
+            outputData: data
+          })
+        }
         break
       }
 

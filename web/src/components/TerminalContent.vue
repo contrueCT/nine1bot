@@ -91,6 +91,7 @@ defineExpose({ fit })
           :rows="activeTerminal.rows"
           :cols="activeTerminal.cols"
           :status="activeTerminal.status"
+          :output-data="activeScreen.outputData"
         />
       </template>
       <template v-else-if="terminals.length === 0">

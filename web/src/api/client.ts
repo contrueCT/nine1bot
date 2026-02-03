@@ -946,6 +946,15 @@ export const agentTerminalApi = {
     return res.json()
   },
 
+  // 获取终端原始缓冲区（用于初始化时回放历史）
+  async getBuffer(id: string): Promise<{ buffer: string }> {
+    const res = await fetchWithTimeout(`${BASE_URL}/agent-terminal/${encodeURIComponent(id)}/buffer`)
+    if (!res.ok) {
+      throw new Error('Failed to fetch agent terminal buffer')
+    }
+    return res.json()
+  },
+
   // 向终端发送输入
   async write(id: string, data: string): Promise<boolean> {
     const res = await fetchWithTimeout(`${BASE_URL}/agent-terminal/${encodeURIComponent(id)}/write`, {
