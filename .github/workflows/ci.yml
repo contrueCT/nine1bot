@@ -48,6 +48,14 @@ jobs:
             platform: linux
             arch: x64
             can_test: true
+          - os: ubuntu-latest
+            platform: linux
+            arch: arm64
+            can_test: false  # Cross-compiled, cannot test on x64 runner
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+            can_test: true
           - os: windows-latest
             platform: windows
             arch: x64
