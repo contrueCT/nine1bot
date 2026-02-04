@@ -3,8 +3,6 @@ import { ref } from 'vue'
 import { ChevronsLeft, ChevronsRight, MessageSquare, Plus, Folder, MessagesSquare, Pencil, Trash2, X, Check, Loader2, Square } from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
 import FileTree from './FileTree.vue'
-import DirectorySelector from './DirectorySelector.vue'
-
 defineProps<{
   collapsed: boolean
   sessions: Session[]
@@ -152,12 +150,6 @@ function getSessionTitle(session: Session): string {
               <span class="session-item-time">未保存</span>
             </div>
           </div>
-          <!-- 目录选择器 -->
-          <DirectorySelector
-            :model-value="currentDirectory"
-            :disabled="!canChangeDirectory"
-            @update:model-value="(val: string) => emit('change-directory', val)"
-          />
         </div>
         <div
           v-for="session in sessions"
