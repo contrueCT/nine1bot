@@ -156,7 +156,7 @@ function getSessionTitle(session: Session): string {
           <DirectorySelector
             :model-value="currentDirectory"
             :disabled="!canChangeDirectory"
-            @update:model-value="(val) => emit('change-directory', val)"
+            @update:model-value="(val: string) => emit('change-directory', val)"
           />
         </div>
         <div
