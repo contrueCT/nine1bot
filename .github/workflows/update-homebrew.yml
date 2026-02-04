@@ -1,0 +1,112 @@
+name: Update Homebrew Formula
+
+# 当发布新 Release 时触发
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get release info
+        id: release
+        run: |
+          # 获取版本号（去掉 v 前缀）
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+
+      - name: Download and calculate SHA256
+        id: sha256
+        run: |
+          # 下载各平台文件并计算 SHA256
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}"
+
+          # macOS ARM64
+          curl -sL "$BASE_URL/nine1bot-darwin-arm64-${{ github.event.release.tag_name }}.tar.gz" -o darwin-arm64.tar.gz
+          SHA_DARWIN_ARM64=$(shasum -a 256 darwin-arm64.tar.gz | cut -d' ' -f1)
+          echo "darwin_arm64=$SHA_DARWIN_ARM64" >> $GITHUB_OUTPUT
+
+          # Linux ARM64
+          curl -sL "$BASE_URL/nine1bot-linux-arm64-${{ github.event.release.tag_name }}.tar.gz" -o linux-arm64.tar.gz
+          SHA_LINUX_ARM64=$(shasum -a 256 linux-arm64.tar.gz | cut -d' ' -f1)
+          echo "linux_arm64=$SHA_LINUX_ARM64" >> $GITHUB_OUTPUT
+
+          # Linux x64
+          curl -sL "$BASE_URL/nine1bot-linux-x64-${{ github.event.release.tag_name }}.tar.gz" -o linux-x64.tar.gz
+          SHA_LINUX_X64=$(shasum -a 256 linux-x64.tar.gz | cut -d' ' -f1)
+          echo "linux_x64=$SHA_LINUX_X64" >> $GITHUB_OUTPUT
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: contrueCT/homebrew-nine1bot
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Formula
+        run: |
+          cat > homebrew-tap/Formula/nine1bot.rb << 'EOF'
+          class Nine1bot < Formula
+            desc "Nine1Bot - AI Assistant"
+            homepage "https://github.com/contrueCT/nine1bot"
+            version "${{ steps.release.outputs.version }}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/contrueCT/nine1bot/releases/download/${{ steps.release.outputs.tag }}/nine1bot-darwin-arm64-${{ steps.release.outputs.tag }}.tar.gz"
+                sha256 "${{ steps.sha256.outputs.darwin_arm64 }}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/contrueCT/nine1bot/releases/download/${{ steps.release.outputs.tag }}/nine1bot-linux-arm64-${{ steps.release.outputs.tag }}.tar.gz"
+                sha256 "${{ steps.sha256.outputs.linux_arm64 }}"
+              end
+              on_intel do
+                url "https://github.com/contrueCT/nine1bot/releases/download/${{ steps.release.outputs.tag }}/nine1bot-linux-x64-${{ steps.release.outputs.tag }}.tar.gz"
+                sha256 "${{ steps.sha256.outputs.linux_x64 }}"
+              end
+            end
+
+            def install
+              bin.install "nine1bot"
+              libexec.install "bin"
+              libexec.install "skills"
+              libexec.install "web"
+              libexec.install "scripts"
+            end
+
+            def caveats
+              <<~EOS
+                Nine1Bot 已安装成功！
+
+                启动服务:
+                  nine1bot start
+
+                配置向导:
+                  nine1bot setup
+
+                更多帮助:
+                  nine1bot --help
+              EOS
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/nine1bot --version")
+            end
+          end
+          EOF
+
+      - name: Commit and push
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/nine1bot.rb
+          git commit -m "Update nine1bot to ${{ steps.release.outputs.tag }}"
+          git push

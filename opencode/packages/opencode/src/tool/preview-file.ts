@@ -133,27 +133,22 @@ function isPreviewSupported(mime: string, ext: string): boolean {
   return ext in MIME_TYPES
 }
 
-export const PreviewFileTool = Tool.define("preview_file", {
-  description: `Preview LOCAL files in the web interface. This is NOT a web/network tool.
+export const DisplayFileTool = Tool.define("display_file", {
+  description: `Display LOCAL files to the user in the web interface. This tool shows files visually to the user (not to you).
 
-Use this tool to display files visually to the user, such as:
+Use this tool to show files to the user:
 - Images (PNG, JPG, WebP, GIF, SVG)
-- Word documents (.docx only, not .doc or .pptx)
+- Word documents (.docx only)
 - Code files with syntax highlighting
 - Markdown rendered as HTML
-- HTML pages (optionally interactive in an iframe)
+- HTML pages (optionally interactive)
 
-The file will be displayed in a preview panel on the right side of the interface.
+The file will appear in a preview panel on the right side of the user's interface.
 
 Parameters:
-- path: File path to preview (absolute or relative to project root)
+- path: File path to display (absolute or relative to project root)
 - interactive: For HTML files, whether to enable full interaction (default: false)
-- title: Optional title for the preview panel
-
-Example:
-- Preview an image: preview_file({ path: "./output/chart.png" })
-- Preview code: preview_file({ path: "./src/App.vue" })
-- Interactive HTML: preview_file({ path: "./dist/index.html", interactive: true })`,
+- title: Optional title for the preview panel`,
   parameters: z.object({
     path: z.string().describe("The path to the file to preview"),
     interactive: z.boolean().optional().describe("For HTML files, enable full interaction"),
