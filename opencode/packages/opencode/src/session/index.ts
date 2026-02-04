@@ -133,12 +133,17 @@ export namespace Session {
         parentID: Identifier.schema("session").optional(),
         title: z.string().optional(),
         permission: Info.shape.permission,
+        directory: z.string().optional().meta({
+          description: "Working directory for the session. Defaults to server's current directory if not specified.",
+        }),
       })
       .optional(),
     async (input) => {
+      // Use provided directory or fall back to Instance.directory
+      const directory = input?.directory || Instance.directory
       return createNext({
         parentID: input?.parentID,
-        directory: Instance.directory,
+        directory,
         title: input?.title,
         permission: input?.permission,
       })

@@ -241,7 +241,7 @@ export const SessionRoutes = lazy(() =>
       "/:sessionID",
       describeRoute({
         summary: "Update session",
-        description: "Update properties of an existing session, such as title or other metadata.",
+        description: "Update properties of an existing session, such as title or other metadata. Directory can only be changed if the session has no messages.",
         operationId: "session.update",
         responses: {
           200: {
@@ -265,6 +265,7 @@ export const SessionRoutes = lazy(() =>
         "json",
         z.object({
           title: z.string().optional(),
+          directory: z.string().optional().describe("Working directory. Can only be changed if session has no messages."),
           time: z
             .object({
               archived: z.number().optional(),
@@ -276,11 +277,22 @@ export const SessionRoutes = lazy(() =>
         const sessionID = c.req.valid("param").sessionID
         const updates = c.req.valid("json")
 
+        // If directory is being updated, check if session has messages
+        if (updates.directory !== undefined) {
+          const messages = await Session.messages({ sessionID, limit: 1 })
+          if (messages.length > 0) {
+            return c.json({ error: "Cannot change directory after session has messages" }, 400)
+          }
+        }
+
         const updatedSession = await Session.update(
           sessionID,
           (session) => {
             if (updates.title !== undefined) {
               session.title = updates.title
+            }
+            if (updates.directory !== undefined) {
+              session.directory = updates.directory
             }
             if (updates.time?.archived !== undefined) session.time.archived = updates.time.archived
           },

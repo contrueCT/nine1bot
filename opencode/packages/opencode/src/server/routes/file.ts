@@ -363,5 +363,122 @@ export const FileRoutes = lazy(() =>
           },
         })
       },
+    )
+    .get(
+      "/browse",
+      describeRoute({
+        summary: "Browse directory",
+        description: "Browse any directory on the filesystem. Used for directory selection UI.",
+        operationId: "file.browse",
+        responses: {
+          200: {
+            description: "Directory contents",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    path: z.string(),
+                    parent: z.string().nullable(),
+                    items: z.array(
+                      z.object({
+                        name: z.string(),
+                        path: z.string(),
+                        type: z.enum(["file", "directory"]),
+                        size: z.number().optional(),
+                        modified: z.number().optional(),
+                      })
+                    ),
+                  })
+                ),
+              },
+            },
+          },
+          404: {
+            description: "Directory not found",
+          },
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          path: z.string().optional().default("~"),
+        }),
+      ),
+      async (c) => {
+        const path = await import("path")
+        const fs = await import("fs/promises")
+        const os = await import("os")
+
+        let dirPath = c.req.valid("query").path
+
+        // Handle home directory shortcut
+        if (dirPath === "~" || dirPath.startsWith("~/")) {
+          dirPath = dirPath.replace("~", os.homedir())
+        }
+
+        // Resolve to absolute path
+        dirPath = path.resolve(dirPath)
+
+        try {
+          const stat = await fs.stat(dirPath)
+          if (!stat.isDirectory()) {
+            return c.json({ error: "Path is not a directory" }, 400)
+          }
+
+          const entries = await fs.readdir(dirPath, { withFileTypes: true })
+          const items: Array<{
+            name: string
+            path: string
+            type: "file" | "directory"
+            size?: number
+            modified?: number
+          }> = []
+
+          for (const entry of entries) {
+            // Skip hidden files by default
+            if (entry.name.startsWith(".")) continue
+
+            const entryPath = path.join(dirPath, entry.name)
+            const isDir = entry.isDirectory()
+
+            try {
+              const entryStat = await fs.stat(entryPath)
+              items.push({
+                name: entry.name,
+                path: entryPath,
+                type: isDir ? "directory" : "file",
+                size: isDir ? undefined : entryStat.size,
+                modified: entryStat.mtimeMs,
+              })
+            } catch {
+              // Skip inaccessible entries
+            }
+          }
+
+          // Sort: directories first, then alphabetically
+          items.sort((a, b) => {
+            if (a.type !== b.type) {
+              return a.type === "directory" ? -1 : 1
+            }
+            return a.name.localeCompare(b.name)
+          })
+
+          const parent = dirPath === "/" ? null : path.dirname(dirPath)
+
+          return c.json({
+            path: dirPath,
+            parent,
+            items,
+          })
+        } catch (err: any) {
+          if (err.code === "ENOENT") {
+            return c.json({ error: "Directory not found" }, 404)
+          }
+          if (err.code === "EACCES") {
+            return c.json({ error: "Permission denied" }, 403)
+          }
+          throw err
+        }
+      },
     ),
 )

@@ -86,6 +86,45 @@ export function useSession() {
   }
 
   /**
+   * 更改当前会话的工作目录
+   * 只能在草稿模式或会话没有消息时更改
+   */
+  async function changeDirectory(directory: string) {
+    // 如果是草稿模式，直接更新本地状态
+    if (isDraftSession.value) {
+      currentDirectory.value = directory
+      return
+    }
+
+    // 如果有当前会话且没有消息，尝试更新会话的目录
+    if (currentSession.value && messages.value.length === 0) {
+      try {
+        const updated = await api.updateSession(currentSession.value.id, { directory })
+        currentSession.value = updated
+        currentDirectory.value = updated.directory
+
+        // 更新本地会话列表
+        const index = sessions.value.findIndex(s => s.id === updated.id)
+        if (index !== -1) {
+          sessions.value[index] = updated
+        }
+      } catch (error) {
+        console.error('Failed to change directory:', error)
+        throw error
+      }
+    } else if (messages.value.length > 0) {
+      throw new Error('无法修改已有消息的会话工作目录')
+    }
+  }
+
+  /**
+   * 检查当前会话是否可以更改工作目录
+   */
+  function canChangeDirectory(): boolean {
+    return isDraftSession.value || (currentSession.value !== null && messages.value.length === 0)
+  }
+
+  /**
    * 实际创建会话（内部方法，发送消息时调用）
    */
   async function _createSessionInternal(directory: string): Promise<Session> {
@@ -729,6 +768,9 @@ export function useSession() {
     clearSessionError,
     deleteSession,
     renameSession,
+    // 工作目录管理
+    changeDirectory,
+    canChangeDirectory,
     // 消息管理
     deleteMessagePart,
     updateMessagePart,
