@@ -5,6 +5,7 @@ import type { Message, QuestionRequest, PermissionRequest } from '../api/client'
 import MessageItem from './MessageItem.vue'
 import AgentQuestion from './AgentQuestion.vue'
 import PermissionRequestVue from './PermissionRequest.vue'
+import DirectoryBrowser from './DirectoryBrowser.vue'
 
 const props = defineProps<{
   messages: Message[]
@@ -29,31 +30,30 @@ const emit = defineEmits<{
 }>()
 
 const scrollContainer = ref<HTMLDivElement>()
-const folderInputRef = ref<HTMLInputElement>()
+const showDirectoryBrowser = ref(false)
 
-// 打开系统原生的文件夹选择器
-function openFolderSelector() {
-  folderInputRef.value?.click()
+// 打开目录浏览器弹窗
+function openDirectoryBrowser() {
+  showDirectoryBrowser.value = true
 }
 
-// 处理文件夹选择
-function handleFolderSelect(e: Event) {
-  const target = e.target as HTMLInputElement
-  if (target.files && target.files.length > 0) {
-    // webkitdirectory 会返回选中文件夹中的所有文件
-    // 我们需要从文件路径中提取目录路径
-    const firstFile = target.files[0]
-    // webkitRelativePath 格式: "foldername/subfolder/file.txt"
-    const relativePath = (firstFile as any).webkitRelativePath || ''
-    if (relativePath) {
-      // 获取选中的文件夹名称（相对路径的第一部分）
-      const folderName = relativePath.split('/')[0]
-      // 由于浏览器安全限制，无法获取完整的绝对路径
-      // 我们只能传递文件夹名称，让后端在当前工作目录下查找
-      emit('changeDirectory', folderName)
-    }
-    target.value = ''  // 重置以允许重新选择相同文件夹
-  }
+// 处理目录选择
+function handleDirectorySelect(path: string) {
+  showDirectoryBrowser.value = false
+  emit('changeDirectory', path)
+}
+
+// 取消目录选择
+function handleDirectoryCancel() {
+  showDirectoryBrowser.value = false
+}
+
+// 获取目录显示名称
+function getDirectoryName(path: string): string {
+  if (!path || path === '~' || path === '.') return ''
+  // 处理 Windows 和 Unix 路径
+  const parts = path.replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1] || path
 }
 
 watch(() => props.messages, async () => {
@@ -112,19 +112,10 @@ function scrollToBottom() {
 
       <!-- Directory Selector Button (shown only for draft/new sessions) -->
       <div v-if="canChangeDirectory" class="directory-selector-section">
-        <!-- 隐藏的文件夹选择 input -->
-        <input
-          ref="folderInputRef"
-          type="file"
-          webkitdirectory
-          style="display: none"
-          @change="handleFolderSelect"
-        />
-
-        <button class="directory-btn" @click="openFolderSelector">
+        <button class="directory-btn" @click="openDirectoryBrowser">
           <FolderOpen :size="20" />
           <span class="directory-btn-text">
-            {{ currentDirectory ? `工作目录: ${currentDirectory.split('/').pop()}` : '选择工作目录' }}
+            {{ currentDirectory && getDirectoryName(currentDirectory) ? `工作目录: ${getDirectoryName(currentDirectory)}` : '选择工作目录' }}
           </span>
         </button>
         <p class="directory-hint">选择一个工作目录来开始你的项目</p>
@@ -166,6 +157,14 @@ function scrollToBottom() {
       <!-- Added extra space at bottom for scrolling past the input box -->
       <div class="bottom-spacer"></div>
     </div>
+
+    <!-- Directory Browser Modal -->
+    <DirectoryBrowser
+      :visible="showDirectoryBrowser"
+      :initial-path="currentDirectory || '~'"
+      @select="handleDirectorySelect"
+      @cancel="handleDirectoryCancel"
+    />
   </div>
 </template>
 
