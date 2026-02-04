@@ -94,7 +94,7 @@ const showFileViewer = ref(false)
 const showTodoList = ref(false)
 
 const sidebarCollapsed = ref(false)
-const sidebarTab = ref<'sessions' | 'files'>('sessions')
+const sidebarNav = ref<'chats' | 'projects' | 'code'>('chats')
 
 // 保存 watch 停止函数以便在 unmount 时清理
 let stopSessionWatch: (() => void) | null = null
@@ -238,7 +238,7 @@ function closeFileViewer() {
       :isDraftSession="isDraftSession"
       :files="files"
       :filesLoading="filesLoading"
-      :activeTab="sidebarTab"
+      :activeNav="sidebarNav"
       :isSessionRunning="isSessionRunning"
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
@@ -246,11 +246,13 @@ function closeFileViewer() {
       @select-session="selectSession"
       @new-session="handleNewSession"
       @toggle-directory="toggleDirectory"
-      @change-tab="(tab) => sidebarTab = tab"
+      @change-nav="(nav: 'chats' | 'projects' | 'code') => sidebarNav = nav"
       @delete-session="deleteSession"
       @rename-session="renameSession"
       @file-click="handleFileClick"
       @abort-session="abortSession"
+      @open-settings="openSettings"
+      @open-search="() => {}"
     />
 
     <!-- Main Content -->

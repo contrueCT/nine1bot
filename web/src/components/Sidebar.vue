@@ -1,17 +1,20 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { ChevronsLeft, ChevronsRight, MessageSquare, Plus, Folder, MessagesSquare, Pencil, Trash2, X, Check, Loader2, Square } from 'lucide-vue-next'
+import { ref, computed } from 'vue'
+import { 
+  PanelLeftClose, PanelLeft, MessageSquare, Plus, Search, 
+  FolderOpen, Code2, Sparkles, Pencil, Trash2, X, Check, 
+  Loader2, Square, ChevronRight, User
+} from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
-import FileTree from './FileTree.vue'
 
-defineProps<{
+const props = defineProps<{
   collapsed: boolean
   sessions: Session[]
   currentSession: Session | null
   isDraftSession: boolean
   files: FileItem[]
   filesLoading: boolean
-  activeTab: 'sessions' | 'files'
+  activeNav: 'chats' | 'projects' | 'code'
   // Parallel session props
   isSessionRunning: (sessionId: string) => boolean
   runningCount: number
@@ -23,12 +26,17 @@ const emit = defineEmits<{
   'select-session': [session: Session]
   'new-session': []
   'toggle-directory': [file: FileItem]
-  'change-tab': [tab: 'sessions' | 'files']
+  'change-nav': [nav: 'chats' | 'projects' | 'code']
   'delete-session': [sessionId: string]
   'rename-session': [sessionId: string, title: string]
   'file-click': [path: string]
   'abort-session': [sessionId: string]
+  'open-settings': []
+  'open-search': []
 }>()
+
+// 当前展开的 Recents 区域
+const showRecents = ref(true)
 
 // 重命名状态
 const renamingSession = ref<Session | null>(null)
@@ -36,6 +44,11 @@ const newTitle = ref('')
 
 // 删除确认状态
 const deletingSession = ref<Session | null>(null)
+
+// 最近的会话（只显示前5个）
+const recentSessions = computed(() => {
+  return props.sessions.slice(0, 8)
+})
 
 function startRename(session: Session, event: Event) {
   event.stopPropagation()
@@ -71,144 +84,142 @@ function doDelete() {
   cancelDelete()
 }
 
-function formatTime(session: Session): string {
-  // 优先使用 createdAt，否则使用 time.created
-  const timestamp = session.createdAt
-    ? new Date(session.createdAt).getTime()
-    : session.time?.created
-
-  if (!timestamp) return ''
-
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffMins = Math.floor(diffMs / 60000)
-  const diffHours = Math.floor(diffMs / 3600000)
-  const diffDays = Math.floor(diffMs / 86400000)
-
-  if (diffMins < 1) return '刚刚'
-  if (diffMins < 60) return `${diffMins}分钟前`
-  if (diffHours < 24) return `${diffHours}小时前`
-  if (diffDays < 7) return `${diffDays}天前`
-  return date.toLocaleDateString()
-}
-
 function getSessionTitle(session: Session): string {
   return session.title || `会话 ${session.id.slice(0, 6)}`
 }
 </script>
 
 <template>
-  <aside class="sidebar glass" :class="{ collapsed }">
+  <aside class="sidebar claude-style" :class="{ collapsed }">
+    <!-- Header: Brand + Collapse -->
     <div class="sidebar-header">
       <div class="brand-area" v-if="!collapsed">
-        <div class="brand-logo">N</div>
-        <span class="sidebar-logo">Nine1Bot</span>
-        <div v-if="runningCount > 0" class="running-badge" :title="`${runningCount} 个 agent 正在运行`">
-          {{ runningCount }}/{{ maxParallelAgents }}
-        </div>
+        <span class="brand-text">Nine1Bot</span>
       </div>
-      <button class="btn btn-ghost btn-icon sm toggle-btn" @click="emit('toggle-collapse')" :title="collapsed ? '展开侧边栏' : '折叠侧边栏'">
-        <ChevronsLeft v-if="!collapsed" :size="18" />
-        <ChevronsRight v-else :size="18" />
+      <button class="collapse-btn" @click="emit('toggle-collapse')" :title="collapsed ? '展开' : '折叠'">
+        <PanelLeftClose v-if="!collapsed" :size="18" />
+        <PanelLeft v-else :size="18" />
       </button>
     </div>
 
-    <div class="sidebar-tabs" v-if="!collapsed">
-      <div class="tabs glass-tabs">
-        <button
-          class="tab"
-          :class="{ active: activeTab === 'sessions' }"
-          @click="emit('change-tab', 'sessions')"
-        >
-          <MessagesSquare :size="14" class="mr-1" /> 会话
-        </button>
-        <button
-          class="tab"
-          :class="{ active: activeTab === 'files' }"
-          @click="emit('change-tab', 'files')"
-        >
-          <Folder :size="14" class="mr-1" /> 文件
-        </button>
-      </div>
-    </div>
+    <!-- Navigation Menu (Claude style) -->
+    <nav class="sidebar-nav" v-if="!collapsed">
+      <!-- New Chat -->
+      <button class="nav-item new-chat" @click="emit('new-session')">
+        <Plus :size="18" />
+        <span>New chat</span>
+      </button>
 
-    <div class="sidebar-content" v-if="!collapsed">
-      <!-- Sessions Tab -->
-      <div v-if="activeTab === 'sessions'" class="session-list">
-        <!-- 草稿会话（新对话） -->
+      <!-- Search -->
+      <button class="nav-item" @click="emit('open-search')">
+        <Search :size="18" />
+        <span>Search</span>
+      </button>
+
+      <!-- Chats -->
+      <button 
+        class="nav-item" 
+        :class="{ active: activeNav === 'chats' }"
+        @click="emit('change-nav', 'chats')"
+      >
+        <MessageSquare :size="18" />
+        <span>Chats</span>
+      </button>
+
+      <!-- Projects -->
+      <button 
+        class="nav-item" 
+        :class="{ active: activeNav === 'projects' }"
+        @click="emit('change-nav', 'projects')"
+      >
+        <FolderOpen :size="18" />
+        <span>Projects</span>
+      </button>
+
+      <!-- Code -->
+      <button 
+        class="nav-item" 
+        :class="{ active: activeNav === 'code' }"
+        @click="emit('change-nav', 'code')"
+      >
+        <Code2 :size="18" />
+        <span>Code</span>
+      </button>
+    </nav>
+
+    <!-- Recents Section -->
+    <div class="sidebar-recents" v-if="!collapsed">
+      <div class="recents-header" @click="showRecents = !showRecents">
+        <span class="recents-label">Recents</span>
+        <ChevronRight :size="14" class="recents-chevron" :class="{ expanded: showRecents }" />
+      </div>
+
+      <div v-if="showRecents" class="recents-list">
+        <!-- Draft Session -->
         <div
           v-if="isDraftSession"
-          class="session-item active draft"
+          class="recent-item active"
         >
-          <div class="session-icon">
-            <Plus :size="16" />
-          </div>
-          <div class="session-item-content">
-            <span class="session-item-title">新对话</span>
-            <span class="session-item-time">未保存</span>
-          </div>
+          <Sparkles :size="14" class="recent-icon" />
+          <span class="recent-title">新对话</span>
         </div>
+
+        <!-- Recent Sessions -->
         <div
-          v-for="session in sessions"
+          v-for="session in recentSessions"
           :key="session.id"
-          class="session-item"
-          :class="{
+          class="recent-item"
+          :class="{ 
             active: !isDraftSession && currentSession?.id === session.id,
             running: isSessionRunning(session.id)
           }"
           @click="emit('select-session', session)"
         >
-          <div class="session-icon" :class="{ 'icon-running': isSessionRunning(session.id) }">
-            <Loader2 v-if="isSessionRunning(session.id)" :size="16" class="spin" />
-            <MessageSquare v-else :size="16" />
-          </div>
-          <div class="session-item-content">
-            <span class="session-item-title">{{ getSessionTitle(session) }}</span>
-            <span class="session-item-time">
-              <span v-if="isSessionRunning(session.id)" class="running-text">运行中</span>
-              <span v-else>{{ formatTime(session) }}</span>
-            </span>
-          </div>
-          <div class="session-actions" @click.stop>
+          <Loader2 v-if="isSessionRunning(session.id)" :size="14" class="recent-icon spin" />
+          <MessageSquare v-else :size="14" class="recent-icon" />
+          <span class="recent-title">{{ getSessionTitle(session) }}</span>
+          
+          <!-- Session Actions (on hover) -->
+          <div class="recent-actions" @click.stop>
             <button
               v-if="isSessionRunning(session.id)"
-              class="action-btn abort"
+              class="mini-btn abort"
               @click="emit('abort-session', session.id)"
               title="停止"
             >
-              <Square :size="12" fill="currentColor" />
+              <Square :size="10" fill="currentColor" />
             </button>
-            <button class="action-btn" @click="startRename(session, $event)" title="重命名">
-              <Pencil :size="14" />
+            <button class="mini-btn" @click="startRename(session, $event)" title="重命名">
+              <Pencil :size="10" />
             </button>
-            <button class="action-btn danger" @click="confirmDelete(session, $event)" title="删除">
-              <Trash2 :size="14" />
+            <button class="mini-btn danger" @click="confirmDelete(session, $event)" title="删除">
+              <Trash2 :size="10" />
             </button>
           </div>
         </div>
 
-        <div v-if="sessions.length === 0" class="empty-state">
-          <p class="text-muted text-sm">暂无会话</p>
-        </div>
-      </div>
-
-      <!-- Files Tab -->
-      <div v-if="activeTab === 'files'" class="files-container">
-        <FileTree
-          :files="files"
-          :isLoading="filesLoading"
-          @toggle="emit('toggle-directory', $event)"
-          @select="(node) => emit('file-click', node.path)"
-        />
+        <!-- View All Link -->
+        <button 
+          v-if="sessions.length > 8" 
+          class="view-all-btn"
+          @click="emit('change-nav', 'chats')"
+        >
+          查看全部 {{ sessions.length }} 个会话
+        </button>
       </div>
     </div>
 
+    <!-- User Profile Footer (Claude style) -->
     <div class="sidebar-footer" v-if="!collapsed">
-      <button class="btn btn-primary w-full new-chat-btn" @click="emit('new-session')">
-        <Plus :size="18" class="mr-1" />
-        <span>新建会话</span>
-      </button>
+      <div class="user-profile" @click="emit('open-settings')">
+        <div class="user-avatar">
+          <User :size="16" />
+        </div>
+        <div class="user-info">
+          <span class="user-name">用户</span>
+          <span class="user-plan">Nine1Bot</span>
+        </div>
+      </div>
     </div>
   </aside>
 
@@ -270,267 +281,297 @@ function getSessionTitle(session: Session): string {
 </template>
 
 <style scoped>
-.sidebar {
-  /* Overriding general styles for specifics */
+/* === Claude-Style Sidebar === */
+.sidebar.claude-style {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-secondary);
   border-right: 1px solid var(--border-subtle);
-  background: var(--bg-glass-strong);
-}
-
-.brand-area {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.brand-logo {
-  width: 24px;
-  height: 24px;
-  background: var(--accent);
-  color: white;
-  border-radius: 6px;
-  font-weight: 700;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 0 10px var(--accent-glow);
-}
-
-.sidebar-logo {
-  font-weight: 600;
-  letter-spacing: -0.5px;
 }
 
 .sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-md);
-  height: var(--header-height);
+  padding: var(--space-md) var(--space-md) var(--space-sm);
 }
 
-.sidebar.collapsed .sidebar-header {
-  justify-content: center;
-  padding: var(--space-sm);
-}
-
-.glass-tabs {
-  background: var(--bg-tertiary);
-  padding: 4px;
-  border-radius: var(--radius-md);
+.brand-area {
   display: flex;
-  gap: 4px;
-  border: none; /* Override global .tabs border */
-  margin: 0;    /* Override global .tabs margin */
+  align-items: center;
 }
 
-.tab {
-  flex: 1;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 500;
-  padding: 6px;
+.brand-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+
+.collapse-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--transition-fast);
-  color: var(--text-secondary);
-  background: transparent;
+  width: 28px;
+  height: 28px;
   border: none;
+  background: transparent;
+  color: var(--text-muted);
   cursor: pointer;
-  margin: 0; /* Override global .tab margin */
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
 }
 
-.tab.active {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
-}
-
-.tab:hover:not(.active) {
+.collapse-btn:hover {
+  background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
-.mr-1 { margin-right: 4px; }
-
-.sidebar-tabs {
-  padding: 0 var(--space-md) var(--space-sm);
+/* === Navigation Menu === */
+.sidebar-nav {
+  padding: var(--space-xs) var(--space-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.session-item {
+.nav-item {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  margin: 2px var(--space-sm);
-  padding: var(--space-sm);
+  padding: 10px var(--space-sm);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
   border-radius: var(--radius-md);
   transition: all var(--transition-fast);
-  border: 1px solid transparent;
+  width: 100%;
+}
+
+.nav-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.nav-item.active {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.nav-item.new-chat {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.nav-item svg {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.nav-item:hover svg,
+.nav-item.active svg {
+  opacity: 1;
+}
+
+/* === Recents Section === */
+.sidebar-recents {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-sm) 0;
+}
+
+.recents-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-xs) var(--space-md);
   cursor: pointer;
 }
 
-.session-item:hover {
+.recents-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.recents-chevron {
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.recents-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.recents-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.recent-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 8px var(--space-sm);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.recent-item:hover {
   background: var(--bg-tertiary);
 }
 
-.session-item.active {
+.recent-item.active {
   background: var(--accent-subtle);
-  border-color: var(--accent-subtle);
 }
 
-.session-icon {
+.recent-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.recent-item.active .recent-icon {
+  color: var(--accent);
+}
+
+.recent-title {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-item.active .recent-title {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.recent-item.running .recent-icon {
+  color: var(--accent);
+}
+
+/* Mini action buttons */
+.recent-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.recent-item:hover .recent-actions {
+  opacity: 1;
+}
+
+.mini-btn {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all var(--transition-fast);
+}
+
+.mini-btn:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.mini-btn.danger:hover {
+  color: var(--error);
+}
+
+.mini-btn.abort {
+  color: var(--error);
+}
+
+.view-all-btn {
+  width: 100%;
+  padding: 8px;
+  margin-top: var(--space-xs);
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.view-all-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* === User Profile Footer === */
+.sidebar-footer {
+  padding: var(--space-sm) var(--space-md);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.user-profile:hover {
+  background: var(--bg-tertiary);
+}
+
+.user-avatar {
   width: 32px;
   height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
+  border-radius: 50%;
   color: var(--text-muted);
-  flex-shrink: 0;
-  transition: all var(--transition-fast);
 }
 
-.session-item:hover .session-icon {
-  color: var(--text-secondary);
-}
-
-.session-item.active .session-icon {
-  background: var(--accent);
-  color: white;
-  box-shadow: 0 2px 8px var(--accent-glow);
-}
-
-/* 草稿会话样式 */
-.session-item.draft {
-  border-style: dashed;
-  opacity: 0.9;
-}
-
-.session-item.draft .session-icon {
-  background: var(--bg-tertiary);
-  color: var(--accent);
-}
-
-.session-item.draft .session-item-time {
-  color: var(--accent);
-  font-style: italic;
-}
-
-.session-item-content {
-  flex: 1;
-  min-width: 0;
+.user-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
-.session-item-title {
+.user-name {
+  font-size: 13px;
   font-weight: 500;
-  font-size: 14px;
-}
-
-.files-container {
-  padding: var(--space-xs);
-}
-
-.new-chat-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 40px;
-  font-weight: 600;
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
-  border: none;
-  box-shadow: 0 4px 12px var(--accent-glow);
-}
-
-.new-chat-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px var(--accent-glow);
-}
-
-/* Session actions */
-.session-actions {
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-}
-
-.session-item:hover .session-actions {
-  opacity: 1;
-}
-
-.action-btn {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.action-btn:hover {
-  background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
-.action-btn.danger:hover {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--error, #ef4444);
-}
-
-.action-btn.abort {
-  background: var(--error, #ef4444);
-  color: white;
-}
-
-.action-btn.abort:hover {
-  background: #dc2626;
-}
-
-/* Running badge in header */
-.running-badge {
-  background: var(--accent);
-  color: white;
+.user-plan {
   font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-weight: 600;
-  animation: pulse-badge 2s ease-in-out infinite;
+  color: var(--text-muted);
 }
 
-@keyframes pulse-badge {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
-
-/* Running session styles */
-.session-item.running .session-icon {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.session-item.running.active .session-icon {
-  background: var(--accent);
-  color: white;
-}
-
-.icon-running {
-  animation: pulse-icon 2s ease-in-out infinite;
-}
-
-@keyframes pulse-icon {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
+/* === Animations === */
 .spin {
   animation: spin 1s linear infinite;
 }
@@ -540,14 +581,14 @@ function getSessionTitle(session: Session): string {
   to { transform: rotate(360deg); }
 }
 
-.running-text {
-  color: var(--accent);
-  font-weight: 500;
+/* === Collapsed State === */
+.sidebar.collapsed {
+  width: var(--sidebar-collapsed-width);
 }
 
-/* Show abort button always for running sessions */
-.session-item.running .session-actions {
-  opacity: 1;
+.sidebar.collapsed .sidebar-header {
+  justify-content: center;
+  padding: var(--space-sm);
 }
 
 </style>
