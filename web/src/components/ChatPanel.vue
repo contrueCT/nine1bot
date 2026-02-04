@@ -107,7 +107,7 @@ function scrollToBottom() {
         <button class="directory-btn" @click="openDirectoryBrowser">
           <FolderOpen :size="20" />
           <span class="directory-btn-text">
-            {{ currentDirectory ? `工作目录: ${currentDirectory}` : '选择工作目录' }}
+            {{ currentDirectory ? `工作目录: ${currentDirectory.split('/').pop() || currentDirectory}` : '选择工作目录' }}
           </span>
         </button>
         <p class="directory-hint">选择一个工作目录来开始你的项目</p>

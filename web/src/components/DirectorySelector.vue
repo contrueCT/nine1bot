@@ -6,26 +6,14 @@ defineProps<{
   disabled?: boolean
 }>()
 
-const emit = defineEmits<{
-  (e: 'update:modelValue', value: string): void
-}>()
-
-function handleClick() {
-  // Trigger the parent to open directory browser
-  emit('update:modelValue', '')
-}
 </script>
 
 <template>
   <div class="directory-selector" :class="{ disabled }">
-    <button 
-      class="directory-selector-btn" 
-      :disabled="disabled"
-      @click="handleClick"
-    >
+    <div class="directory-selector-display">
       <Folder :size="14" />
       <span class="directory-path">{{ modelValue || '未选择目录' }}</span>
-    </button>
+    </div>
   </div>
 </template>
 
@@ -40,7 +28,7 @@ function handleClick() {
   pointer-events: none;
 }
 
-.directory-selector-btn {
+.directory-selector-display {
   width: 100%;
   display: flex;
   align-items: center;
@@ -51,17 +39,6 @@ function handleClick() {
   border-radius: 6px;
   color: var(--text-secondary);
   font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.directory-selector-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-  border-color: var(--accent);
-}
-
-.directory-selector-btn:disabled {
-  cursor: not-allowed;
 }
 
 .directory-path {

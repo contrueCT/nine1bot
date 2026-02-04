@@ -28,8 +28,8 @@ async function browse(path: string) {
     currentPath.value = result.path
     parent.value = result.parent
     items.value = result.items.filter(item => item.type === 'directory')
-  } catch (e: any) {
-    error.value = e.message || '无法加载目录'
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : '无法加载目录'
     console.error('Failed to browse directory:', e)
   } finally {
     isLoading.value = false
