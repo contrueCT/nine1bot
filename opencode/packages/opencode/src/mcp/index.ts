@@ -162,6 +162,9 @@ export namespace MCP {
       await refreshTools(serverName, client).catch((error) => {
         log.error("failed to refresh tools after notification", { server: serverName, error })
       })
+      await refreshResources(serverName, client).catch((error) => {
+        log.error("failed to refresh resources after notification", { server: serverName, error })
+      })
       Bus.publish(ToolsChanged, { server: serverName })
     })
   }
@@ -207,14 +210,12 @@ export namespace MCP {
     const toolsResult = await withTimeout(client.listTools(), timeout ?? DEFAULT_TIMEOUT)
     const s = await state()
     s.tools[serverName] = toolsResult.tools.map(toToolInfo)
-    return s.tools[serverName]
   }
 
   async function refreshResources(serverName: string, client: MCPClient, timeout?: number) {
     const resourcesResult = await withTimeout(client.listResources(), timeout ?? DEFAULT_TIMEOUT)
     const s = await state()
     s.resources[serverName] = resourcesResult.resources.map(toResourceInfo)
-    return s.resources[serverName]
   }
 
   // Store transports for OAuth servers to allow finishing auth
@@ -731,8 +732,12 @@ export namespace MCP {
     const startedAt = Date.now()
     try {
       const toolsResult = await withTimeout(client.listTools(), timeout)
+      const resourcesResult = await withTimeout(client.listResources(), timeout).catch(() => undefined)
       const s = await state()
       s.tools[serverName] = toolsResult.tools.map(toToolInfo)
+      if (resourcesResult) {
+        s.resources[serverName] = resourcesResult.resources.map(toResourceInfo)
+      }
       s.status[serverName] = { status: "connected" }
       delete s.reconnect[serverName]
 
@@ -741,6 +746,7 @@ export namespace MCP {
         checkedAt: new Date().toISOString(),
         latencyMs: Date.now() - startedAt,
         tools: toolsResult.tools.length,
+        resources: resourcesResult?.resources.length,
       }
       s.health[serverName] = health
       return health
@@ -756,6 +762,10 @@ export namespace MCP {
   }
 
   export async function health(serverName: string): Promise<Health> {
+    const existingFlight = healthInFlight.get(serverName)
+    if (existingFlight) return existingFlight
+
+    const flight = (async () => {
     const cfg = await Config.get()
     const config = cfg.mcp ?? {}
     const entry = config[serverName]
@@ -810,6 +820,14 @@ export namespace MCP {
     }
 
     return pingServer(serverName, result.mcpClient, entry)
+    })()
+
+    healthInFlight.set(serverName, flight)
+    try {
+      return await flight
+    } finally {
+      healthInFlight.delete(serverName)
+    }
   }
 
   async function attemptReconnect(serverName: string, entry: Config.Mcp) {
@@ -872,6 +890,14 @@ export namespace MCP {
         if (reconnect && now < reconnect.nextAt) continue
         await attemptReconnect(name, entry)
       }
+
+      if (status?.status === "needs_auth" || status?.status === "needs_client_registration") {
+        s.health[name] = {
+          ok: false,
+          checkedAt: new Date().toISOString(),
+          error: "authentication required",
+        }
+      }
     }
   }
 
@@ -888,6 +914,7 @@ export namespace MCP {
 
   function stopMcpHealthMonitor() {
     healthMonitorStarted = false
+    Scheduler.unregister("mcp-health-monitor")
   }
 
   export async function clients() {
@@ -1346,3 +1373,4 @@ export namespace MCP {
     return expired ? "expired" : "authenticated"
   }
 }
+  const healthInFlight = new Map<string, Promise<Health>>()

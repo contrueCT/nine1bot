@@ -62,10 +62,8 @@ const mcpSummary = computed(() => {
 })
 
 onMounted(async () => {
-  // 先加载 providers（包含 connected 和 defaults），再加载配置
-  await loadProviders()
-  await loadConfig()
-  await loadMcpServers()
+  // 并行加载基础配置，MCP 在展开下拉时再加载
+  await Promise.all([loadProviders(), loadConfig()])
   document.addEventListener('click', handleClickOutside)
 })
 
