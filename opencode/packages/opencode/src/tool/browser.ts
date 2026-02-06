@@ -15,12 +15,35 @@ async function bridgeRequest<T = unknown>(
   path: string,
   options?: { method?: string; body?: unknown }
 ): Promise<BridgeResponse<T>> {
-  const response = await fetch(`${BRIDGE_URL}${path}`, {
-    method: options?.method ?? "GET",
-    headers: options?.body ? { "Content-Type": "application/json" } : undefined,
-    body: options?.body ? JSON.stringify(options.body) : undefined,
-  })
-  return response.json() as Promise<BridgeResponse<T>>
+  try {
+    const response = await fetch(`${BRIDGE_URL}${path}`, {
+      method: options?.method ?? "GET",
+      headers: options?.body ? { "Content-Type": "application/json" } : undefined,
+      body: options?.body ? JSON.stringify(options.body) : undefined,
+    })
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: `HTTP ${response.status}: ${response.statusText}`,
+      }
+    }
+
+    const contentType = response.headers.get("content-type") || ""
+    if (!contentType.includes("application/json")) {
+      return {
+        ok: false,
+        error: `Unexpected content-type: ${contentType}`,
+      }
+    }
+
+    return await response.json() as BridgeResponse<T>
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
 }
 
 const BROWSER_TABS_DESCRIPTION = `List all browser tabs that can be controlled.
