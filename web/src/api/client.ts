@@ -517,6 +517,7 @@ export interface McpServer {
   error?: string
   tools?: McpTool[]
   resources?: McpResource[]
+  health?: McpHealth
 }
 
 export interface McpTool {
@@ -530,6 +531,15 @@ export interface McpResource {
   name?: string
   description?: string
   mimeType?: string
+}
+
+export interface McpHealth {
+  ok: boolean
+  checkedAt: string
+  latencyMs?: number
+  tools?: number
+  resources?: number
+  error?: string
 }
 
 // MCP 配置类型
@@ -590,7 +600,7 @@ export interface Config {
 // === Extended API ===
 export const mcpApi = {
   // 获取所有 MCP 服务器状态
-  // 后端返回 Record<string, MCP.Status>，转换为数组
+  // 后端返回 Record<string, MCP.StatusInfo>，转换为数组
   async list(): Promise<McpServer[]> {
     const res = await fetch(`${BASE_URL}/mcp`)
     const data = await res.json()
@@ -601,7 +611,8 @@ export const mcpApi = {
         status: info.status || 'disconnected',
         error: info.error,
         tools: info.tools || [],
-        resources: info.resources || []
+        resources: info.resources || [],
+        health: info.health
       }))
     }
     return []
@@ -652,6 +663,14 @@ export const mcpApi = {
     })
     const data = await res.json()
     return { url: data.authorizationUrl || data.url }
+  },
+
+  async health(name: string): Promise<McpHealth> {
+    const res = await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}/health`, {
+      method: 'POST'
+    })
+    const data = await res.json()
+    return data
   }
 }
 

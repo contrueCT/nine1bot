@@ -94,8 +94,23 @@ export namespace ModelsDev {
       .catch(() => undefined)
     if (snapshot) return snapshot
     if (Flag.OPENCODE_DISABLE_MODELS_FETCH) return {}
-    const json = await fetch(`${url()}/api.json`).then((x) => x.text())
-    return JSON.parse(json)
+    try {
+      const response = await fetch(`${url()}/api.json`)
+      if (!response.ok) {
+        log.error("Failed to fetch models.dev", {
+          status: response.status,
+          statusText: response.statusText,
+        })
+        return {}
+      }
+      const json = await response.text()
+      return JSON.parse(json)
+    } catch (error) {
+      log.error("Failed to fetch models.dev", {
+        error,
+      })
+      return {}
+    }
   })
 
   export async function get() {
