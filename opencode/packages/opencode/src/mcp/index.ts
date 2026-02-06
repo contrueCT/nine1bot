@@ -24,10 +24,14 @@ import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import open from "open"
 import { checkAndReloadMcpConfig, startMcpConfigWatcher, stopMcpConfigWatcher } from "./hot-reload"
+import { Scheduler } from "../scheduler"
 
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
   const DEFAULT_TIMEOUT = 30_000
+  const HEALTH_CHECK_INTERVAL = 60_000
+  const RECONNECT_BASE_DELAY = 10_000
+  const RECONNECT_MAX_DELAY = 5 * 60_000
 
   export const Resource = z
     .object({
@@ -39,6 +43,37 @@ export namespace MCP {
     })
     .meta({ ref: "McpResource" })
   export type Resource = z.infer<typeof Resource>
+
+  export const ToolInfo = z
+    .object({
+      name: z.string(),
+      description: z.string().optional(),
+      inputSchema: z.any().optional(),
+    })
+    .meta({ ref: "McpToolInfo" })
+  export type ToolInfo = z.infer<typeof ToolInfo>
+
+  export const ResourceInfo = z
+    .object({
+      uri: z.string(),
+      name: z.string().optional(),
+      description: z.string().optional(),
+      mimeType: z.string().optional(),
+    })
+    .meta({ ref: "McpResourceInfo" })
+  export type ResourceInfo = z.infer<typeof ResourceInfo>
+
+  export const Health = z
+    .object({
+      ok: z.boolean(),
+      checkedAt: z.string(),
+      latencyMs: z.number().int().nonnegative().optional(),
+      tools: z.number().int().nonnegative().optional(),
+      resources: z.number().int().nonnegative().optional(),
+      error: z.string().optional(),
+    })
+    .meta({ ref: "McpHealth" })
+  export type Health = z.infer<typeof Health>
 
   export const ToolsChanged = BusEvent.define(
     "mcp.tools.changed",
@@ -109,10 +144,24 @@ export namespace MCP {
     })
   export type Status = z.infer<typeof Status>
 
+  export const StatusInfo = Status.and(
+    z.object({
+      tools: z.array(ToolInfo).optional(),
+      resources: z.array(ResourceInfo).optional(),
+      health: Health.optional(),
+    }),
+  ).meta({
+    ref: "McpStatusInfo",
+  })
+  export type StatusInfo = z.infer<typeof StatusInfo>
+
   // Register notification handlers for MCP client
   function registerNotificationHandlers(client: MCPClient, serverName: string) {
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
       log.info("tools list changed notification received", { server: serverName })
+      await refreshTools(serverName, client).catch((error) => {
+        log.error("failed to refresh tools after notification", { server: serverName, error })
+      })
       Bus.publish(ToolsChanged, { server: serverName })
     })
   }
@@ -148,6 +197,26 @@ export namespace MCP {
     })
   }
 
+  async function getServerTimeout(serverName: string, entry?: Config.Mcp) {
+    const cfg = await Config.get()
+    const defaultTimeout = cfg.experimental?.mcp_timeout ?? DEFAULT_TIMEOUT
+    return entry?.timeout ?? defaultTimeout
+  }
+
+  async function refreshTools(serverName: string, client: MCPClient, timeout?: number) {
+    const toolsResult = await withTimeout(client.listTools(), timeout ?? DEFAULT_TIMEOUT)
+    const s = await state()
+    s.tools[serverName] = toolsResult.tools.map(toToolInfo)
+    return s.tools[serverName]
+  }
+
+  async function refreshResources(serverName: string, client: MCPClient, timeout?: number) {
+    const resourcesResult = await withTimeout(client.listResources(), timeout ?? DEFAULT_TIMEOUT)
+    const s = await state()
+    s.resources[serverName] = resourcesResult.resources.map(toResourceInfo)
+    return s.resources[serverName]
+  }
+
   // Store transports for OAuth servers to allow finishing auth
   type TransportWithAuth = StreamableHTTPClientTransport | SSEClientTransport
   const pendingOAuthTransports = new Map<string, TransportWithAuth>()
@@ -155,10 +224,68 @@ export namespace MCP {
   // Prompt cache types
   type PromptInfo = Awaited<ReturnType<MCPClient["listPrompts"]>>["prompts"][number]
 
-  type ResourceInfo = Awaited<ReturnType<MCPClient["listResources"]>>["resources"][number]
+  type ResourceInfoRaw = Awaited<ReturnType<MCPClient["listResources"]>>["resources"][number]
   type McpEntry = NonNullable<Config.Info["mcp"]>[string]
   function isMcpConfigured(entry: McpEntry): entry is Config.Mcp {
     return typeof entry === "object" && entry !== null && "type" in entry
+  }
+
+  type ReconnectState = {
+    attempts: number
+    nextAt: number
+  }
+
+  function toToolInfo(tool: MCPToolDef): ToolInfo {
+    return {
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+    }
+  }
+
+  function toResourceInfo(resource: ResourceInfoRaw): ResourceInfo {
+    return {
+      uri: resource.uri,
+      name: resource.name,
+      description: resource.description,
+      mimeType: resource.mimeType,
+    }
+  }
+
+  function computeNextReconnect(attempts: number) {
+    const base = RECONNECT_BASE_DELAY
+    const delay = Math.min(base * Math.pow(2, Math.max(0, attempts - 1)), RECONNECT_MAX_DELAY)
+    const jitter = Math.floor(Math.random() * 1000)
+    return Date.now() + delay + jitter
+  }
+
+  async function markFailed(serverName: string, error: string) {
+    const s = await state()
+    const client = s.clients[serverName]
+    if (client) {
+      await client.close().catch((closeError) => {
+        log.error("Failed to close MCP client after error", { serverName, error: closeError })
+      })
+      delete s.clients[serverName]
+    }
+    s.status[serverName] = {
+      status: "failed",
+      error,
+    }
+    s.health[serverName] = {
+      ok: false,
+      checkedAt: new Date().toISOString(),
+      error,
+    }
+    delete s.tools[serverName]
+    delete s.resources[serverName]
+
+    const current = s.reconnect[serverName] ?? { attempts: 0, nextAt: 0 }
+    const attempts = current.attempts + 1
+    s.reconnect[serverName] = {
+      attempts,
+      nextAt: computeNextReconnect(attempts),
+    }
   }
 
   const state = Instance.state(
@@ -167,6 +294,10 @@ export namespace MCP {
       const config = cfg.mcp ?? {}
       const clients: Record<string, MCPClient> = {}
       const status: Record<string, Status> = {}
+      const tools: Record<string, ToolInfo[]> = {}
+      const resources: Record<string, ResourceInfo[]> = {}
+      const health: Record<string, Health> = {}
+      const reconnect: Record<string, ReconnectState> = {}
 
       await Promise.all(
         Object.entries(config).map(async ([key, mcp]) => {
@@ -189,20 +320,35 @@ export namespace MCP {
           if (result.mcpClient) {
             clients[key] = result.mcpClient
           }
+          if (result.tools) {
+            tools[key] = result.tools
+          }
+          if (result.resources) {
+            resources[key] = result.resources
+          }
+          if (result.health) {
+            health[key] = result.health
+          }
         }),
       )
 
       // 启动配置文件监听（用于热更新）
       startMcpConfigWatcher()
+      startMcpHealthMonitor()
 
       return {
         status,
         clients,
+        tools,
+        resources,
+        health,
+        reconnect,
       }
     },
     async (state) => {
       // 停止配置文件监听
       stopMcpConfigWatcher()
+      stopMcpHealthMonitor()
 
       await Promise.all(
         Object.values(state.clients).map((client) =>
@@ -277,6 +423,9 @@ export namespace MCP {
     }
     if (!result.mcpClient) {
       s.status[name] = result.status
+      if (result.health) {
+        s.health[name] = result.health
+      }
       return {
         status: s.status,
       }
@@ -290,6 +439,12 @@ export namespace MCP {
     }
     s.clients[name] = result.mcpClient
     s.status[name] = result.status
+    if (result.tools) {
+      s.tools[name] = result.tools
+    }
+    if (result.health) {
+      s.health[name] = result.health
+    }
 
     return {
       status: s.status,
@@ -302,6 +457,11 @@ export namespace MCP {
       return {
         mcpClient: undefined,
         status: { status: "disabled" as const },
+        health: {
+          ok: false,
+          checkedAt: new Date().toISOString(),
+          error: "disabled",
+        },
       }
     }
 
@@ -468,9 +628,15 @@ export namespace MCP {
       return {
         mcpClient: undefined,
         status,
+        health: {
+          ok: false,
+          checkedAt: new Date().toISOString(),
+          error: status.status === "failed" ? status.error : "connection failed",
+        },
       }
     }
 
+    const toolStart = Date.now()
     const result = await withTimeout(mcpClient.listTools(), mcp.timeout ?? DEFAULT_TIMEOUT).catch((err) => {
       log.error("failed to get tools from client", { key, error: err })
       return undefined
@@ -491,13 +657,28 @@ export namespace MCP {
           status: "failed" as const,
           error: "Failed to get tools",
         },
+        health: {
+          ok: false,
+          checkedAt: new Date().toISOString(),
+          error: "Failed to get tools",
+        },
       }
+    }
+
+    const tools = result.tools.map(toToolInfo)
+    const health: Health = {
+      ok: true,
+      checkedAt: new Date().toISOString(),
+      latencyMs: Date.now() - toolStart,
+      tools: tools.length,
     }
 
     log.info("create() successfully created client", { key, toolCount: result.tools.length })
     return {
       mcpClient,
       status,
+      tools,
+      health,
     }
   }
 
@@ -517,6 +698,196 @@ export namespace MCP {
     }
 
     return result
+  }
+
+  export async function overview(): Promise<Record<string, StatusInfo>> {
+    await checkAndReloadMcpConfig()
+
+    const s = await state()
+    const cfg = await Config.get()
+    const config = cfg.mcp ?? {}
+    const result: Record<string, StatusInfo> = {}
+
+    for (const [key, mcp] of Object.entries(config)) {
+      if (!isMcpConfigured(mcp)) continue
+      const status = s.status[key] ?? { status: "disabled" as const }
+      result[key] = {
+        ...status,
+        tools: s.tools[key],
+        resources: s.resources[key],
+        health: s.health[key],
+      }
+    }
+
+    return result
+  }
+
+  async function pingServer(
+    serverName: string,
+    client: MCPClient,
+    entry: Config.Mcp,
+  ): Promise<Health> {
+    const timeout = await getServerTimeout(serverName, entry)
+    const startedAt = Date.now()
+    try {
+      const toolsResult = await withTimeout(client.listTools(), timeout)
+      const s = await state()
+      s.tools[serverName] = toolsResult.tools.map(toToolInfo)
+      s.status[serverName] = { status: "connected" }
+      delete s.reconnect[serverName]
+
+      const health: Health = {
+        ok: true,
+        checkedAt: new Date().toISOString(),
+        latencyMs: Date.now() - startedAt,
+        tools: toolsResult.tools.length,
+      }
+      s.health[serverName] = health
+      return health
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await markFailed(serverName, message)
+      return {
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        error: message,
+      }
+    }
+  }
+
+  export async function health(serverName: string): Promise<Health> {
+    const cfg = await Config.get()
+    const config = cfg.mcp ?? {}
+    const entry = config[serverName]
+
+    if (!entry || !isMcpConfigured(entry)) {
+      return {
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        error: "MCP server not configured",
+      }
+    }
+    if (entry.enabled === false) {
+      return {
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        error: "MCP server disabled",
+      }
+    }
+
+    const s = await state()
+    const existing = s.clients[serverName]
+    if (existing) {
+      return pingServer(serverName, existing, entry)
+    }
+
+    const result = await create(serverName, entry)
+    s.status[serverName] = result.status
+    if (result.mcpClient) {
+      // Close existing client if present to prevent memory leaks
+      const existingClient = s.clients[serverName]
+      if (existingClient) {
+        await existingClient.close().catch((error) => {
+          log.error("Failed to close existing MCP client", { serverName, error })
+        })
+      }
+      s.clients[serverName] = result.mcpClient
+    }
+    if (result.tools) {
+      s.tools[serverName] = result.tools
+    }
+    if (result.health) {
+      s.health[serverName] = result.health
+    }
+
+    if (!result.mcpClient) {
+      const message = result.status.status === "failed" ? result.status.error : "Connection failed"
+      return {
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        error: message,
+      }
+    }
+
+    return pingServer(serverName, result.mcpClient, entry)
+  }
+
+  async function attemptReconnect(serverName: string, entry: Config.Mcp) {
+    const s = await state()
+    const result = await create(serverName, entry)
+    s.status[serverName] = result.status
+    if (result.mcpClient) {
+      const existingClient = s.clients[serverName]
+      if (existingClient) {
+        await existingClient.close().catch((error) => {
+          log.error("Failed to close existing MCP client", { serverName, error })
+        })
+      }
+      s.clients[serverName] = result.mcpClient
+    }
+    if (result.tools) {
+      s.tools[serverName] = result.tools
+    }
+    if (result.health) {
+      s.health[serverName] = result.health
+    }
+
+    if (result.status.status === "connected" && result.mcpClient) {
+      delete s.reconnect[serverName]
+      return
+    }
+
+    const current = s.reconnect[serverName] ?? { attempts: 0, nextAt: 0 }
+    const attempts = current.attempts + 1
+    s.reconnect[serverName] = {
+      attempts,
+      nextAt: computeNextReconnect(attempts),
+    }
+  }
+
+  async function monitorMcpHealth() {
+    const cfg = await Config.get()
+    const config = cfg.mcp ?? {}
+    const s = await state()
+    const now = Date.now()
+
+    for (const [name, entry] of Object.entries(config)) {
+      if (!isMcpConfigured(entry)) continue
+      if (entry.enabled === false) continue
+
+      const status = s.status[name]
+
+      if (status?.status === "connected") {
+        const client = s.clients[name]
+        if (!client) {
+          await markFailed(name, "Client missing")
+          continue
+        }
+        await pingServer(name, client, entry)
+        continue
+      }
+
+      if (status?.status === "failed") {
+        const reconnect = s.reconnect[name]
+        if (reconnect && now < reconnect.nextAt) continue
+        await attemptReconnect(name, entry)
+      }
+    }
+  }
+
+  let healthMonitorStarted = false
+  function startMcpHealthMonitor() {
+    if (healthMonitorStarted) return
+    healthMonitorStarted = true
+    Scheduler.register({
+      id: "mcp-health-monitor",
+      interval: HEALTH_CHECK_INTERVAL,
+      run: monitorMcpHealth,
+    })
+  }
+
+  function stopMcpHealthMonitor() {
+    healthMonitorStarted = false
   }
 
   export async function clients() {
@@ -560,6 +931,12 @@ export namespace MCP {
       }
       s.clients[name] = result.mcpClient
     }
+    if (result.tools) {
+      s.tools[name] = result.tools
+    }
+    if (result.health) {
+      s.health[name] = result.health
+    }
   }
 
   export async function disconnect(name: string) {
@@ -572,6 +949,10 @@ export namespace MCP {
       delete s.clients[name]
     }
     s.status[name] = { status: "disabled" }
+    delete s.tools[name]
+    delete s.resources[name]
+    delete s.health[name]
+    delete s.reconnect[name]
   }
 
   /**
@@ -587,6 +968,10 @@ export namespace MCP {
       delete s.clients[name]
     }
     delete s.status[name]
+    delete s.tools[name]
+    delete s.resources[name]
+    delete s.health[name]
+    delete s.reconnect[name]
     log.info("removed MCP server", { name })
   }
 
@@ -606,16 +991,18 @@ export namespace MCP {
 
       const toolsResult = await client.listTools().catch((e) => {
         log.error("failed to get tools", { clientName, error: e.message })
-        const failedStatus = {
-          status: "failed" as const,
-          error: e instanceof Error ? e.message : String(e),
-        }
-        s.status[clientName] = failedStatus
-        delete s.clients[clientName]
+        const message = e instanceof Error ? e.message : String(e)
+        void markFailed(clientName, message)
         return undefined
       })
       if (!toolsResult) {
         continue
+      }
+      s.tools[clientName] = toolsResult.tools.map(toToolInfo)
+      s.health[clientName] = {
+        ok: true,
+        checkedAt: new Date().toISOString(),
+        tools: toolsResult.tools.length,
       }
       const mcpConfig = config[clientName]
       const entry = isMcpConfigured(mcpConfig) ? mcpConfig : undefined
