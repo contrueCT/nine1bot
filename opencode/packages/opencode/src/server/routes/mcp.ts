@@ -19,14 +19,14 @@ export const McpRoutes = lazy(() =>
             description: "MCP server status",
             content: {
               "application/json": {
-                schema: resolver(z.record(z.string(), MCP.Status)),
+                schema: resolver(z.record(z.string(), MCP.StatusInfo)),
               },
             },
           },
         },
       }),
       async (c) => {
-        return c.json(await MCP.status())
+        return c.json(await MCP.overview())
       },
     )
     .post(
@@ -245,6 +245,31 @@ export const McpRoutes = lazy(() =>
         const { name } = c.req.valid("param")
         await MCP.disconnect(name)
         return c.json(true)
+      },
+    )
+    .post(
+      "/:name/health",
+      describeRoute({
+        summary: "Health check MCP server",
+        description: "Run a health check on a Model Context Protocol (MCP) server.",
+        operationId: "mcp.health",
+        responses: {
+          200: {
+            description: "MCP server health",
+            content: {
+              "application/json": {
+                schema: resolver(MCP.Health),
+              },
+            },
+          },
+          ...errors(404),
+        },
+      }),
+      validator("param", z.object({ name: z.string() })),
+      async (c) => {
+        const { name } = c.req.valid("param")
+        const health = await MCP.health(name)
+        return c.json(health)
       },
     ),
 )

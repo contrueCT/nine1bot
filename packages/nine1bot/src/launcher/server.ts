@@ -69,6 +69,12 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
         if (Object.keys(rest).length > 0) {
           opencodeConfig[key] = rest
         }
+      } else if (key === 'mcp') {
+        const { inheritOpencode, inheritClaudeCode, ...servers } = (value as any) || {}
+        opencodeConfig[key] = servers
+      } else if (key === 'provider') {
+        const { inheritOpencode, ...providers } = (value as any) || {}
+        opencodeConfig[key] = providers
       } else {
         opencodeConfig[key] = value
       }
