@@ -85,6 +85,23 @@
     //   },
     //   "enabled": true
     // }
+
+    // 浏览器控制（通过 Bridge Server，使用 CDP 协议）
+    // 注意：需要先启动 Bridge Server，或者让 Nine1Bot 自动启动
+    // "browser-control": {
+    //   "type": "remote",
+    //   "url": "http://127.0.0.1:18791",
+    //   "enabled": true
+    // }
+  },
+
+  // ===== 浏览器控制配置 =====
+  "browser": {
+    "enabled": true,
+    "bridgePort": 18793,
+    "cdpPort": 9223,
+    "autoLaunch": true,
+    "headless": false
   },
 
   // ===== 沙箱配置 =====
