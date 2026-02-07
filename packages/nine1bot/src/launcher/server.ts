@@ -52,7 +52,7 @@ export interface StartServerOptions {
 /**
  * Nine1Bot 特有的配置字段（需要从 opencode 配置中过滤掉）
  */
-const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills', 'sandbox']
+const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills', 'sandbox', 'browser']
 
 /**
  * 生成 opencode 兼容的配置文件
@@ -69,13 +69,22 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
         if (Object.keys(rest).length > 0) {
           opencodeConfig[key] = rest
         }
-      } else if (key === 'mcp') {
-        const { inheritOpencode, inheritClaudeCode, ...servers } = (value as any) || {}
-        opencodeConfig[key] = servers
-      } else if (key === 'provider') {
-        const { inheritOpencode, ...providers } = (value as any) || {}
-        opencodeConfig[key] = providers
-      } else {
+      }
+      // 特殊处理 mcp 字段：过滤掉 nine1bot 特有的继承控制字段
+      else if (key === 'mcp' && typeof value === 'object' && value !== null) {
+        const { inheritOpencode, inheritClaudeCode, ...mcpServers } = value as any
+        if (Object.keys(mcpServers).length > 0) {
+          opencodeConfig[key] = mcpServers
+        }
+      }
+      // 特殊处理 provider 字段：过滤掉 nine1bot 特有的继承控制字段
+      else if (key === 'provider' && typeof value === 'object' && value !== null) {
+        const { inheritOpencode, ...providers } = value as any
+        if (Object.keys(providers).length > 0) {
+          opencodeConfig[key] = providers
+        }
+      }
+      else {
         opencodeConfig[key] = value
       }
     }
