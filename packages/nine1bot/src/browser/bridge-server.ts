@@ -7,8 +7,7 @@
  */
 
 import { Hono } from 'hono'
-import { serve } from '@hono/node-server'
-import type { Server } from 'http'
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'http'
 import {
   listCdpTargets,
   createCdpTarget,
@@ -588,11 +587,43 @@ export async function startBridgeServer(options: BridgeServerOptions = {}): Prom
 
   const app = createBridgeApp()
 
-  const server = serve({
-    fetch: app.fetch,
-    port,
-    hostname: host,
-  }) as Server
+  // 使用 Node 原生 http.createServer 而非 @hono/node-server
+  // 避免 @hono/node-server 的 serve() 污染全局 Response，导致 Bun 环境下
+  // OpenCode 主服务的 Hono 路由返回 _Response 而非 Bun 原生 Response
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const url = `http://${host}:${port}${req.url || '/'}`
+    const headers = new Headers()
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (value) headers.set(key, Array.isArray(value) ? value.join(', ') : value)
+    }
+
+    // 读取请求体
+    const body = await new Promise<Buffer>((resolve) => {
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      req.on('end', () => resolve(Buffer.concat(chunks)))
+    })
+
+    const request = new Request(url, {
+      method: req.method || 'GET',
+      headers,
+      body: ['GET', 'HEAD'].includes(req.method || 'GET') ? undefined : body,
+    })
+
+    try {
+      const response = await app.fetch(request)
+      res.writeHead(response.status, Object.fromEntries(response.headers.entries()))
+      const arrayBuffer = await response.arrayBuffer()
+      res.end(Buffer.from(arrayBuffer))
+    } catch (err) {
+      res.writeHead(500)
+      res.end('Internal Server Error')
+    }
+  })
+
+  await new Promise<void>((resolve) => {
+    server.listen(port, host, () => resolve())
+  })
 
   // 创建 Extension Relay
   const extensionRelay = createExtensionRelay({
