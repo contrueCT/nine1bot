@@ -83,9 +83,13 @@
 
   /* Status */
   --success: #10b981;
+  --success-subtle: rgba(16, 185, 129, 0.15);
   --warning: #f59e0b;
+  --warning-subtle: rgba(245, 158, 11, 0.15);
   --error: #ef4444;
+  --error-subtle: rgba(239, 68, 68, 0.15);
   --info: #3b82f6;
+  --info-subtle: rgba(59, 130, 246, 0.15);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -137,9 +141,13 @@
 
   /* Status */
   --success: #2D8A5F;
+  --success-subtle: rgba(45, 138, 95, 0.1);
   --warning: #C68A28;
+  --warning-subtle: rgba(198, 138, 40, 0.1);
   --error: #C44536;
+  --error-subtle: rgba(196, 69, 54, 0.1);
   --info: #4A76A8;
+  --info-subtle: rgba(74, 118, 168, 0.1);
 
   /* Shadows - Softer, larger spread */
   --shadow-sm: 0 1px 3px rgba(44, 40, 37, 0.04);
@@ -677,6 +685,12 @@ a:hover {
   height: 44px;
 }
 
+.btn-sm {
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 0.8125rem;
+  height: 28px;
+}
+
 /* === Dropdown === */
 .dropdown {
   position: relative;
@@ -903,6 +917,10 @@ a:hover {
 .badge-accent {
   background: var(--accent-subtle);
   color: var(--accent);
+}
+
+.error-text {
+  color: var(--error);
 }
 
 /* === Input === */

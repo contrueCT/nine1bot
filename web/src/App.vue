@@ -385,21 +385,21 @@ function closeFileViewer() {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   animation: slideIn 0.3s ease-out;
 }
 
 .notification-toast.success {
-  border-color: var(--color-success);
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), var(--color-bg-elevated));
+  border-color: var(--success);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), var(--bg-elevated));
 }
 
 .notification-toast.info {
-  border-color: var(--color-accent);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), var(--color-bg-elevated));
+  border-color: var(--accent);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), var(--bg-elevated));
 }
 
 .notification-icon {
@@ -414,12 +414,12 @@ function closeFileViewer() {
 
 .notification-toast.success .notification-icon {
   background: rgba(34, 197, 94, 0.2);
-  color: var(--color-success);
+  color: var(--success);
 }
 
 .notification-toast.info .notification-icon {
   background: rgba(99, 102, 241, 0.2);
-  color: var(--color-accent);
+  color: var(--accent);
 }
 
 .notification-content {
@@ -431,17 +431,17 @@ function closeFileViewer() {
 }
 
 .notification-title {
-  font-size: var(--font-size-sm);
+  font-size: 0.875rem;
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .notification-message {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
 .notification-close {
@@ -452,7 +452,7 @@ function closeFileViewer() {
   height: 20px;
   border: none;
   background: transparent;
-  color: var(--color-text-muted);
+  color: var(--text-muted);
   cursor: pointer;
   border-radius: var(--radius-sm);
   flex-shrink: 0;
@@ -460,8 +460,8 @@ function closeFileViewer() {
 }
 
 .notification-close:hover {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 @keyframes slideIn {
