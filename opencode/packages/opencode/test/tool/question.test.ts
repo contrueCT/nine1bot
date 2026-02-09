@@ -8,6 +8,7 @@ const ctx = {
   messageID: "test-message",
   callID: "test-call",
   agent: "test-agent",
+  cwd: process.cwd(),
   abort: AbortSignal.any([]),
   messages: [],
   metadata: () => {},

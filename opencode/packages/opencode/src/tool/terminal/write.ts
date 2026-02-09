@@ -66,7 +66,7 @@ Examples:
     }
 
     // Security check: analyze command and request permissions if needed
-    const analysis = await CommandAnalyzer.analyze(input, Instance.directory)
+    const analysis = await CommandAnalyzer.analyze(input, ctx.cwd)
 
     if (analysis.isCommand && analysis.requiresPermission) {
       // Request external_directory permission if accessing paths outside project

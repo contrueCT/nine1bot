@@ -13,6 +13,7 @@ const ctx = {
   messageID: "",
   callID: "",
   agent: "build",
+  cwd: FIXTURES_DIR,
   abort: AbortSignal.any([]),
   messages: [],
   metadata: () => {},

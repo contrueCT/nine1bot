@@ -10,6 +10,7 @@ const baseCtx = {
   messageID: "",
   callID: "",
   agent: "build",
+  cwd: Instance.directory,
   abort: AbortSignal.any([]),
   messages: [],
   metadata: () => {},

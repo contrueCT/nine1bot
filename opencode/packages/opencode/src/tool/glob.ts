@@ -28,8 +28,8 @@ export const GlobTool = Tool.define("glob", {
       },
     })
 
-    let search = params.path ?? Instance.directory
-    search = path.isAbsolute(search) ? search : path.resolve(Instance.directory, search)
+    let search = params.path ?? ctx.cwd
+    search = path.isAbsolute(search) ? search : path.resolve(ctx.cwd, search)
 
     await assertExternalDirectory(ctx, search, { kind: "directory" })
 
