@@ -6,18 +6,19 @@ import { tmpdir } from "../fixture/fixture"
 import type { PermissionNext } from "../../src/permission/next"
 import { Truncate } from "../../src/tool/truncation"
 
+const projectRoot = path.join(__dirname, "../..")
+
 const ctx = {
   sessionID: "test",
   messageID: "",
   callID: "",
   agent: "build",
+  cwd: projectRoot,
   abort: AbortSignal.any([]),
   messages: [],
   metadata: () => {},
   ask: async () => {},
 }
-
-const projectRoot = path.join(__dirname, "../..")
 
 describe("tool.bash", () => {
   test("basic", async () => {

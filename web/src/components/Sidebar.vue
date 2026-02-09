@@ -15,6 +15,9 @@ const props = defineProps<{
   files: FileItem[]
   filesLoading: boolean
   activeNav: 'chats' | 'projects' | 'code'
+  // Working directory
+  currentDirectory: string
+  canChangeDirectory: boolean
   // Parallel session props
   isSessionRunning: (sessionId: string) => boolean
   runningCount: number
@@ -33,6 +36,7 @@ const emit = defineEmits<{
   'abort-session': [sessionId: string]
   'open-settings': []
   'open-search': []
+  'change-directory': [directory: string]
 }>()
 
 // 当前展开的 Recents 区域
@@ -117,8 +121,8 @@ function getSessionTitle(session: Session): string {
       </button>
 
       <!-- Chats -->
-      <button 
-        class="nav-item" 
+      <button
+        class="nav-item"
         :class="{ active: activeNav === 'chats' }"
         @click="emit('change-nav', 'chats')"
       >
@@ -127,8 +131,8 @@ function getSessionTitle(session: Session): string {
       </button>
 
       <!-- Projects -->
-      <button 
-        class="nav-item" 
+      <button
+        class="nav-item"
         :class="{ active: activeNav === 'projects' }"
         @click="emit('change-nav', 'projects')"
       >
@@ -137,8 +141,8 @@ function getSessionTitle(session: Session): string {
       </button>
 
       <!-- Code -->
-      <button 
-        class="nav-item" 
+      <button
+        class="nav-item"
         :class="{ active: activeNav === 'code' }"
         @click="emit('change-nav', 'code')"
       >

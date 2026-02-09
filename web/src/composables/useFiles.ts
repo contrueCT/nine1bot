@@ -11,6 +11,7 @@ export function useFiles() {
   const files = ref<FileTreeNode[]>([])
   const isLoading = ref(false)
   const currentPath = ref('')
+  const currentDirectory = ref<string | undefined>(undefined)
 
   // 文件内容查看
   const fileContent = ref<FileContent | null>(null)
@@ -22,11 +23,16 @@ export function useFiles() {
   const isSearching = ref(false)
   const searchError = ref<string | null>(null)
 
+  // 设置工作目录
+  function setDirectory(directory: string | undefined) {
+    currentDirectory.value = directory
+  }
+
   async function loadFiles(path: string = '') {
     try {
       isLoading.value = true
       currentPath.value = path
-      const items = await api.getFiles(path)
+      const items = await api.getFiles(path, currentDirectory.value)
 
       // 排序：目录在前，文件在后，按名称排序
       files.value = items
@@ -53,7 +59,7 @@ export function useFiles() {
 
     node.isLoading = true
     try {
-      const children = await api.getFiles(node.path)
+      const children = await api.getFiles(node.path, currentDirectory.value)
       node.children = children
         .map(item => ({ ...item, children: undefined, isExpanded: false, isLoading: false }))
         .sort((a, b) => {
@@ -73,7 +79,7 @@ export function useFiles() {
     isLoadingContent.value = true
     contentError.value = null
     try {
-      fileContent.value = await api.getFileContent(path)
+      fileContent.value = await api.getFileContent(path, currentDirectory.value)
     } catch (error: any) {
       console.error('Failed to load file content:', error)
       contentError.value = error.message || '无法加载文件内容'
@@ -119,6 +125,8 @@ export function useFiles() {
     files,
     isLoading,
     currentPath,
+    currentDirectory,
+    setDirectory,
     loadFiles,
     toggleDirectory,
     // 文件内容

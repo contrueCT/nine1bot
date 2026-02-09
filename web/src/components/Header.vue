@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { Sun, Moon, Settings, Square, Cpu, ChevronDown, PanelLeftOpen, Check, Minimize2, ListTodo, Server, RefreshCcw, Activity } from 'lucide-vue-next'
+import { Sun, Moon, Settings, Square, Cpu, ChevronDown, PanelLeftOpen, Check, Minimize2, ListTodo, Server, RefreshCcw, Activity, Folder } from 'lucide-vue-next'
 import type { Session } from '../api/client'
 import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
@@ -189,6 +189,9 @@ function getCurrentModelName(): string {
 
       <div class="session-info" v-if="session">
         <span class="session-title">{{ session.title || '新会话' }}</span>
+        <span v-if="session.directory && session.directory !== '.'" class="session-dir" :title="session.directory">
+          <Folder :size="12" /> {{ session.directory }}
+        </span>
       </div>
     </div>
 
@@ -525,12 +528,25 @@ function getCurrentModelName(): string {
 
 .session-info {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .session-title {
   font-weight: 600;
   font-size: 14px;
+}
+
+.session-dir {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dropdown-label {

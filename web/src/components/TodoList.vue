@@ -267,7 +267,7 @@ function getDisplayText(item: TodoItem): string {
 .loading-spinner {
   width: 24px;
   height: 24px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--border-default);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
@@ -293,7 +293,7 @@ function getDisplayText(item: TodoItem): string {
   padding: var(--space-sm);
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   transition: all var(--transition-fast);
 }
 
@@ -389,7 +389,7 @@ function getDisplayText(item: TodoItem): string {
   gap: var(--space-xs);
   padding: var(--space-sm) var(--space-md);
   background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
   font-size: 12px;
   color: var(--accent);
 }

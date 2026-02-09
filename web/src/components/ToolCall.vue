@@ -328,7 +328,7 @@ function formatSize(bytes: number): string {
 }
 
 .attachment-item:not(:last-child) {
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
   padding-bottom: var(--space-sm);
   margin-bottom: var(--space-xs);
 }

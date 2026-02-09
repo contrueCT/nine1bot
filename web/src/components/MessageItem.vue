@@ -61,6 +61,8 @@ marked.setOptions({
 const displayParts = computed(() => {
   const result: Array<{ type: string; part: MessagePart; index: number }> = []
   props.message.parts.forEach((part, index) => {
+    // 过滤 synthetic 文本（系统生成的上传描述等），不在用户气泡中显示
+    if (part.type === 'text' && (part as any).synthetic) return
     if (part.type === 'text' && part.text) {
       result.push({ type: 'text', part, index })
     } else if (part.type === 'tool') {
@@ -78,6 +80,14 @@ const displayParts = computed(() => {
 function isImageFile(part: MessagePart): boolean {
   const mime = (part as any).mime || ''
   return mime.startsWith('image/')
+}
+
+// 将 file:// URL 转为 HTTP URL（浏览器无法加载 file:// 协议）
+function resolveFileUrl(url: string): string {
+  if (url.startsWith('file://')) {
+    return `/file/upload?path=${encodeURIComponent(url.slice(7))}`
+  }
+  return url
 }
 
 // Image preview state
@@ -145,15 +155,15 @@ function formatText(text: string): string {
           <div v-else-if="item.type === 'file'" class="file-attachment">
             <img
               v-if="isImageFile(item.part)"
-              :src="(item.part as any).url"
+              :src="resolveFileUrl((item.part as any).url)"
               :alt="(item.part as any).filename || 'Uploaded image'"
               class="uploaded-image"
-              @click="openImagePreview((item.part as any).url)"
+              @click="openImagePreview(resolveFileUrl((item.part as any).url))"
             />
-            <div v-else class="file-badge">
+            <a v-else :href="resolveFileUrl((item.part as any).url)" target="_blank" class="file-badge">
               <span class="file-icon">📄</span>
               <span class="file-name">{{ (item.part as any).filename || 'File' }}</span>
-            </div>
+            </a>
           </div>
 
           <!-- Tool Call -->
@@ -594,6 +604,14 @@ function formatText(text: string): string {
   border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   font-size: 13px;
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.file-badge:hover {
+  background: var(--bg-elevated);
 }
 
 .file-icon {

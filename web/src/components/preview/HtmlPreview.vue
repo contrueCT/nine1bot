@@ -2,6 +2,7 @@
 import { computed, ref, onMounted, watch } from 'vue'
 import { RefreshCw, ExternalLink, Code, Eye } from 'lucide-vue-next'
 import type { FilePreviewInfo } from '../../composables/useFilePreview'
+import { decodeBase64Utf8 } from '../../utils/encoding'
 
 const props = defineProps<{
   preview: FilePreviewInfo
@@ -22,7 +23,7 @@ const iframeSrc = computed(() => {
 
 const iframeSrcdoc = computed(() => {
   if (props.preview.content) {
-    return atob(props.preview.content)
+    return decodeBase64Utf8(props.preview.content)
   }
   return null
 })
@@ -41,7 +42,7 @@ async function loadSource() {
   isLoading.value = true
   try {
     if (props.preview.content) {
-      sourceContent.value = atob(props.preview.content)
+      sourceContent.value = decodeBase64Utf8(props.preview.content)
     } else {
       const res = await fetch(`/file/preview/${props.preview.id}`)
       sourceContent.value = await res.text()

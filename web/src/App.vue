@@ -42,6 +42,9 @@ const {
   clearSessionError,
   deleteSession,
   renameSession,
+  // 工作目录管理
+  changeDirectory,
+  canChangeDirectory,
   // 新增功能
   deleteMessagePart,
   updateMessagePart,
@@ -69,6 +72,7 @@ const { handleSSEEvent: handlePreviewEvent } = useFilePreview()
 const {
   files,
   isLoading: filesLoading,
+  setDirectory: setFilesDirectory,
   loadFiles,
   toggleDirectory,
   // 文件查看
@@ -153,9 +157,11 @@ onUnmounted(() => {
   }
 })
 
-// 注意：currentDirectory 可能是绝对路径，但文件 API 只接受相对路径
-// 所以这里不再监听 currentDirectory 的变化来重新加载文件
-// 文件浏览始终显示项目根目录的内容
+// 监听当前目录变化，更新文件树工作目录
+watch(currentDirectory, async (newDir) => {
+  setFilesDirectory(newDir || undefined)
+  await loadFiles('.')
+})
 
 async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean) {
   // sendMessage 会自动处理草稿模式，在发送前创建会话
@@ -239,6 +245,8 @@ function closeFileViewer() {
       :files="files"
       :filesLoading="filesLoading"
       :activeNav="sidebarNav"
+      :currentDirectory="currentDirectory"
+      :canChangeDirectory="canChangeDirectory()"
       :isSessionRunning="isSessionRunning"
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
@@ -253,6 +261,7 @@ function closeFileViewer() {
       @abort-session="abortSession"
       @open-settings="openSettings"
       @open-search="() => {}"
+      @change-directory="changeDirectory"
     />
 
     <!-- Main Content -->
@@ -279,6 +288,8 @@ function closeFileViewer() {
           :pendingQuestions="pendingQuestions"
           :pendingPermissions="pendingPermissions"
           :sessionError="sessionError"
+          :currentDirectory="currentDirectory"
+          :canChangeDirectory="canChangeDirectory()"
           @question-answered="(id, answers) => answerQuestion(id, answers)"
           @question-rejected="rejectQuestion"
           @permission-responded="respondPermission"
@@ -286,6 +297,7 @@ function closeFileViewer() {
           @open-settings="openSettings"
           @delete-part="handleDeletePart"
           @update-part="handleUpdatePart"
+          @change-directory="changeDirectory"
         />
         <InputBox
           :disabled="isLoading"

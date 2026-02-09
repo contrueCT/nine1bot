@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { Eye, X, Download, ExternalLink, Copy, Check } from 'lucide-vue-next'
 import { useFilePreview } from '../composables/useFilePreview'
+import { decodeBase64Utf8 } from '../utils/encoding'
 
 // Sub-renderers
 import ImagePreview from './preview/ImagePreview.vue'
@@ -61,8 +62,8 @@ function openInNewTab() {
   const preview = activePreview.value
 
   if (preview.content) {
-    const decoded = atob(preview.content)
-    const blob = new Blob([decoded], { type: preview.mime })
+    const decoded = decodeBase64Utf8(preview.content)
+    const blob = new Blob([decoded], { type: `${preview.mime};charset=utf-8` })
     window.open(URL.createObjectURL(blob), '_blank')
   } else {
     window.open(`/file/preview/${preview.id}`, '_blank')

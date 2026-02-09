@@ -153,7 +153,7 @@ export namespace SessionPrompt {
     const session = await Session.get(input.sessionID)
     await SessionRevert.cleanup(session)
 
-    const message = await createUserMessage(input)
+    const message = await createUserMessage(input, session)
     await Session.touch(input.sessionID)
 
     // this is backwards compatibility for allowing `tools` to be specified when
@@ -347,7 +347,7 @@ export namespace SessionPrompt {
           mode: task.agent,
           agent: task.agent,
           path: {
-            cwd: Instance.directory,
+            cwd: session.directory,
             root: Instance.worktree,
           },
           cost: 0,
@@ -406,6 +406,7 @@ export namespace SessionPrompt {
           sessionID: sessionID,
           abort,
           callID: part.callID,
+          cwd: session.directory,
           extra: { bypassAgentCheck: true },
           messages: msgs,
           async metadata(input) {
@@ -550,7 +551,7 @@ export namespace SessionPrompt {
           mode: agent.name,
           agent: agent.name,
           path: {
-            cwd: Instance.directory,
+            cwd: session.directory,
             root: Instance.worktree,
           },
           cost: 0,
@@ -621,7 +622,7 @@ export namespace SessionPrompt {
         agent,
         abort,
         sessionID,
-        system: [...(await SystemPrompt.environment(model)), ...(await InstructionPrompt.system())],
+        system: [...(await SystemPrompt.environment(model, session.directory)), ...(await InstructionPrompt.system())],
         messages: [
           ...MessageV2.toModelMessages(sessionMessages, model),
           ...(isLastStep
@@ -683,6 +684,7 @@ export namespace SessionPrompt {
       abort: options.abortSignal!,
       messageID: input.processor.message.id,
       callID: options.toolCallId,
+      cwd: input.session.directory,
       extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck },
       agent: input.agent.name,
       messages: input.messages,
@@ -750,7 +752,14 @@ export namespace SessionPrompt {
       })
     }
 
-    for (const [key, item] of Object.entries(await MCP.tools())) {
+    // Get MCP tools within session directory's Instance context
+    // This ensures local MCP processes use session directory as cwd
+    const mcpTools = await Instance.provide({
+      directory: input.session.directory,
+      fn: () => MCP.tools(),
+    })
+
+    for (const [key, item] of Object.entries(mcpTools)) {
       const execute = item.execute
       if (!execute) continue
 
@@ -844,7 +853,7 @@ export namespace SessionPrompt {
     return tools
   }
 
-  async function createUserMessage(input: PromptInput) {
+  async function createUserMessage(input: PromptInput, session: Session.Info) {
     const agent = await Agent.get(input.agent ?? (await Agent.defaultAgent()))
     const info: MessageV2.Info = {
       id: input.messageID ?? Identifier.ascending("message"),
@@ -971,27 +980,33 @@ export namespace SessionPrompt {
                   const base64Data = base64Match[1]
                   const buffer = Buffer.from(base64Data, "base64")
 
-                  // Save to current working directory's uploads folder
-                  const uploadsDir = path.join(process.cwd(), "uploads", input.sessionID)
+                  // Save to project's .nine1bot/uploads directory (within sandbox)
+                  const uploadsDir = path.join(session.directory, ".nine1bot", "uploads", input.sessionID)
                   await fs.mkdir(uploadsDir, { recursive: true })
                   const uploadFilePath = path.join(uploadsDir, part.filename || `upload-${Date.now()}`)
                   await fs.writeFile(uploadFilePath, buffer)
 
                   log.info("saved uploaded file", { path: uploadFilePath, mime: part.mime })
 
+                  // Determine file type description and skill hint
+                  const fileTypeMap: Record<string, { type: string; skill: string }> = {
+                    "application/pdf": { type: "PDF", skill: "pdf" },
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": { type: "Word document", skill: "docx" },
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation": { type: "PowerPoint presentation", skill: "pptx" },
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": { type: "Excel spreadsheet", skill: "xlsx" },
+                    "application/msword": { type: "Word document (legacy)", skill: "docx" },
+                    "application/vnd.ms-powerpoint": { type: "PowerPoint presentation (legacy)", skill: "pptx" },
+                    "application/vnd.ms-excel": { type: "Excel spreadsheet (legacy)", skill: "xlsx" },
+                  }
                   // Generate file type description
-                  const fileTypeDesc = part.mime.startsWith("image/")
-                    ? "an image"
-                    : part.mime === "application/pdf"
-                      ? "a PDF document"
-                      : part.mime.includes("wordprocessingml")
-                        ? "a Word document"
-                        : part.mime.includes("presentationml")
-                          ? "a PowerPoint presentation"
-                          : part.mime.includes("spreadsheetml")
-                            ? "an Excel spreadsheet"
-                            : "a file"
+                  const fileInfo = fileTypeMap[part.mime]
+                  const fileTypeDesc = fileInfo
+                    ? `a ${fileInfo.type}`
+                    : part.mime.startsWith("image/")
+                      ? "an image"
+                      : "a file"
 
+                  const skillHint = fileInfo?.skill ? `, or invoke the appropriate skill (e.g., /${fileInfo.skill}) for advanced operations` : ""
                   return [
                     {
                       id: Identifier.ascending("part"),
@@ -999,13 +1014,14 @@ export namespace SessionPrompt {
                       sessionID: input.sessionID,
                       type: "text",
                       synthetic: true,
-                      text: `User uploaded ${fileTypeDesc}: ${part.filename}\nFile saved to: ${uploadFilePath}\n\nUse the Read tool to view this file.`,
+                      text: `User uploaded ${fileTypeDesc}: ${part.filename}\nFile saved to: ${uploadFilePath}\n\nTo read or process this file, use the Read tool with the file path${skillHint}.`,
                     },
                     {
                       ...part,
                       id: part.id ?? Identifier.ascending("part"),
                       messageID: info.id,
                       sessionID: input.sessionID,
+                      // Replace data URL with file URL to avoid sending large base64 to model
                       url: `file://${uploadFilePath}`,
                     },
                   ]
@@ -1079,6 +1095,7 @@ export namespace SessionPrompt {
                       abort: new AbortController().signal,
                       agent: input.agent!,
                       messageID: info.id,
+                      cwd: session.directory,
                       extra: { bypassCwdCheck: true, model },
                       messages: [],
                       metadata: async () => {},
@@ -1141,6 +1158,7 @@ export namespace SessionPrompt {
                   abort: new AbortController().signal,
                   agent: input.agent!,
                   messageID: info.id,
+                  cwd: session.directory,
                   extra: { bypassCwdCheck: true },
                   messages: [],
                   metadata: async () => {},
@@ -1459,7 +1477,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       agent: input.agent,
       cost: 0,
       path: {
-        cwd: Instance.directory,
+        cwd: session.directory,
         root: Instance.worktree,
       },
       time: {
@@ -1550,7 +1568,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const args = matchingInvocation?.args
 
     const proc = spawn(shell, args, {
-      cwd: Instance.directory,
+      cwd: session.directory,
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
       env: {

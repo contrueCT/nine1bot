@@ -2,7 +2,7 @@ import { lazy } from "../util/lazy"
 import { Language } from "web-tree-sitter"
 import { $ } from "bun"
 import { fileURLToPath } from "url"
-import { Instance } from "../project/instance"
+import { Filesystem } from "../util/filesystem"
 import { BashArity } from "../permission/arity"
 import { Log } from "../util/log"
 
@@ -201,12 +201,12 @@ export namespace CommandAnalyzer {
    * Analyze a command string for security requirements
    *
    * @param command - The command string to analyze
-   * @param cwd - Working directory for path resolution (defaults to Instance.directory)
+   * @param cwd - Working directory for path resolution
    * @returns Analysis result with commands, external directories, and permission requirements
    */
   export async function analyze(
     command: string,
-    cwd: string = Instance.directory
+    cwd: string
   ): Promise<AnalysisResult> {
     const result: AnalysisResult = {
       isCommand: true,
@@ -228,11 +228,6 @@ export namespace CommandAnalyzer {
     }
 
     const directories = new Set<string>()
-
-    // Check if cwd is outside project
-    if (!Instance.containsPath(cwd)) {
-      directories.add(cwd)
-    }
 
     // Extract commands from AST
     for (const node of tree.rootNode.descendantsOfType("command")) {
@@ -278,7 +273,7 @@ export namespace CommandAnalyzer {
 
           if (resolved) {
             const normalized = normalizePathForPlatform(resolved)
-            if (!Instance.containsPath(normalized)) {
+            if (!Filesystem.contains(cwd, normalized)) {
               directories.add(normalized)
             }
           }

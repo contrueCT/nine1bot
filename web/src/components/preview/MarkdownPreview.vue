@@ -3,6 +3,7 @@ import { computed, ref, onMounted, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { FilePreviewInfo } from '../../composables/useFilePreview'
+import { decodeBase64Utf8 } from '../../utils/encoding'
 
 const props = defineProps<{
   preview: FilePreviewInfo
@@ -25,7 +26,7 @@ async function loadContent() {
 
   try {
     if (props.preview.content) {
-      content.value = atob(props.preview.content)
+      content.value = decodeBase64Utf8(props.preview.content)
     } else {
       const res = await fetch(`/file/preview/${props.preview.id}`)
       if (!res.ok) throw new Error('Failed to load file')
