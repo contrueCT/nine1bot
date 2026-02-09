@@ -233,9 +233,12 @@ export const FileRoutes = lazy(() =>
           return c.json({ error: "File not found" }, 404)
         }
 
+        const contentType = preview.mime.startsWith("text/")
+          ? `${preview.mime}; charset=utf-8`
+          : preview.mime
         return c.body(await file.arrayBuffer(), {
           headers: {
-            "Content-Type": preview.mime,
+            "Content-Type": contentType,
             "Content-Disposition": `inline; filename="${preview.filename}"`,
           },
         })

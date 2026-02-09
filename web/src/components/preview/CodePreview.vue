@@ -3,6 +3,7 @@ import { computed, ref, onMounted, watch } from 'vue'
 import { Copy, Check } from 'lucide-vue-next'
 import type { FilePreviewInfo } from '../../composables/useFilePreview'
 import { useFilePreview } from '../../composables/useFilePreview'
+import { decodeBase64Utf8 } from '../../utils/encoding'
 
 const props = defineProps<{
   preview: FilePreviewInfo
@@ -23,7 +24,7 @@ async function loadContent() {
   try {
     if (props.preview.content) {
       // Decode base64
-      codeContent.value = atob(props.preview.content)
+      codeContent.value = decodeBase64Utf8(props.preview.content)
     } else {
       // Fetch from server
       const res = await fetch(`/file/preview/${props.preview.id}`)
