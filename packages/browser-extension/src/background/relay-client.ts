@@ -9,8 +9,20 @@
 
 import { toolExecutors } from '../tools'
 
-// 配置
+// 配置 - relay URL 可通过 chrome.storage.sync 修改
 const DEFAULT_RELAY_URL = 'ws://127.0.0.1:18793/extension'
+
+/**
+ * 从 chrome.storage.sync 获取 relay URL（支持用户自定义）
+ */
+async function getConfiguredRelayUrl(): Promise<string> {
+  try {
+    const { relayUrl } = await chrome.storage.sync.get({ relayUrl: DEFAULT_RELAY_URL })
+    return relayUrl
+  } catch {
+    return DEFAULT_RELAY_URL
+  }
+}
 const RECONNECT_INTERVAL = 5000
 const PING_INTERVAL = 5000
 
@@ -116,6 +128,20 @@ async function handleCdpCommand(method: string, params: any, sessionId?: string)
 
   // 根据 CDP method 调用相应的工具
   switch (method) {
+    // 扩展工具直接转发（不受 CSP 限制）
+    case 'Extension.callTool': {
+      const { toolName, args } = params || {}
+      const executor = toolExecutors[toolName as keyof typeof toolExecutors]
+      if (!executor) {
+        throw new Error(`Unknown extension tool: ${toolName}. Available: ${Object.keys(toolExecutors).join(', ')}`)
+      }
+      const toolArgs: Record<string, unknown> = { ...(args || {}) }
+      if (tabId && toolArgs.tabId === undefined) {
+        toolArgs.tabId = tabId
+      }
+      return await executor(toolArgs)
+    }
+
     case 'Page.captureScreenshot': {
       console.log('[Relay Client] Taking screenshot for tabId:', tabId)
       const result = await toolExecutors.screenshot({ tabId })
@@ -505,11 +531,13 @@ export function initRelayClient(): void {
     }
   })
 
-  // 尝试连接
+  // 尝试连接（使用 chrome.storage 中配置的 URL）
   console.log('[Relay Client] About to connect...')
-  try {
-    connectToRelay()
-  } catch (error) {
-    console.error('[Relay Client] Error in connectToRelay:', error)
-  }
+  getConfiguredRelayUrl().then((url) => {
+    try {
+      connectToRelay(url)
+    } catch (error) {
+      console.error('[Relay Client] Error in connectToRelay:', error)
+    }
+  })
 }

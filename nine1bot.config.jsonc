@@ -86,13 +86,17 @@
     //   "enabled": true
     // }
 
-    // 浏览器控制（通过 Bridge Server，使用 CDP 协议）
-    // 注意：需要先启动 Bridge Server，或者让 Nine1Bot 自动启动
-    // "browser-control": {
-    //   "type": "remote",
-    //   "url": "http://127.0.0.1:18791",
-    //   "enabled": true
-    // }
+    // 浏览器控制 MCP Server（由 @nine1bot/browser-mcp-server 提供）
+    // 通过标准 MCP 协议提供 browser_tabs, browser_screenshot, browser_navigate 等工具
+    // BRIDGE_URL 模式：连接到 Nine1Bot 已启动的 Bridge Server，不自行启动
+    "browser": {
+      "type": "local",
+      "command": ["bun", "run", "packages/browser-mcp-server/bin/browser-mcp-server.ts"],
+      "environment": {
+        "BRIDGE_URL": "http://127.0.0.1:18793"
+      },
+      "enabled": true
+    }
   },
 
   // ===== 浏览器控制配置 =====

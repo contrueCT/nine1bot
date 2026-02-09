@@ -37,15 +37,8 @@ import {
   TerminalListTool,
   TerminalCloseTool,
 } from "./terminal"
-import {
-  BrowserTabsTool,
-  BrowserScreenshotTool,
-  BrowserNavigateTool,
-  BrowserClickTool,
-  BrowserTypeTool,
-  BrowserEvaluateTool,
-  BrowserContentTool,
-} from "./browser"
+// Browser tools removed - now provided by @nine1bot/browser-mcp-server as standalone MCP server
+// Configure in nine1bot.config.jsonc under "mcp" section
 
 export namespace ToolRegistry {
   const log = Log.create({ service: "tool.registry" })
@@ -145,14 +138,7 @@ export namespace ToolRegistry {
       ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),
       ...(config.experimental?.batch_tool === true ? [BatchTool] : []),
       ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [PlanExitTool, PlanEnterTool] : []),
-      // Browser control tools (Nine1Bot)
-      BrowserTabsTool,
-      BrowserScreenshotTool,
-      BrowserNavigateTool,
-      BrowserClickTool,
-      BrowserTypeTool,
-      BrowserEvaluateTool,
-      BrowserContentTool,
+      // Browser control tools now provided by @nine1bot/browser-mcp-server (standalone MCP server)
       ...custom,
     ]
   }
