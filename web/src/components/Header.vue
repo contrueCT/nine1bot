@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { Sun, Moon, Settings, Square, Cpu, ChevronDown, PanelLeftOpen, Check, Minimize2, ListTodo, Server, RefreshCcw, Activity } from 'lucide-vue-next'
+import { Sun, Moon, Settings, Square, Cpu, ChevronDown, PanelLeftOpen, Check, Minimize2, ListTodo, Server, RefreshCcw, Activity, Folder } from 'lucide-vue-next'
 import type { Session } from '../api/client'
 import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
@@ -189,6 +189,9 @@ function getCurrentModelName(): string {
 
       <div class="session-info" v-if="session">
         <span class="session-title">{{ session.title || '新会话' }}</span>
+        <span v-if="session.directory && session.directory !== '.'" class="session-dir" :title="session.directory">
+          <Folder :size="12" /> {{ session.directory }}
+        </span>
       </div>
     </div>
 
@@ -351,28 +354,27 @@ function getCurrentModelName(): string {
 
 <style scoped>
 .glass-header {
-  background: var(--bg-glass);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border-glass);
+  background: var(--bg-secondary);
+  border-bottom: 0.5px solid var(--border-subtle);
   z-index: 10;
 }
 
 .model-trigger {
   background: var(--bg-tertiary);
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   padding: 6px 16px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   gap: 8px;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
 }
 
 .model-trigger:hover {
   background: var(--bg-elevated);
   border-color: var(--border-hover);
-  box-shadow: var(--shadow-sm);
 }
 
 .model-name {
@@ -395,7 +397,7 @@ function getCurrentModelName(): string {
 
 .mcp-trigger {
   padding: 6px 12px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   gap: 8px;
 }
 
@@ -409,7 +411,6 @@ function getCurrentModelName(): string {
   height: 8px;
   border-radius: 999px;
   display: inline-block;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
 }
 
 .mcp-dot-ok {
@@ -438,7 +439,7 @@ function getCurrentModelName(): string {
   align-items: center;
   justify-content: space-between;
   padding-bottom: var(--space-sm);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
   margin-bottom: var(--space-sm);
 }
 
@@ -465,8 +466,8 @@ function getCurrentModelName(): string {
   gap: var(--space-sm);
   padding: var(--space-sm);
   border-radius: var(--radius-md);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-subtle);
 }
 
 .mcp-item-main {
@@ -498,13 +499,10 @@ function getCurrentModelName(): string {
 }
 
 .glass-dropdown {
-  background: var(--bg-elevated); /* Solid fallback for complex dropdowns or high opacity */
-  background: var(--bg-glass-strong);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
   box-shadow: var(--shadow-lg);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   padding: 6px;
   margin-top: 8px;
   min-width: 240px;
@@ -512,7 +510,7 @@ function getCurrentModelName(): string {
 
 .dropdown-item {
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
+  padding: 6px 12px;
   margin-bottom: 2px;
   display: flex;
   justify-content: space-between;
@@ -530,12 +528,25 @@ function getCurrentModelName(): string {
 
 .session-info {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .session-title {
   font-weight: 600;
   font-size: 14px;
+}
+
+.session-dir {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dropdown-label {
@@ -549,7 +560,7 @@ function getCurrentModelName(): string {
 
 .dropdown-label:not(:first-child) {
   margin-top: 4px;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 0.5px solid var(--border-subtle);
   padding-top: 8px;
 }
 
@@ -561,9 +572,8 @@ function getCurrentModelName(): string {
   background: var(--accent-subtle);
   border-radius: var(--radius-full);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--accent);
-  box-shadow: 0 0 10px var(--accent-subtle);
 }
 
 .streaming-dot {
@@ -572,12 +582,11 @@ function getCurrentModelName(): string {
   background: var(--accent);
   border-radius: 50%;
   animation: pulse 1.5s infinite;
-  box-shadow: 0 0 8px var(--accent);
 }
 
 @keyframes pulse {
   0% { transform: scale(0.95); opacity: 0.8; }
-  50% { transform: scale(1.1); opacity: 1; }
+  50% { transform: scale(1.05); opacity: 1; }
   100% { transform: scale(0.95); opacity: 0.8; }
 }
 

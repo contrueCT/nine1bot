@@ -3,6 +3,7 @@ import { computed, ref, onMounted, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import type { FilePreviewInfo } from '../../composables/useFilePreview'
+import { decodeBase64Utf8 } from '../../utils/encoding'
 
 const props = defineProps<{
   preview: FilePreviewInfo
@@ -25,7 +26,7 @@ async function loadContent() {
 
   try {
     if (props.preview.content) {
-      content.value = atob(props.preview.content)
+      content.value = decodeBase64Utf8(props.preview.content)
     } else {
       const res = await fetch(`/file/preview/${props.preview.id}`)
       if (!res.ok) throw new Error('Failed to load file')
@@ -88,7 +89,7 @@ const renderedHtml = computed(() => {
 .loading-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--border-default);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -119,8 +120,8 @@ const renderedHtml = computed(() => {
   line-height: 1.3;
 }
 
-.markdown-body :deep(h1) { font-size: 2em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
-.markdown-body :deep(h2) { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.markdown-body :deep(h1) { font-size: 2em; border-bottom: 0.5px solid var(--border-default); padding-bottom: 0.3em; }
+.markdown-body :deep(h2) { font-size: 1.5em; border-bottom: 0.5px solid var(--border-default); padding-bottom: 0.3em; }
 .markdown-body :deep(h3) { font-size: 1.25em; }
 .markdown-body :deep(h4) { font-size: 1em; }
 
@@ -184,7 +185,7 @@ const renderedHtml = computed(() => {
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
   padding: 0.5em 1em;
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   text-align: left;
 }
 
@@ -201,6 +202,6 @@ const renderedHtml = computed(() => {
 .markdown-body :deep(hr) {
   margin: 2em 0;
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 0.5px solid var(--border-default);
 }
 </style>

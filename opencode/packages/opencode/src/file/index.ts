@@ -207,12 +207,13 @@ export namespace File {
     state()
   }
 
-  export async function status() {
+  export async function status(options?: { directory?: string }) {
+    const directory = options?.directory || Instance.directory
     const project = Instance.project
     if (project.vcs !== "git") return []
 
     const diffOutput = await $`git -c core.quotepath=false diff --numstat HEAD`
-      .cwd(Instance.directory)
+      .cwd(directory)
       .quiet()
       .nothrow()
       .text()
@@ -233,7 +234,7 @@ export namespace File {
     }
 
     const untrackedOutput = await $`git -c core.quotepath=false ls-files --others --exclude-standard`
-      .cwd(Instance.directory)
+      .cwd(directory)
       .quiet()
       .nothrow()
       .text()
@@ -242,7 +243,7 @@ export namespace File {
       const untrackedFiles = untrackedOutput.trim().split("\n")
       for (const filepath of untrackedFiles) {
         try {
-          const content = await Bun.file(path.join(Instance.directory, filepath)).text()
+          const content = await Bun.file(path.join(directory, filepath)).text()
           const lines = content.split("\n").length
           changedFiles.push({
             path: filepath,
@@ -258,7 +259,7 @@ export namespace File {
 
     // Get deleted files
     const deletedOutput = await $`git -c core.quotepath=false diff --name-only --diff-filter=D HEAD`
-      .cwd(Instance.directory)
+      .cwd(directory)
       .quiet()
       .nothrow()
       .text()
@@ -277,18 +278,20 @@ export namespace File {
 
     return changedFiles.map((x) => ({
       ...x,
-      path: path.relative(Instance.directory, x.path),
+      path: path.relative(directory, x.path),
     }))
   }
 
-  export async function read(file: string): Promise<Content> {
+  export async function read(file: string, options?: { directory?: string }): Promise<Content> {
     using _ = log.time("read", { file })
+    const directory = options?.directory || Instance.directory
     const project = Instance.project
-    const full = path.join(Instance.directory, file)
+    const full = path.join(directory, file)
 
     // TODO: Filesystem.contains is lexical only - symlinks inside the project can escape.
     // TODO: On Windows, cross-drive paths bypass this check. Consider realpath canonicalization.
-    if (!Instance.containsPath(full)) {
+    // When custom directory is provided, skip containsPath check as user explicitly requested this directory
+    if (!options?.directory && !Instance.containsPath(full)) {
       throw new Error(`Access denied: path escapes project directory`)
     }
 
@@ -313,10 +316,10 @@ export namespace File {
       .then((x) => x.trim())
 
     if (project.vcs === "git") {
-      let diff = await $`git diff ${file}`.cwd(Instance.directory).quiet().nothrow().text()
-      if (!diff.trim()) diff = await $`git diff --staged ${file}`.cwd(Instance.directory).quiet().nothrow().text()
+      let diff = await $`git diff ${file}`.cwd(directory).quiet().nothrow().text()
+      if (!diff.trim()) diff = await $`git diff --staged ${file}`.cwd(directory).quiet().nothrow().text()
       if (diff.trim()) {
-        const original = await $`git show HEAD:${file}`.cwd(Instance.directory).quiet().nothrow().text()
+        const original = await $`git show HEAD:${file}`.cwd(directory).quiet().nothrow().text()
         const patch = structuredPatch(file, file, original, content, "old", "new", {
           context: Infinity,
           ignoreWhitespace: true,
@@ -328,8 +331,9 @@ export namespace File {
     return { type: "text", content }
   }
 
-  export async function list(dir?: string) {
+  export async function list(dir?: string, options?: { directory?: string }) {
     const exclude = [".git", ".DS_Store"]
+    const baseDirectory = options?.directory || Instance.directory
     const project = Instance.project
     let ignored = (_: string) => false
     if (project.vcs === "git") {
@@ -344,11 +348,12 @@ export namespace File {
       }
       ignored = ig.ignores.bind(ig)
     }
-    const resolved = dir ? path.join(Instance.directory, dir) : Instance.directory
+    const resolved = dir ? path.join(baseDirectory, dir) : baseDirectory
 
     // TODO: Filesystem.contains is lexical only - symlinks inside the project can escape.
     // TODO: On Windows, cross-drive paths bypass this check. Consider realpath canonicalization.
-    if (!Instance.containsPath(resolved)) {
+    // When custom directory is provided, skip containsPath check as user explicitly requested this directory
+    if (!options?.directory && !Instance.containsPath(resolved)) {
       throw new Error(`Access denied: path escapes project directory`)
     }
 
@@ -360,7 +365,7 @@ export namespace File {
       .catch(() => [])) {
       if (exclude.includes(entry.name)) continue
       const fullPath = path.join(resolved, entry.name)
-      const relativePath = path.relative(Instance.directory, fullPath)
+      const relativePath = path.relative(baseDirectory, fullPath)
       const type = entry.isDirectory() ? "directory" : "file"
       nodes.push({
         name: entry.name,

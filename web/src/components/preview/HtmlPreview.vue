@@ -2,6 +2,7 @@
 import { computed, ref, onMounted, watch } from 'vue'
 import { RefreshCw, ExternalLink, Code, Eye } from 'lucide-vue-next'
 import type { FilePreviewInfo } from '../../composables/useFilePreview'
+import { decodeBase64Utf8 } from '../../utils/encoding'
 
 const props = defineProps<{
   preview: FilePreviewInfo
@@ -22,7 +23,7 @@ const iframeSrc = computed(() => {
 
 const iframeSrcdoc = computed(() => {
   if (props.preview.content) {
-    return atob(props.preview.content)
+    return decodeBase64Utf8(props.preview.content)
   }
   return null
 })
@@ -41,7 +42,7 @@ async function loadSource() {
   isLoading.value = true
   try {
     if (props.preview.content) {
-      sourceContent.value = atob(props.preview.content)
+      sourceContent.value = decodeBase64Utf8(props.preview.content)
     } else {
       const res = await fetch(`/file/preview/${props.preview.id}`)
       sourceContent.value = await res.text()
@@ -124,7 +125,7 @@ function toggleSource() {
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
   flex-shrink: 0;
 }
 
@@ -134,7 +135,7 @@ function toggleSource() {
   gap: 4px;
   padding: 4px 10px;
   background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--text-secondary);

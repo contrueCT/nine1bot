@@ -173,7 +173,7 @@ function getDisplayText(item: TodoItem): string {
 <style scoped>
 .todo-panel {
   background: var(--bg-primary);
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
@@ -183,7 +183,6 @@ function getDisplayText(item: TodoItem): string {
 
 .todo-panel.plan-mode {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 99, 102, 241), 0.2), var(--shadow-md);
 }
 
 .plan-icon {
@@ -195,7 +194,7 @@ function getDisplayText(item: TodoItem): string {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-md);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-subtle);
 }
 
 .todo-title {
@@ -268,7 +267,7 @@ function getDisplayText(item: TodoItem): string {
 .loading-spinner {
   width: 24px;
   height: 24px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--border-default);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
@@ -294,7 +293,7 @@ function getDisplayText(item: TodoItem): string {
   padding: var(--space-sm);
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   transition: all var(--transition-fast);
 }
 
@@ -390,7 +389,7 @@ function getDisplayText(item: TodoItem): string {
   gap: var(--space-xs);
   padding: var(--space-sm) var(--space-md);
   background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
   font-size: 12px;
   color: var(--accent);
 }

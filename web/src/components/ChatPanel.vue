@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
-import { MessagesSquare } from 'lucide-vue-next'
+import { MessagesSquare, FolderOpen } from 'lucide-vue-next'
 import type { Message, QuestionRequest, PermissionRequest } from '../api/client'
 import MessageItem from './MessageItem.vue'
 import AgentQuestion from './AgentQuestion.vue'
 import PermissionRequestVue from './PermissionRequest.vue'
+import DirectoryBrowser from './DirectoryBrowser.vue'
 
 const props = defineProps<{
   messages: Message[]
@@ -13,6 +14,8 @@ const props = defineProps<{
   pendingQuestions?: QuestionRequest[]
   pendingPermissions?: PermissionRequest[]
   sessionError?: { message: string; dismissable?: boolean } | null
+  currentDirectory?: string
+  canChangeDirectory?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -23,9 +26,35 @@ const emit = defineEmits<{
   (e: 'openSettings'): void
   (e: 'deletePart', messageId: string, partId: string): void
   (e: 'updatePart', messageId: string, partId: string, updates: { text?: string }): void
+  (e: 'changeDirectory', path: string): void
 }>()
 
 const scrollContainer = ref<HTMLDivElement>()
+const showDirectoryBrowser = ref(false)
+
+// 打开目录浏览器弹窗
+function openDirectoryBrowser() {
+  showDirectoryBrowser.value = true
+}
+
+// 处理目录选择
+function handleDirectorySelect(path: string) {
+  showDirectoryBrowser.value = false
+  emit('changeDirectory', path)
+}
+
+// 取消目录选择
+function handleDirectoryCancel() {
+  showDirectoryBrowser.value = false
+}
+
+// 获取目录显示名称
+function getDirectoryName(path: string): string {
+  if (!path || path === '~' || path === '.') return ''
+  // 处理 Windows 和 Unix 路径
+  const parts = path.replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1] || path
+}
 
 watch(() => props.messages, async () => {
   await nextTick()
@@ -43,8 +72,8 @@ function scrollToBottom() {
   if (scrollContainer.value) {
     // Check if user is already near bottom to avoid annoying auto-scroll if they are reading history
     const isNearBottom = scrollContainer.value.scrollHeight - scrollContainer.value.scrollTop - scrollContainer.value.clientHeight < 100
-    
-    if (isNearBottom || props.messages.length <= 1) { 
+
+    if (isNearBottom || props.messages.length <= 1) {
        // Always scroll on simple cases
        scrollContainer.value.scrollTo({
         top: scrollContainer.value.scrollHeight,
@@ -80,6 +109,17 @@ function scrollToBottom() {
       </div>
       <p class="empty-state-title">Hello, I'm Nine1Bot</p>
       <p class="empty-state-description">How can I help you today?</p>
+
+      <!-- Directory Selector Button (shown only for draft/new sessions) -->
+      <div v-if="canChangeDirectory" class="directory-selector-section">
+        <button class="directory-btn" @click="openDirectoryBrowser">
+          <FolderOpen :size="20" />
+          <span class="directory-btn-text">
+            {{ currentDirectory && getDirectoryName(currentDirectory) ? `工作目录: ${getDirectoryName(currentDirectory)}` : '选择工作目录' }}
+          </span>
+        </button>
+        <p class="directory-hint">选择一个工作目录来开始你的项目</p>
+      </div>
     </div>
 
     <!-- Messages -->
@@ -117,6 +157,14 @@ function scrollToBottom() {
       <!-- Added extra space at bottom for scrolling past the input box -->
       <div class="bottom-spacer"></div>
     </div>
+
+    <!-- Directory Browser Modal -->
+    <DirectoryBrowser
+      :visible="showDirectoryBrowser"
+      :initial-path="currentDirectory || '~'"
+      @select="handleDirectorySelect"
+      @cancel="handleDirectoryCancel"
+    />
   </div>
 </template>
 
@@ -142,34 +190,81 @@ function scrollToBottom() {
   justify-content: center;
   padding: 20px;
   text-align: center;
-  animation: fade-in 0.8s ease;
+  animation: fade-in 0.5s var(--ease-smooth);
 }
 
 .glass-icon {
-  width: 96px;
-  height: 96px;
+  width: 80px;
+  height: 80px;
   background: var(--bg-tertiary);
-  border-radius: 24px;
+  border-radius: var(--radius-xl);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   color: var(--accent);
-  box-shadow: var(--shadow-glow);
 }
 
 .empty-state-title {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 22px;
+  font-weight: 600;
   margin-bottom: 8px;
-  background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--text-primary);
 }
 
 .empty-state-description {
-  color: var(--text-secondary);
+  color: var(--text-muted);
+  font-size: 15px;
+}
+
+.directory-selector-section {
+  margin-top: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.directory-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 32px;
+  background: var(--bg-secondary);
+  border: 1.5px dashed var(--border-default);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary);
   font-size: 16px;
+  font-weight: var(--font-weight-normal);
+  cursor: pointer;
+  transition: all var(--transition-normal);
+}
+
+.directory-btn:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.directory-btn:hover svg {
+  color: var(--accent);
+}
+
+.directory-btn svg {
+  color: var(--text-muted);
+  transition: color 0.2s ease;
+}
+
+.directory-btn-text {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.directory-hint {
+  color: var(--text-muted);
+  font-size: 14px;
 }
 
 .bottom-spacer {
@@ -184,8 +279,8 @@ function scrollToBottom() {
 .session-error-banner {
   margin: var(--space-md) var(--space-lg);
   padding: var(--space-md);
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid var(--error, #ef4444);
+  background: var(--error-subtle);
+  border: 0.5px solid var(--error);
   border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
@@ -196,7 +291,7 @@ function scrollToBottom() {
   display: flex;
   align-items: flex-start;
   gap: var(--space-sm);
-  color: var(--error, #ef4444);
+  color: var(--error);
 }
 
 .error-content svg {
@@ -222,8 +317,7 @@ function scrollToBottom() {
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(20px); }
+  from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
 }
 </style>
-

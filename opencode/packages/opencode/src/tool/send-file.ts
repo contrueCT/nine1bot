@@ -31,7 +31,7 @@ Example:
   async execute(params, ctx) {
     let filepath = params.path
     if (!path.isAbsolute(filepath)) {
-      filepath = path.resolve(Instance.directory, filepath)
+      filepath = path.resolve(ctx.cwd, filepath)
     }
 
     const filename = path.basename(filepath)

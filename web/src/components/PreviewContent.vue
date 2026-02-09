@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { Eye, X, Download, ExternalLink, Copy, Check } from 'lucide-vue-next'
 import { useFilePreview } from '../composables/useFilePreview'
+import { decodeBase64Utf8 } from '../utils/encoding'
 
 // Sub-renderers
 import ImagePreview from './preview/ImagePreview.vue'
@@ -61,8 +62,8 @@ function openInNewTab() {
   const preview = activePreview.value
 
   if (preview.content) {
-    const decoded = atob(preview.content)
-    const blob = new Blob([decoded], { type: preview.mime })
+    const decoded = decodeBase64Utf8(preview.content)
+    const blob = new Blob([decoded], { type: `${preview.mime};charset=utf-8` })
     window.open(URL.createObjectURL(blob), '_blank')
   } else {
     window.open(`/file/preview/${preview.id}`, '_blank')
@@ -170,7 +171,7 @@ function openInNewTab() {
   flex-wrap: wrap;
   gap: var(--space-xs);
   padding: var(--space-sm);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
   flex-shrink: 0;
 }
 
@@ -180,7 +181,7 @@ function openInNewTab() {
   gap: 6px;
   padding: 6px 8px 6px 10px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--text-secondary);
@@ -239,7 +240,7 @@ function openInNewTab() {
   gap: var(--space-sm);
   padding: var(--space-sm);
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
   flex-shrink: 0;
 }
 

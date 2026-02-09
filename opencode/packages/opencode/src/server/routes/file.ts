@@ -1,12 +1,13 @@
 import { Hono } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
+import path from "path"
 import { File } from "../../file"
 import { Ripgrep } from "../../file/ripgrep"
 import { LSP } from "../../lsp"
 import { Instance } from "../../project/instance"
 import { lazy } from "../../util/lazy"
-import { PreviewRegistry } from "../../tool/preview-file"
+import { PreviewRegistry } from "../../tool/display_file"
 
 export const FileRoutes = lazy(() =>
   new Hono()
@@ -136,11 +137,12 @@ export const FileRoutes = lazy(() =>
         "query",
         z.object({
           path: z.string(),
+          directory: z.string().optional(),
         }),
       ),
       async (c) => {
-        const path = c.req.valid("query").path
-        const content = await File.list(path)
+        const { path, directory } = c.req.valid("query")
+        const content = await File.list(path, { directory })
         return c.json(content)
       },
     )
@@ -165,11 +167,12 @@ export const FileRoutes = lazy(() =>
         "query",
         z.object({
           path: z.string(),
+          directory: z.string().optional(),
         }),
       ),
       async (c) => {
-        const path = c.req.valid("query").path
-        const content = await File.read(path)
+        const { path, directory } = c.req.valid("query")
+        const content = await File.read(path, { directory })
         return c.json(content)
       },
     )
@@ -190,8 +193,15 @@ export const FileRoutes = lazy(() =>
           },
         },
       }),
+      validator(
+        "query",
+        z.object({
+          directory: z.string().optional(),
+        }),
+      ),
       async (c) => {
-        const content = await File.status()
+        const { directory } = c.req.valid("query")
+        const content = await File.status({ directory })
         return c.json(content)
       },
     )
@@ -223,10 +233,54 @@ export const FileRoutes = lazy(() =>
           return c.json({ error: "File not found" }, 404)
         }
 
+        const contentType = preview.mime.startsWith("text/")
+          ? `${preview.mime}; charset=utf-8`
+          : preview.mime
         return c.body(await file.arrayBuffer(), {
           headers: {
-            "Content-Type": preview.mime,
+            "Content-Type": contentType,
             "Content-Disposition": `inline; filename="${preview.filename}"`,
+          },
+        })
+      },
+    )
+    .get(
+      "/file/upload",
+      describeRoute({
+        summary: "Serve uploaded file",
+        description: "Serve an uploaded file by its path. Only files within uploads directories are allowed.",
+        operationId: "file.upload",
+        responses: {
+          200: { description: "File content" },
+          400: { description: "Missing path parameter" },
+          403: { description: "Access denied - path outside uploads directory" },
+          404: { description: "File not found" },
+        },
+      }),
+      async (c) => {
+        const filePath = c.req.query("path")
+        if (!filePath) {
+          return c.json({ error: "Missing path" }, 400)
+        }
+
+        const normalized = path.resolve(filePath)
+        const sep = path.sep
+        const isUploadsDir =
+          normalized.includes(`${sep}.nine1bot${sep}uploads${sep}`) ||
+          normalized.includes(`${sep}.opencode${sep}uploads${sep}`)
+        if (!isUploadsDir) {
+          return c.json({ error: "Access denied" }, 403)
+        }
+
+        const file = Bun.file(normalized)
+        if (!(await file.exists())) {
+          return c.json({ error: "File not found" }, 404)
+        }
+
+        return c.body(await file.arrayBuffer(), {
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+            "Content-Disposition": `inline; filename="${path.basename(normalized)}"`,
           },
         })
       },
@@ -362,6 +416,123 @@ export const FileRoutes = lazy(() =>
             "Content-Length": String(file.size),
           },
         })
+      },
+    )
+    .get(
+      "/browse",
+      describeRoute({
+        summary: "Browse directory",
+        description: "Browse any directory on the filesystem. Used for directory selection UI.",
+        operationId: "file.browse",
+        responses: {
+          200: {
+            description: "Directory contents",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    path: z.string(),
+                    parent: z.string().nullable(),
+                    items: z.array(
+                      z.object({
+                        name: z.string(),
+                        path: z.string(),
+                        type: z.enum(["file", "directory"]),
+                        size: z.number().optional(),
+                        modified: z.number().optional(),
+                      })
+                    ),
+                  })
+                ),
+              },
+            },
+          },
+          404: {
+            description: "Directory not found",
+          },
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          path: z.string().optional().default("~"),
+        }),
+      ),
+      async (c) => {
+        const path = await import("path")
+        const fs = await import("fs/promises")
+        const os = await import("os")
+
+        let dirPath = c.req.valid("query").path
+
+        // Handle home directory shortcut
+        if (dirPath === "~" || dirPath.startsWith("~/")) {
+          dirPath = dirPath.replace("~", os.homedir())
+        }
+
+        // Resolve to absolute path
+        dirPath = path.resolve(dirPath)
+
+        try {
+          const stat = await fs.stat(dirPath)
+          if (!stat.isDirectory()) {
+            return c.json({ error: "Path is not a directory" }, 400)
+          }
+
+          const entries = await fs.readdir(dirPath, { withFileTypes: true })
+          const items: Array<{
+            name: string
+            path: string
+            type: "file" | "directory"
+            size?: number
+            modified?: number
+          }> = []
+
+          for (const entry of entries) {
+            // Skip hidden files by default
+            if (entry.name.startsWith(".")) continue
+
+            const entryPath = path.join(dirPath, entry.name)
+            const isDir = entry.isDirectory()
+
+            try {
+              const entryStat = await fs.stat(entryPath)
+              items.push({
+                name: entry.name,
+                path: entryPath,
+                type: isDir ? "directory" : "file",
+                size: isDir ? undefined : entryStat.size,
+                modified: entryStat.mtimeMs,
+              })
+            } catch {
+              // Skip inaccessible entries
+            }
+          }
+
+          // Sort: directories first, then alphabetically
+          items.sort((a, b) => {
+            if (a.type !== b.type) {
+              return a.type === "directory" ? -1 : 1
+            }
+            return a.name.localeCompare(b.name)
+          })
+
+          const parent = dirPath === "/" ? null : path.dirname(dirPath)
+
+          return c.json({
+            path: dirPath,
+            parent,
+            items,
+          })
+        } catch (err: any) {
+          if (err.code === "ENOENT") {
+            return c.json({ error: "Directory not found" }, 404)
+          }
+          if (err.code === "EACCES") {
+            return c.json({ error: "Permission denied" }, 403)
+          }
+          throw err
+        }
       },
     ),
 )

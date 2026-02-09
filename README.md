@@ -22,6 +22,7 @@ Supports programming, file management, information retrieval, content creation, 
 - **Programming** - Code writing, debugging, refactoring, code review, supporting multiple languages and frameworks
 - **File Management** - Read, create, edit, organize files, batch rename, directory structure management
 - **File Preview** - Preview images, code, Markdown, HTML, Office documents in Web UI
+- **File Upload** - Upload files directly through the web interface for AI processing
 - **Command Execution** - Run system commands, script writing, environment configuration, automation
 - **Information Retrieval** - Web search, data analysis, content extraction and summarization
 - **Content Creation** - Document writing, report generation, email drafting, translation, copywriting
@@ -33,7 +34,9 @@ Supports programming, file management, information retrieval, content creation, 
 
 - **Web Interface** - Modern chat interface with Markdown rendering, code highlighting, agent console monitoring
 - **Multi-Model Support** - Anthropic Claude, OpenAI, Google Gemini, OpenRouter, and more
+- **Session Working Directory** - Each session can have its own working directory with built-in directory browsing
 - **User Preferences** - Record personal preferences, AI follows your habits across all sessions
+- **Terminal History** - Scrollback history support for terminal output
 - **Tunnel Support** - Built-in ngrok and NATAPP support for public access
 - **Password Protection** - Optional web access password protection
 - **Parallel Sessions** - Run up to 10 AI sessions simultaneously
@@ -194,7 +197,9 @@ After starting, open `http://127.0.0.1:4096` (or your configured port) in browse
 
 Features:
 
-- Create multiple sessions
+- Create multiple sessions with independent working directories
+- Browse and select working directories per session
+- Upload files for AI processing
 - Switch AI models
 - View and manage files
 - Watch AI thinking process in real-time

@@ -153,7 +153,7 @@ const rejectQuestion = () => {
 <style scoped>
 .agent-question {
   background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
+  border: 0.5px solid var(--glass-border);
   border-radius: var(--radius-md);
   padding: var(--space-md);
   margin: var(--space-sm) 0;
@@ -211,7 +211,7 @@ const rejectQuestion = () => {
   align-items: flex-start;
   padding: var(--space-sm) var(--space-md);
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -253,7 +253,7 @@ const rejectQuestion = () => {
   width: 100%;
   padding: var(--space-sm) var(--space-md);
   background: var(--surface-1);
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 0.875rem;
@@ -274,7 +274,7 @@ const rejectQuestion = () => {
   justify-content: flex-end;
   gap: var(--space-sm);
   padding-top: var(--space-sm);
-  border-top: 1px solid var(--border);
+  border-top: 0.5px solid var(--border-default);
 }
 
 .question-answered {
@@ -285,7 +285,7 @@ const rejectQuestion = () => {
   font-size: 0.75rem;
   font-weight: 500;
   padding-top: var(--space-sm);
-  border-top: 1px solid var(--border);
+  border-top: 0.5px solid var(--border-default);
 }
 
 .loading-spinner.small {
