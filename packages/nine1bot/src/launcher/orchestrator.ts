@@ -5,7 +5,7 @@ import type { Nine1BotConfig } from '../config/schema'
 import { loadConfig, findConfigPath, getDefaultConfigPath } from '../config/loader'
 import { startServer, type ServerInstance } from './server'
 import { createTunnel, type TunnelManager } from '../tunnel'
-import { startBridgeServer, stopBridgeServer, type BridgeServerState } from '../browser/bridge-server'
+import { BridgeServer, type BridgeServerState } from '../../../browser-mcp-server/src/bridge/server'
 
 const execFileAsync = promisify(execFile)
 
@@ -21,6 +21,7 @@ export interface LaunchResult {
   server: ServerInstance
   tunnel?: TunnelManager
   browserBridge?: BridgeServerState
+  browserBridgeInstance?: BridgeServer
   localUrl: string
   publicUrl?: string
   configPath: string
@@ -60,15 +61,17 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
 
   // 2. 启动浏览器 Bridge Server（如果启用）
   let browserBridge: BridgeServerState | undefined
+  let browserBridgeInstance: BridgeServer | undefined
   const browserConfig = (config as any).browser
   if (browserConfig?.enabled) {
     try {
-      browserBridge = await startBridgeServer({
+      browserBridgeInstance = new BridgeServer({
         port: browserConfig.bridgePort ?? 18791,
         cdpPort: browserConfig.cdpPort ?? 9222,
         autoLaunch: browserConfig.autoLaunch ?? true,
         headless: browserConfig.headless ?? false,
       })
+      browserBridge = await browserBridgeInstance.start()
       console.log(`\n🌐 Browser Bridge Server started at http://127.0.0.1:${browserBridge.port}`)
     } catch (error: any) {
       console.warn(`Failed to start Browser Bridge Server: ${error.message}`)
@@ -118,6 +121,7 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
     server,
     tunnel,
     browserBridge,
+    browserBridgeInstance,
     localUrl,
     publicUrl,
     configPath,
@@ -129,9 +133,9 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
  */
 export async function shutdown(result: LaunchResult): Promise<void> {
   // 停止浏览器 Bridge Server
-  if (result.browserBridge) {
+  if (result.browserBridgeInstance) {
     try {
-      await stopBridgeServer()
+      await result.browserBridgeInstance.stop()
     } catch {
       // 忽略停止错误
     }
