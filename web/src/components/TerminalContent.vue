@@ -123,7 +123,7 @@ defineExpose({ fit })
   flex-wrap: wrap;
   gap: var(--space-xs);
   padding: var(--space-sm);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
   flex-shrink: 0;
 }
 
@@ -133,7 +133,7 @@ defineExpose({ fit })
   gap: 6px;
   padding: 6px 10px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--text-secondary);
@@ -156,7 +156,7 @@ defineExpose({ fit })
 }
 
 .terminal-tab.active .status-dot {
-  border: 1px solid white;
+  border: 0.5px solid white;
 }
 
 .status-dot {
@@ -242,7 +242,7 @@ defineExpose({ fit })
 }
 
 .separator {
-  color: var(--border);
+  color: var(--border-default);
 }
 
 .empty-state {

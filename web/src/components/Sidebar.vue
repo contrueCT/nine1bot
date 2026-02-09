@@ -287,7 +287,7 @@ function getSessionTitle(session: Session): string {
   flex-direction: column;
   height: 100vh;
   background: var(--bg-secondary);
-  border-right: 1px solid var(--border-subtle);
+  border-right: 0.5px solid var(--border-default);
 }
 
 .sidebar-header {
@@ -339,29 +339,28 @@ function getSessionTitle(session: Session): string {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-  padding: 10px var(--space-sm);
+  gap: 12px;
+  padding: 6px var(--space-md);
   border: none;
   background: transparent;
   color: var(--text-secondary);
   font-size: 14px;
-  font-weight: 400;
+  font-weight: var(--font-weight-normal);
   text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-md);
-  transition: all var(--transition-fast);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--transition-fast);
   width: 100%;
 }
 
 .nav-item:hover {
-  background: var(--bg-tertiary);
+  background: rgba(0, 0, 0, 0.04);
   color: var(--text-primary);
 }
 
 .nav-item.active {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
-  font-weight: 500;
+  background: var(--accent-subtle);
+  color: var(--accent);
 }
 
 .nav-item.new-chat {
@@ -423,15 +422,15 @@ function getSessionTitle(session: Session): string {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: 8px var(--space-sm);
-  border-radius: var(--radius-md);
+  padding: 6px var(--space-sm);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast);
   position: relative;
 }
 
 .recent-item:hover {
-  background: var(--bg-tertiary);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .recent-item.active {
@@ -457,7 +456,7 @@ function getSessionTitle(session: Session): string {
 }
 
 .recent-item.active .recent-title {
-  color: var(--text-primary);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -492,7 +491,7 @@ function getSessionTitle(session: Session): string {
 }
 
 .mini-btn:hover {
-  background: var(--bg-secondary);
+  background: var(--bg-primary);
   color: var(--text-primary);
 }
 
@@ -506,7 +505,7 @@ function getSessionTitle(session: Session): string {
 
 .view-all-btn {
   width: 100%;
-  padding: 8px;
+  padding: 6px;
   margin-top: var(--space-xs);
   border: none;
   background: transparent;
@@ -519,14 +518,14 @@ function getSessionTitle(session: Session): string {
 }
 
 .view-all-btn:hover {
-  background: var(--bg-tertiary);
+  background: rgba(0, 0, 0, 0.04);
   color: var(--text-primary);
 }
 
 /* === User Profile Footer === */
 .sidebar-footer {
   padding: var(--space-sm) var(--space-md);
-  border-top: 1px solid var(--border-subtle);
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 .user-profile {
@@ -534,13 +533,13 @@ function getSessionTitle(session: Session): string {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast);
 }
 
 .user-profile:hover {
-  background: var(--bg-tertiary);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .user-avatar {
@@ -607,8 +606,8 @@ function getSessionTitle(session: Session): string {
 }
 
 .dialog {
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   width: 320px;
   max-width: 90vw;
@@ -620,7 +619,7 @@ function getSessionTitle(session: Session): string {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-md);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-subtle);
   font-weight: 600;
 }
 
@@ -639,7 +638,7 @@ function getSessionTitle(session: Session): string {
 }
 
 .dialog-header .action-btn:hover {
-  background: var(--bg-elevated);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
@@ -650,11 +649,12 @@ function getSessionTitle(session: Session): string {
 .dialog-input {
   width: 100%;
   padding: var(--space-sm) var(--space-md);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 14px;
+  font-weight: var(--font-weight-normal);
 }
 
 .dialog-input:focus {
@@ -677,7 +677,7 @@ function getSessionTitle(session: Session): string {
   justify-content: flex-end;
   gap: var(--space-sm);
   padding: var(--space-md);
-  border-top: 1px solid var(--border);
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 .dialog-footer .btn-sm {
@@ -690,7 +690,7 @@ function getSessionTitle(session: Session): string {
 }
 
 .dialog-footer .btn-danger {
-  background: var(--error, #ef4444);
+  background: var(--error);
   color: white;
   border: none;
 }

@@ -173,7 +173,7 @@ function getDisplayText(item: TodoItem): string {
 <style scoped>
 .todo-panel {
   background: var(--bg-primary);
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
@@ -183,7 +183,6 @@ function getDisplayText(item: TodoItem): string {
 
 .todo-panel.plan-mode {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 99, 102, 241), 0.2), var(--shadow-md);
 }
 
 .plan-icon {
@@ -195,7 +194,7 @@ function getDisplayText(item: TodoItem): string {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-md);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-subtle);
 }
 
 .todo-title {

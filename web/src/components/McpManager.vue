@@ -589,7 +589,7 @@ function confirmRemove(name: string) {
 /* 添加表单样式 */
 .add-form {
   background: var(--bg-tertiary);
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
@@ -599,7 +599,7 @@ function confirmRemove(name: string) {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
 }
 
 .form-title {
@@ -647,7 +647,7 @@ function confirmRemove(name: string) {
 
 .form-input {
   padding: var(--space-sm) var(--space-md);
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -699,7 +699,7 @@ function confirmRemove(name: string) {
   justify-content: flex-end;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  border-top: 1px solid var(--border-subtle);
+  border-top: 0.5px solid var(--border-subtle);
   background: var(--bg-secondary);
 }
 
@@ -708,12 +708,12 @@ function confirmRemove(name: string) {
   display: flex;
   padding: var(--space-sm) var(--space-md);
   gap: var(--space-xs);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
 }
 
 .mode-btn {
   padding: var(--space-xs) var(--space-sm);
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
@@ -752,7 +752,7 @@ function confirmRemove(name: string) {
 .json-textarea {
   width: 100%;
   padding: var(--space-sm) var(--space-md);
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -802,7 +802,7 @@ function confirmRemove(name: string) {
 
 .tools-section {
   padding-top: var(--space-md);
-  border-top: 1px solid var(--border-subtle);
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 .tools-title {

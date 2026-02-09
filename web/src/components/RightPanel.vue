@@ -146,7 +146,7 @@ watch([isPanelOpen, panelWidth, activeTab], () => {
   position: relative;
   height: 100%;
   background: var(--bg-primary);
-  border-left: 1px solid var(--border);
+  border-left: 0.5px solid var(--border-default);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -173,7 +173,7 @@ watch([isPanelOpen, panelWidth, activeTab], () => {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
@@ -189,7 +189,7 @@ watch([isPanelOpen, panelWidth, activeTab], () => {
   gap: 6px;
   padding: 6px 12px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 500;
@@ -260,7 +260,7 @@ watch([isPanelOpen, panelWidth, activeTab], () => {
   gap: 4px;
   padding: 8px 12px;
   background: var(--bg-primary);
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   border-right: none;
   border-radius: var(--radius-md) 0 0 var(--radius-md);
   color: var(--text-secondary);

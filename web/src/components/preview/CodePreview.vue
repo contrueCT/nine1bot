@@ -103,7 +103,7 @@ const lineNumbers = computed(() => {
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
   flex-shrink: 0;
 }
 
@@ -129,7 +129,7 @@ const lineNumbers = computed(() => {
   margin-left: auto;
   padding: 4px 10px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--text-secondary);
@@ -164,7 +164,7 @@ const lineNumbers = computed(() => {
 .loading-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--border-default);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -192,7 +192,7 @@ const lineNumbers = computed(() => {
   text-align: right;
   user-select: none;
   flex-shrink: 0;
-  border-right: 1px solid var(--border);
+  border-right: 0.5px solid var(--border-default);
 }
 
 .line-numbers span {

@@ -170,7 +170,7 @@ function openInNewTab() {
   flex-wrap: wrap;
   gap: var(--space-xs);
   padding: var(--space-sm);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
   flex-shrink: 0;
 }
 
@@ -180,7 +180,7 @@ function openInNewTab() {
   gap: 6px;
   padding: 6px 8px 6px 10px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--text-secondary);
@@ -239,7 +239,7 @@ function openInNewTab() {
   gap: var(--space-sm);
   padding: var(--space-sm);
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
   flex-shrink: 0;
 }
 

@@ -145,7 +145,7 @@ function handleOverlayClick(e: MouseEvent) {
 
 .settings-tabs {
   padding: 0 var(--space-lg);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
 }
 
 .settings-tabs .tabs {
@@ -153,29 +153,30 @@ function handleOverlayClick(e: MouseEvent) {
   padding: 4px;
   gap: 4px;
   border-radius: var(--radius-md);
+  border-bottom: none;
 }
 
 .settings-tabs .tab {
   flex: 1;
   background: transparent;
-  padding: 8px 16px;
+  padding: 6px 16px;
   border-radius: var(--radius-sm);
   border: none;
   margin: 0;
   text-align: center;
   color: var(--text-secondary);
-  font-weight: 500;
-  transition: all 0.2s ease;
+  font-weight: var(--font-weight-normal);
+  transition: all var(--transition-fast);
 }
 
 .settings-tabs .tab:hover {
   color: var(--text-primary);
-  background: rgba(125, 125, 125, 0.1);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .settings-tabs .tab.active {
   background: var(--bg-elevated);
   color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
+  font-weight: 500;
 }
 </style>

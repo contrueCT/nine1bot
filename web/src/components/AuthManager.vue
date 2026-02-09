@@ -208,7 +208,7 @@ function clearSearch() {
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
 
@@ -271,7 +271,7 @@ function clearSearch() {
   width: 100%;
   margin-top: var(--space-md);
   padding-top: var(--space-md);
-  border-top: 1px solid var(--border-subtle);
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 .form-actions {

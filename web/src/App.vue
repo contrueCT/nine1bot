@@ -386,20 +386,20 @@ function closeFileViewer() {
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   background: var(--bg-elevated);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  animation: slideIn 0.3s ease-out;
+  animation: slideIn 0.3s var(--ease-smooth);
 }
 
 .notification-toast.success {
   border-color: var(--success);
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), var(--bg-elevated));
+  background: var(--bg-elevated);
 }
 
 .notification-toast.info {
   border-color: var(--accent);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), var(--bg-elevated));
+  background: var(--bg-elevated);
 }
 
 .notification-icon {

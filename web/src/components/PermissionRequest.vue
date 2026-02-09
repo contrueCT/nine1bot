@@ -168,7 +168,7 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
 <style scoped>
 .permission-request {
   background: var(--glass-bg);
-  border: 1px solid var(--warning, #f59e0b);
+  border: 0.5px solid var(--warning, #f59e0b);
   border-radius: var(--radius-md);
   padding: var(--space-md);
   margin: var(--space-sm) 0;
@@ -245,13 +245,13 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
   justify-content: flex-end;
   gap: var(--space-sm);
   padding-top: var(--space-sm);
-  border-top: 1px solid var(--border);
+  border-top: 0.5px solid var(--border-default);
 }
 
 .btn-danger {
   background: transparent;
   color: var(--error);
-  border: 1px solid var(--error);
+  border: 0.5px solid var(--error);
 }
 
 .btn-danger:hover:not(:disabled) {
@@ -266,7 +266,7 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
   font-size: 0.75rem;
   font-weight: 500;
   padding-top: var(--space-sm);
-  border-top: 1px solid var(--border);
+  border-top: 0.5px solid var(--border-default);
 }
 
 .permission-responded svg {
@@ -295,7 +295,7 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
   margin-top: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
   background: rgba(239, 68, 68, 0.1);
-  border: 1px solid var(--error);
+  border: 0.5px solid var(--error);
   border-radius: var(--radius-sm);
   color: var(--error);
   font-size: 0.8125rem;

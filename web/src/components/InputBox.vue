@@ -283,9 +283,9 @@ function formatSize(bytes: number): string {
 .drag-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
+  background: var(--accent-subtle);
   border: 2px dashed var(--accent);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -318,23 +318,23 @@ function formatSize(bytes: number): string {
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
   font-size: 12px;
   max-width: 200px;
 }
 
 .attachment-chip.error {
   border-color: var(--error);
-  background: rgba(var(--error-rgb, 239, 68, 68), 0.1);
+  background: var(--error-subtle);
 }
 
 .attachment-thumb {
   width: 32px;
   height: 32px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .attachment-icon {
@@ -343,8 +343,8 @@ function formatSize(bytes: number): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-secondary);
-  border-radius: 4px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
 }
 
@@ -395,31 +395,27 @@ function formatSize(bytes: number): string {
 }
 
 .attachment-remove:hover {
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
   color: var(--error);
 }
 
 .input-glass-wrapper {
   position: relative;
-  border-radius: 24px;
-  background: var(--bg-tertiary);
-  background: var(--bg-glass-strong);
-  box-shadow: var(--shadow-lg);
-  transition: all var(--transition-normal);
-  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  transition: border-color var(--transition-fast);
+  border: 0.5px solid var(--border-default);
 }
 
 .input-glass-wrapper:focus-within {
-  border-color: var(--accent-glow);
-  box-shadow: 0 0 24px -4px var(--accent-subtle);
-  transform: translateY(-2px);
+  border-color: var(--accent);
 }
 
 .glass-input {
   display: flex;
   align-items: flex-end;
-  padding: 12px 16px;
-  gap: 12px;
+  padding: 10px 14px;
+  gap: 10px;
 }
 
 .custom-textarea {
@@ -431,6 +427,7 @@ function formatSize(bytes: number): string {
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 15px;
+  font-weight: var(--font-weight-normal);
   line-height: 1.5;
   max-height: 200px;
   min-height: 32px;
@@ -455,7 +452,9 @@ function formatSize(bytes: number): string {
   border-radius: var(--radius-sm);
   border: none;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast);
 }
 
 .attach-btn {
@@ -465,7 +464,7 @@ function formatSize(bytes: number): string {
 
 .attach-btn:hover:not(:disabled) {
   color: var(--text-primary);
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
 }
 
 .attach-btn:disabled {
@@ -481,12 +480,12 @@ function formatSize(bytes: number): string {
 
 .plan-btn:hover:not(:disabled) {
   color: var(--accent);
-  background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
+  background: var(--accent-subtle);
 }
 
 .plan-btn.active {
   color: var(--accent);
-  background: rgba(var(--accent-rgb, 99, 102, 241), 0.15);
+  background: var(--accent-subtle);
 }
 
 .plan-btn:disabled {
@@ -499,11 +498,11 @@ function formatSize(bytes: number): string {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
+  padding: 8px 14px;
   margin-bottom: 8px;
-  background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
-  border: 1px solid rgba(var(--accent-rgb, 99, 102, 241), 0.3);
-  border-radius: 12px;
+  background: var(--accent-subtle);
+  border: 0.5px solid var(--accent);
+  border-radius: var(--radius-md);
   font-size: 12px;
   color: var(--accent);
 }
@@ -527,13 +526,12 @@ function formatSize(bytes: number): string {
 }
 
 .plan-mode-close:hover {
-  background: rgba(var(--accent-rgb, 99, 102, 241), 0.2);
+  background: var(--accent-glow);
 }
 
 /* Plan Mode Active State */
 .input-glass-wrapper.plan-mode-active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb, 99, 102, 241), 0.2);
 }
 
 .send-btn {
@@ -543,7 +541,6 @@ function formatSize(bytes: number): string {
 
 .send-btn:hover:not(:disabled) {
   background: var(--accent-hover);
-  transform: scale(1.05);
 }
 
 .send-btn:disabled {
@@ -553,8 +550,8 @@ function formatSize(bytes: number): string {
 }
 
 .abort-btn {
-  background: var(--bg-tertiary);
-  border: 1px solid var(--error);
+  background: transparent;
+  border: 0.5px solid var(--error);
   color: var(--error);
 }
 
@@ -570,6 +567,7 @@ function formatSize(bytes: number): string {
 
 .input-hint {
   font-size: 11px;
-  opacity: 0.6;
+  color: var(--text-muted);
+  opacity: 0.7;
 }
 </style>

@@ -142,34 +142,31 @@ function scrollToBottom() {
   justify-content: center;
   padding: 20px;
   text-align: center;
-  animation: fade-in 0.8s ease;
+  animation: fade-in 0.5s var(--ease-smooth);
 }
 
 .glass-icon {
-  width: 96px;
-  height: 96px;
+  width: 80px;
+  height: 80px;
   background: var(--bg-tertiary);
-  border-radius: 24px;
+  border-radius: var(--radius-xl);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   color: var(--accent);
-  box-shadow: var(--shadow-glow);
 }
 
 .empty-state-title {
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 22px;
+  font-weight: 600;
   margin-bottom: 8px;
-  background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--text-primary);
 }
 
 .empty-state-description {
-  color: var(--text-secondary);
-  font-size: 16px;
+  color: var(--text-muted);
+  font-size: 15px;
 }
 
 .bottom-spacer {
@@ -184,8 +181,8 @@ function scrollToBottom() {
 .session-error-banner {
   margin: var(--space-md) var(--space-lg);
   padding: var(--space-md);
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid var(--error, #ef4444);
+  background: var(--error-subtle);
+  border: 0.5px solid var(--error);
   border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
@@ -196,7 +193,7 @@ function scrollToBottom() {
   display: flex;
   align-items: flex-start;
   gap: var(--space-sm);
-  color: var(--error, #ef4444);
+  color: var(--error);
 }
 
 .error-content svg {
@@ -222,7 +219,7 @@ function scrollToBottom() {
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(20px); }
+  from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
 }
 </style>

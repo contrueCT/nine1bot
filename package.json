@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "web"
+  ],
   "scripts": {
     "dev": "bun run --cwd opencode dev",
     "build:web": "bun run --cwd web build",
