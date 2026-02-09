@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
+import path from "path"
 import { File } from "../../file"
 import { Ripgrep } from "../../file/ripgrep"
 import { LSP } from "../../lsp"
@@ -236,6 +237,47 @@ export const FileRoutes = lazy(() =>
           headers: {
             "Content-Type": preview.mime,
             "Content-Disposition": `inline; filename="${preview.filename}"`,
+          },
+        })
+      },
+    )
+    .get(
+      "/file/upload",
+      describeRoute({
+        summary: "Serve uploaded file",
+        description: "Serve an uploaded file by its path. Only files within uploads directories are allowed.",
+        operationId: "file.upload",
+        responses: {
+          200: { description: "File content" },
+          400: { description: "Missing path parameter" },
+          403: { description: "Access denied - path outside uploads directory" },
+          404: { description: "File not found" },
+        },
+      }),
+      async (c) => {
+        const filePath = c.req.query("path")
+        if (!filePath) {
+          return c.json({ error: "Missing path" }, 400)
+        }
+
+        const normalized = path.resolve(filePath)
+        const sep = path.sep
+        const isUploadsDir =
+          normalized.includes(`${sep}.nine1bot${sep}uploads${sep}`) ||
+          normalized.includes(`${sep}.opencode${sep}uploads${sep}`)
+        if (!isUploadsDir) {
+          return c.json({ error: "Access denied" }, 403)
+        }
+
+        const file = Bun.file(normalized)
+        if (!(await file.exists())) {
+          return c.json({ error: "File not found" }, 404)
+        }
+
+        return c.body(await file.arrayBuffer(), {
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+            "Content-Disposition": `inline; filename="${path.basename(normalized)}"`,
           },
         })
       },

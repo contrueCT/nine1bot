@@ -980,8 +980,8 @@ export namespace SessionPrompt {
                   const base64Data = base64Match[1]
                   const buffer = Buffer.from(base64Data, "base64")
 
-                  // Save to project's .opencode/uploads directory (within sandbox)
-                  const uploadsDir = path.join(session.directory, ".opencode", "uploads", input.sessionID)
+                  // Save to project's .nine1bot/uploads directory (within sandbox)
+                  const uploadsDir = path.join(session.directory, ".nine1bot", "uploads", input.sessionID)
                   await fs.mkdir(uploadsDir, { recursive: true })
                   const uploadFilePath = path.join(uploadsDir, part.filename || `upload-${Date.now()}`)
                   await fs.writeFile(uploadFilePath, buffer)
