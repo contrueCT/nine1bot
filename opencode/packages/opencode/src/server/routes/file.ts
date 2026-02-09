@@ -6,7 +6,7 @@ import { Ripgrep } from "../../file/ripgrep"
 import { LSP } from "../../lsp"
 import { Instance } from "../../project/instance"
 import { lazy } from "../../util/lazy"
-import { PreviewRegistry } from "../../tool/preview-file"
+import { PreviewRegistry } from "../../tool/display_file"
 
 export const FileRoutes = lazy(() =>
   new Hono()
@@ -136,11 +136,12 @@ export const FileRoutes = lazy(() =>
         "query",
         z.object({
           path: z.string(),
+          directory: z.string().optional(),
         }),
       ),
       async (c) => {
-        const path = c.req.valid("query").path
-        const content = await File.list(path)
+        const { path, directory } = c.req.valid("query")
+        const content = await File.list(path, { directory })
         return c.json(content)
       },
     )
@@ -165,11 +166,12 @@ export const FileRoutes = lazy(() =>
         "query",
         z.object({
           path: z.string(),
+          directory: z.string().optional(),
         }),
       ),
       async (c) => {
-        const path = c.req.valid("query").path
-        const content = await File.read(path)
+        const { path, directory } = c.req.valid("query")
+        const content = await File.read(path, { directory })
         return c.json(content)
       },
     )
@@ -190,8 +192,15 @@ export const FileRoutes = lazy(() =>
           },
         },
       }),
+      validator(
+        "query",
+        z.object({
+          directory: z.string().optional(),
+        }),
+      ),
       async (c) => {
-        const content = await File.status()
+        const { directory } = c.req.valid("query")
+        const content = await File.status({ directory })
         return c.json(content)
       },
     )

@@ -379,9 +379,10 @@ export const api = {
   },
 
   // 获取文件列表
-  async getFiles(path: string = ''): Promise<FileItem[]> {
+  async getFiles(path: string = '', directory?: string): Promise<FileItem[]> {
     const params = new URLSearchParams()
     if (path) params.set('path', path)
+    if (directory) params.set('directory', directory)
     const res = await fetch(`${BASE_URL}/file?${params}`)
     const data = await res.json()
     // API 直接返回数组
@@ -389,8 +390,9 @@ export const api = {
   },
 
   // 获取文件内容
-  async getFileContent(path: string): Promise<FileContent> {
+  async getFileContent(path: string, directory?: string): Promise<FileContent> {
     const params = new URLSearchParams({ path })
+    if (directory) params.set('directory', directory)
     const res = await fetch(`${BASE_URL}/file/content?${params}`)
     if (!res.ok) {
       throw new Error(`Failed to get file content: ${res.status}`)

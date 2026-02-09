@@ -72,6 +72,7 @@ const { handleSSEEvent: handlePreviewEvent } = useFilePreview()
 const {
   files,
   isLoading: filesLoading,
+  setDirectory: setFilesDirectory,
   loadFiles,
   toggleDirectory,
   // 文件查看
@@ -156,9 +157,11 @@ onUnmounted(() => {
   }
 })
 
-// 注意：currentDirectory 可能是绝对路径，但文件 API 只接受相对路径
-// 所以这里不再监听 currentDirectory 的变化来重新加载文件
-// 文件浏览始终显示项目根目录的内容
+// 监听当前目录变化，更新文件树工作目录
+watch(currentDirectory, async (newDir) => {
+  setFilesDirectory(newDir || undefined)
+  await loadFiles('.')
+})
 
 async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean) {
   // sendMessage 会自动处理草稿模式，在发送前创建会话
