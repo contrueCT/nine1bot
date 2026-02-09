@@ -153,7 +153,7 @@ export namespace SessionPrompt {
     const session = await Session.get(input.sessionID)
     await SessionRevert.cleanup(session)
 
-    const message = await createUserMessage(input)
+    const message = await createUserMessage(input, session)
     await Session.touch(input.sessionID)
 
     // this is backwards compatibility for allowing `tools` to be specified when
@@ -347,7 +347,7 @@ export namespace SessionPrompt {
           mode: task.agent,
           agent: task.agent,
           path: {
-            cwd: Instance.directory,
+            cwd: session.directory,
             root: Instance.worktree,
           },
           cost: 0,
@@ -406,6 +406,7 @@ export namespace SessionPrompt {
           sessionID: sessionID,
           abort,
           callID: part.callID,
+          cwd: session.directory,
           extra: { bypassAgentCheck: true },
           messages: msgs,
           async metadata(input) {
@@ -550,7 +551,7 @@ export namespace SessionPrompt {
           mode: agent.name,
           agent: agent.name,
           path: {
-            cwd: Instance.directory,
+            cwd: session.directory,
             root: Instance.worktree,
           },
           cost: 0,
@@ -621,7 +622,7 @@ export namespace SessionPrompt {
         agent,
         abort,
         sessionID,
-        system: [...(await SystemPrompt.environment(model)), ...(await InstructionPrompt.system())],
+        system: [...(await SystemPrompt.environment(model, session.directory)), ...(await InstructionPrompt.system())],
         messages: [
           ...MessageV2.toModelMessages(sessionMessages, model),
           ...(isLastStep
@@ -683,6 +684,7 @@ export namespace SessionPrompt {
       abort: options.abortSignal!,
       messageID: input.processor.message.id,
       callID: options.toolCallId,
+      cwd: input.session.directory,
       extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck },
       agent: input.agent.name,
       messages: input.messages,
@@ -750,7 +752,14 @@ export namespace SessionPrompt {
       })
     }
 
-    for (const [key, item] of Object.entries(await MCP.tools())) {
+    // Get MCP tools within session directory's Instance context
+    // This ensures local MCP processes use session directory as cwd
+    const mcpTools = await Instance.provide({
+      directory: input.session.directory,
+      fn: () => MCP.tools(),
+    })
+
+    for (const [key, item] of Object.entries(mcpTools)) {
       const execute = item.execute
       if (!execute) continue
 
@@ -844,7 +853,7 @@ export namespace SessionPrompt {
     return tools
   }
 
-  async function createUserMessage(input: PromptInput) {
+  async function createUserMessage(input: PromptInput, session: Session.Info) {
     const agent = await Agent.get(input.agent ?? (await Agent.defaultAgent()))
     const info: MessageV2.Info = {
       id: input.messageID ?? Identifier.ascending("message"),
@@ -972,7 +981,7 @@ export namespace SessionPrompt {
                   const buffer = Buffer.from(base64Data, "base64")
 
                   // Save to project's .opencode/uploads directory (within sandbox)
-                  const uploadsDir = path.join(Instance.directory, ".opencode", "uploads", input.sessionID)
+                  const uploadsDir = path.join(session.directory, ".opencode", "uploads", input.sessionID)
                   await fs.mkdir(uploadsDir, { recursive: true })
                   const uploadFilePath = path.join(uploadsDir, part.filename || `upload-${Date.now()}`)
                   await fs.writeFile(uploadFilePath, buffer)
@@ -1086,6 +1095,7 @@ export namespace SessionPrompt {
                       abort: new AbortController().signal,
                       agent: input.agent!,
                       messageID: info.id,
+                      cwd: session.directory,
                       extra: { bypassCwdCheck: true, model },
                       messages: [],
                       metadata: async () => {},
@@ -1148,6 +1158,7 @@ export namespace SessionPrompt {
                   abort: new AbortController().signal,
                   agent: input.agent!,
                   messageID: info.id,
+                  cwd: session.directory,
                   extra: { bypassCwdCheck: true },
                   messages: [],
                   metadata: async () => {},
@@ -1466,7 +1477,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       agent: input.agent,
       cost: 0,
       path: {
-        cwd: Instance.directory,
+        cwd: session.directory,
         root: Instance.worktree,
       },
       time: {
@@ -1557,7 +1568,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const args = matchingInvocation?.args
 
     const proc = spawn(shell, args, {
-      cwd: Instance.directory,
+      cwd: session.directory,
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
       env: {

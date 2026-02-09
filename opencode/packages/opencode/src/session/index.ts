@@ -156,8 +156,10 @@ export namespace Session {
       messageID: Identifier.schema("message").optional(),
     }),
     async (input) => {
+      // Get parent session to inherit its directory
+      const parentSession = await get(input.sessionID)
       const session = await createNext({
-        directory: Instance.directory,
+        directory: parentSession.directory,
       })
       const msgs = await messages({ sessionID: input.sessionID })
       const idMap = new Map<string, string>()

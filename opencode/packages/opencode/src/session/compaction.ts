@@ -101,6 +101,8 @@ export namespace SessionCompaction {
     const model = agent.model
       ? await Provider.getModel(agent.model.providerID, agent.model.modelID)
       : await Provider.getModel(userMessage.model.providerID, userMessage.model.modelID)
+    // Get session to use its directory
+    const session = await Session.get(input.sessionID)
     const msg = (await Session.updateMessage({
       id: Identifier.ascending("message"),
       role: "assistant",
@@ -110,7 +112,7 @@ export namespace SessionCompaction {
       agent: "compaction",
       summary: true,
       path: {
-        cwd: Instance.directory,
+        cwd: session.directory,
         root: Instance.worktree,
       },
       cost: 0,
