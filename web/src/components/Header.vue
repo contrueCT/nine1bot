@@ -10,6 +10,7 @@ defineProps<{
   isStreaming: boolean
   sidebarCollapsed: boolean
   isSummarizing?: boolean
+  retryInfo?: { attempt: number; message: string; next: number } | null
 }>()
 
 const emit = defineEmits<{
@@ -126,8 +127,13 @@ function getCurrentModelName(): string {
     </div>
 
     <div class="header-right">
+      <!-- Retry Indicator -->
+      <div v-if="retryInfo" class="streaming-badge retry-badge">
+        <span class="retry-dot"></span>
+        <span class="streaming-text">重试中 (第{{ retryInfo.attempt }}次) - {{ retryInfo.message }}</span>
+      </div>
       <!-- Streaming Indicator -->
-      <div v-if="isStreaming" class="streaming-badge">
+      <div v-else-if="isStreaming" class="streaming-badge">
         <span class="streaming-dot"></span>
         <span class="streaming-text">生成中</span>
       </div>
@@ -310,6 +316,19 @@ function getCurrentModelName(): string {
   border-radius: 50%;
   animation: pulse 1.5s infinite;
   box-shadow: 0 0 8px var(--accent);
+}
+
+.retry-badge .streaming-text {
+  color: var(--warning, #f59e0b);
+}
+
+.retry-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--warning, #f59e0b);
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+  box-shadow: 0 0 8px var(--warning, #f59e0b);
 }
 
 @keyframes pulse {

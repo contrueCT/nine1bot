@@ -27,6 +27,7 @@ const {
   pendingQuestions,
   pendingPermissions,
   sessionError,
+  retryInfo,
   loadSessions,
   createSession,
   selectSession,
@@ -270,6 +271,7 @@ function closeFileViewer() {
         :isStreaming="isStreaming"
         :sidebarCollapsed="sidebarCollapsed"
         :isSummarizing="isSummarizing"
+        :retryInfo="retryInfo"
         @toggle-sidebar="toggleSidebar"
         @abort="abortCurrentSession"
         @open-settings="openSettings"

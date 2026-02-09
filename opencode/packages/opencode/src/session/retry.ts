@@ -95,5 +95,11 @@ export namespace SessionRetry {
     ) {
       return "Provider Server Error"
     }
+
+    // Fallback: detect network-related errors by message keywords
+    const msg = (error.data?.message ?? "").toLowerCase()
+    if (msg.includes("network") || msg.includes("connection lost") || msg.includes("etimedout") || msg.includes("econnrefused") || msg.includes("socket hang up")) {
+      return "Network error"
+    }
   }
 }

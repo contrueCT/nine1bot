@@ -761,10 +761,27 @@ export namespace MessageV2 {
           },
           { cause: e },
         ).toObject()
+      case e instanceof Error && isNetworkLikeError(e):
+        return new MessageV2.APIError(
+          {
+            message: e.message,
+            isRetryable: true,
+            statusCode: (e as any).code ?? (e as any).statusCode,
+            metadata: (e as any).metadata,
+          },
+          { cause: e },
+        ).toObject()
       case e instanceof Error:
         return new NamedError.Unknown({ message: e.toString() }, { cause: e }).toObject()
       default:
         return new NamedError.Unknown({ message: JSON.stringify(e) }, { cause: e })
     }
+  }
+
+  function isNetworkLikeError(e: Error): boolean {
+    const code = (e as any).code
+    if (typeof code === "number" && code >= 500 && code < 600) return true
+    const msg = e.message.toLowerCase()
+    return msg.includes("network") || msg.includes("connection lost") || msg.includes("etimedout") || msg.includes("econnrefused") || msg.includes("socket hang up")
   }
 }

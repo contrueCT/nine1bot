@@ -39,6 +39,9 @@ export function useSession() {
   // 会话错误（如模型不可用）
   const sessionError = ref<{ message: string; dismissable?: boolean } | null>(null)
 
+  // 重试状态（后端正在指数退避重试时显示）
+  const retryInfo = ref<{ attempt: number; message: string; next: number } | null>(null)
+
   // 会话完成通知（用于其他会话完成时的友好提示）
   const sessionNotifications = ref<{ id: string; sessionId: string; sessionTitle: string; message: string; type: 'success' | 'info' }[]>([])
 
@@ -398,8 +401,25 @@ export function useSession() {
         }
         break
 
+      case 'session.status':
+        // 会话状态变更（busy/retry/idle）
+        if (properties?.status) {
+          const status = properties.status
+          if (status.type === 'retry') {
+            retryInfo.value = {
+              attempt: status.attempt ?? 1,
+              message: status.message ?? '网络错误',
+              next: status.next ?? Date.now()
+            }
+          } else {
+            retryInfo.value = null
+          }
+        }
+        break
+
       case 'session.error':
         // 会话错误（如模型不可用）
+        retryInfo.value = null
         if (properties?.error) {
           const error = properties.error
           const message = error.data?.message || error.message || '发生未知错误'
@@ -413,6 +433,7 @@ export function useSession() {
 
       case 'session.idle':
         // Note: session running state is handled by handleGlobalSSEEvent
+        retryInfo.value = null
         break
 
       case 'todo.updated':
@@ -753,6 +774,7 @@ export function useSession() {
     pendingQuestions,
     pendingPermissions,
     sessionError,
+    retryInfo,
     loadSessions,
     createSession,
     selectSession,
