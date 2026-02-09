@@ -69,6 +69,14 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
         if (Object.keys(rest).length > 0) {
           opencodeConfig[key] = rest
         }
+      } else if (key === 'mcp') {
+        // 过滤掉 mcp 中的继承控制字段，这些字段由环境变量控制
+        const { inheritOpencode, inheritClaudeCode, ...mcpServers } = value as any
+        opencodeConfig[key] = mcpServers
+      } else if (key === 'provider') {
+        // 过滤掉 provider 中的继承控制字段
+        const { inheritOpencode, ...providers } = value as any
+        opencodeConfig[key] = providers
       } else {
         opencodeConfig[key] = value
       }

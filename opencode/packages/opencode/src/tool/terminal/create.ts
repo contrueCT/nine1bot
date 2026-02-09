@@ -31,7 +31,7 @@ Example usage:
     const terminal = await AgentTerminal.create({
       name: params.name,
       sessionID: ctx.sessionID,
-      cwd: params.cwd || Instance.directory,
+      cwd: params.cwd || ctx.cwd,
       rows: params.rows,
       cols: params.cols,
     })

@@ -28,7 +28,7 @@ import { Truncate } from "./truncation"
 import { PlanExitTool, PlanEnterTool } from "./plan"
 import { ApplyPatchTool } from "./apply_patch"
 import { SendFileTool } from "./send-file"
-import { DisplayFileTool } from "./preview-file"
+import { DisplayFileTool } from "./display_file"
 import {
   TerminalCreateTool,
   TerminalViewTool,
@@ -79,7 +79,7 @@ export namespace ToolRegistry {
         execute: async (args, ctx) => {
           const pluginCtx = {
             ...ctx,
-            directory: Instance.directory,
+            directory: ctx.cwd,
             worktree: Instance.worktree,
           } as unknown as PluginToolContext
           const result = await def.execute(args as any, pluginCtx)

@@ -133,12 +133,17 @@ export namespace Session {
         parentID: Identifier.schema("session").optional(),
         title: z.string().optional(),
         permission: Info.shape.permission,
+        directory: z.string().optional().meta({
+          description: "Working directory for the session. Defaults to server's current directory if not specified.",
+        }),
       })
       .optional(),
     async (input) => {
+      // Use provided directory or fall back to Instance.directory
+      const directory = input?.directory || Instance.directory
       return createNext({
         parentID: input?.parentID,
-        directory: Instance.directory,
+        directory,
         title: input?.title,
         permission: input?.permission,
       })
@@ -151,8 +156,10 @@ export namespace Session {
       messageID: Identifier.schema("message").optional(),
     }),
     async (input) => {
+      // Get parent session to inherit its directory
+      const parentSession = await get(input.sessionID)
       const session = await createNext({
-        directory: Instance.directory,
+        directory: parentSession.directory,
       })
       const msgs = await messages({ sessionID: input.sessionID })
       const idMap = new Map<string, string>()
