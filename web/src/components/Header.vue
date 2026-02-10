@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { Sun, Moon, Settings, Square, Cpu, ChevronDown, PanelLeftOpen, Check, Minimize2, ListTodo, Server, RefreshCcw, Activity, Folder } from 'lucide-vue-next'
+import { Sun, Moon, Settings, Square, PanelLeftOpen, Minimize2, ListTodo, Server, RefreshCcw, Activity, Folder } from 'lucide-vue-next'
 import type { Session } from '../api/client'
 import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
@@ -21,12 +21,6 @@ const emit = defineEmits<{
 }>()
 
 const {
-  providers,
-  currentProvider,
-  currentModel,
-  loadProviders,
-  loadConfig,
-  selectModel: settingsSelectModel,
   mcpServers,
   loadingMcp,
   loadMcpServers,
@@ -37,8 +31,6 @@ const {
 
 const { theme, toggleTheme } = useTheme()
 
-const showModelDropdown = ref(false)
-const dropdownRef = ref<HTMLElement>()
 const showMcpDropdown = ref(false)
 const mcpDropdownRef = ref<HTMLElement>()
 const mcpActionLoading = ref<string | null>(null)
@@ -61,9 +53,7 @@ const mcpSummary = computed(() => {
   return { total, connected, failed, needsAuth, level }
 })
 
-onMounted(async () => {
-  // 并行加载基础配置，MCP 在展开下拉时再加载
-  await Promise.all([loadProviders(), loadConfig()])
+onMounted(() => {
   document.addEventListener('click', handleClickOutside)
 })
 
@@ -72,17 +62,9 @@ onUnmounted(() => {
 })
 
 function handleClickOutside(e: MouseEvent) {
-  if (dropdownRef.value && !dropdownRef.value.contains(e.target as Node)) {
-    showModelDropdown.value = false
-  }
   if (mcpDropdownRef.value && !mcpDropdownRef.value.contains(e.target as Node)) {
     showMcpDropdown.value = false
   }
-}
-
-async function selectModel(providerId: string, modelId: string) {
-  await settingsSelectModel(providerId, modelId)
-  showModelDropdown.value = false
 }
 
 async function toggleMcpDropdown() {
@@ -156,23 +138,6 @@ async function checkHealth(name: string) {
     mcpHealthLoading.value = null
   }
 }
-
-function getCurrentModelName(): string {
-  // 先根据 currentProvider 找到对应的 provider
-  if (currentProvider.value) {
-    const provider = providers.value.find(p => p.id === currentProvider.value)
-    if (provider) {
-      const model = provider.models.find(m => m.id === currentModel.value)
-      if (model) return model.name || model.id
-    }
-  }
-  // 如果没有匹配的，尝试在所有 provider 中查找
-  for (const provider of providers.value) {
-    const model = provider.models.find(m => m.id === currentModel.value)
-    if (model) return model.name || model.id
-  }
-  return currentModel.value || '选择模型'
-}
 </script>
 
 <template>
@@ -196,43 +161,14 @@ function getCurrentModelName(): string {
     </div>
 
     <div class="header-center">
-      <!-- Model Selector -->
-      <div class="dropdown" ref="dropdownRef">
-        <button class="dropdown-trigger model-trigger" @click="showModelDropdown = !showModelDropdown">
-          <Cpu :size="16" class="model-icon" />
-          <span class="model-name">{{ getCurrentModelName() }}</span>
-          <ChevronDown :size="14" class="chevron" :class="{ open: showModelDropdown }" />
-        </button>
-        <div class="dropdown-menu dropdown-menu-scrollable glass-dropdown" v-if="showModelDropdown">
-          <template v-for="provider in providers.filter(p => p.authenticated)" :key="provider.id">
-            <div class="dropdown-label">{{ provider.name }}</div>
-            <div
-              v-for="model in provider.models"
-              :key="model.id"
-              class="dropdown-item"
-              :class="{ active: currentProvider === provider.id && currentModel === model.id }"
-              @click="selectModel(provider.id, model.id)"
-            >
-              <div class="dropdown-item-text">
-                <span class="model-id">{{ model.name || model.id }}</span>
-              </div>
-              <Check v-if="currentProvider === provider.id && currentModel === model.id" :size="14" class="check-icon" />
-            </div>
-          </template>
-          <div v-if="providers.filter(p => p.authenticated).length === 0" class="dropdown-item text-muted">
-            暂无已认证的模型
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="header-right">
-      <!-- Streaming Indicator -->
+      <!-- Streaming Indicator (centered when streaming) -->
       <div v-if="isStreaming" class="streaming-badge">
         <span class="streaming-dot"></span>
         <span class="streaming-text">生成中</span>
       </div>
+    </div>
 
+    <div class="header-right">
       <!-- Abort Button -->
       <button
         v-if="isStreaming"
@@ -338,8 +274,8 @@ function getCurrentModelName(): string {
         </div>
       </div>
 
-       <!-- Theme Toggle -->
-       <button class="btn btn-ghost btn-icon" @click="toggleTheme" :title="theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'">
+      <!-- Theme Toggle -->
+      <button class="btn btn-ghost btn-icon" @click="toggleTheme" :title="theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'">
         <Sun v-if="theme === 'dark'" :size="20" />
         <Moon v-else :size="20" />
       </button>
@@ -354,45 +290,10 @@ function getCurrentModelName(): string {
 
 <style scoped>
 .glass-header {
-  background: var(--bg-secondary);
-  border-bottom: 0.5px solid var(--border-subtle);
+  background: transparent;
+  border-bottom: none;
   z-index: 10;
-}
-
-.model-trigger {
-  background: var(--bg-tertiary);
-  border: 0.5px solid var(--border-default);
-  padding: 6px 16px;
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  transition:
-    background-color var(--transition-fast),
-    border-color var(--transition-fast);
-}
-
-.model-trigger:hover {
-  background: var(--bg-elevated);
-  border-color: var(--border-hover);
-}
-
-.model-name {
-  font-weight: 500;
-  font-size: 13px;
-  max-width: 200px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chevron {
-  opacity: 0.5;
-  transition: transform var(--transition-fast);
-}
-
-.chevron.open {
-  transform: rotate(180deg);
+  font-family: var(--font-sans);
 }
 
 .mcp-trigger {
@@ -508,24 +409,6 @@ function getCurrentModelName(): string {
   min-width: 240px;
 }
 
-.dropdown-item {
-  border-radius: var(--radius-sm);
-  padding: 6px 12px;
-  margin-bottom: 2px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.dropdown-item:hover {
-  background: var(--bg-tertiary);
-}
-
-.dropdown-item.active {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
 .session-info {
   display: flex;
   flex-direction: column;
@@ -547,21 +430,6 @@ function getCurrentModelName(): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.dropdown-label {
-  padding: 8px 12px 4px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-}
-
-.dropdown-label:not(:first-child) {
-  margin-top: 4px;
-  border-top: 0.5px solid var(--border-subtle);
-  padding-top: 8px;
 }
 
 .streaming-badge {
@@ -598,11 +466,6 @@ function getCurrentModelName(): string {
 
 .abort-btn:hover {
   background: var(--error-subtle);
-}
-
-.dropdown-menu-scrollable {
-  max-height: 400px;
-  overflow-y: auto;
 }
 
 .animate-pulse {

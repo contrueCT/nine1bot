@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSession } from './composables/useSession'
 import { useFiles } from './composables/useFiles'
 import { useSettings } from './composables/useSettings'
+import { useAppMode } from './composables/useAppMode'
+import { useProjects } from './composables/useProjects'
 import Header from './components/Header.vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import InputBox from './components/InputBox.vue'
+import PromptCategories from './components/PromptCategories.vue'
+import SearchOverlay from './components/SearchOverlay.vue'
+import ProjectDetail from './components/ProjectDetail.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import FileViewer from './components/FileViewer.vue'
 import TodoList from './components/TodoList.vue'
@@ -81,15 +86,22 @@ const {
   contentError,
   loadFileContent,
   clearFileContent,
-  // 文件搜索 (预留功能)
-  // searchResults,
-  // isSearching,
-  // searchError,
-  // searchFiles,
-  // clearSearch
 } = useFiles()
 
-const { showSettings, openSettings, closeSettings, currentProvider, currentModel } = useSettings()
+const { showSettings, openSettings, closeSettings, currentProvider, currentModel, providers, selectModel: settingsSelectModel } = useSettings()
+
+// App mode (chat / code)
+const { mode: appMode, setMode: setAppMode } = useAppMode()
+
+// Projects
+const {
+  projects,
+  currentProject,
+  loadProjects,
+  selectProject: selectProjectFn,
+  clearProject,
+  updateProject,
+} = useProjects()
 
 // 文件查看器状态
 const showFileViewer = ref(false)
@@ -97,8 +109,20 @@ const showFileViewer = ref(false)
 // 待办事项面板状态
 const showTodoList = ref(false)
 
+// Search overlay
+const showSearch = ref(false)
+
 const sidebarCollapsed = ref(false)
-const sidebarNav = ref<'chats' | 'projects' | 'code'>('chats')
+
+// Empty state detection for centered layout
+const isEmptyState = computed(() =>
+  messages.value.length === 0 && !isLoading.value && !currentProject.value
+)
+
+// Handle model selection from InputBox
+async function handleSelectModel(providerId: string, modelId: string) {
+  await settingsSelectModel(providerId, modelId)
+}
 
 // 保存 watch 停止函数以便在 unmount 时清理
 let stopSessionWatch: (() => void) | null = null
@@ -126,6 +150,7 @@ onMounted(async () => {
   // 不传 directory 参数以加载所有会话
   await loadSessions()
   await loadFiles('.')
+  await loadProjects()
 
   if (sessions.value.length > 0) {
     await selectSession(sessions.value[0])
@@ -136,10 +161,14 @@ onMounted(async () => {
 
   // 加载待处理的问题和权限请求
   await loadPendingRequests()
+
+  // Cmd+K / Ctrl+K shortcut for search
+  document.addEventListener('keydown', handleGlobalKeydown)
 })
 
 onUnmounted(() => {
   unsubscribe()
+  document.removeEventListener('keydown', handleGlobalKeydown)
   // 清理 watch
   if (stopSessionWatch) {
     stopSessionWatch()
@@ -157,6 +186,13 @@ onUnmounted(() => {
   }
 })
 
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault()
+    showSearch.value = !showSearch.value
+  }
+}
+
 // 监听当前目录变化，更新文件树工作目录
 watch(currentDirectory, async (newDir) => {
   setFilesDirectory(newDir || undefined)
@@ -164,6 +200,11 @@ watch(currentDirectory, async (newDir) => {
 })
 
 async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean) {
+  // If viewing a project, clear project view and go to session
+  if (currentProject.value) {
+    clearProject()
+  }
+
   // sendMessage 会自动处理草稿模式，在发送前创建会话
   const model = currentProvider.value && currentModel.value
     ? { providerID: currentProvider.value, modelID: currentModel.value }
@@ -179,11 +220,53 @@ async function handleSend(content: string, files?: Array<{ type: 'file'; mime: s
 }
 
 function handleNewSession() {
+  clearProject()
   createSession(currentDirectory.value || '.')
 }
 
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
+}
+
+// Mode switch handler
+function handleSwitchMode(newMode: 'chat' | 'code') {
+  setAppMode(newMode)
+}
+
+// Project selection handler
+function handleSelectProject(projectId: string) {
+  selectProjectFn(projectId)
+}
+
+// Handle project update
+async function handleUpdateProject(projectId: string, updates: { name?: string; instructions?: string }) {
+  await updateProject(projectId, updates)
+}
+
+// Handle search result selection
+function handleSearchSelect(sessionId: string) {
+  showSearch.value = false
+  const session = sessions.value.find(s => s.id === sessionId)
+  if (session) {
+    clearProject()
+    selectSession(session)
+  }
+}
+
+// Handle creating new session from project
+function handleProjectNewSession(_projectId: string) {
+  // TODO: Create session with projectID when backend supports it
+  clearProject()
+  createSession(currentDirectory.value || '.')
+}
+
+// Handle selecting session from project detail
+function handleProjectSelectSession(sessionId: string) {
+  const session = sessions.value.find(s => s.id === sessionId)
+  if (session) {
+    clearProject()
+    selectSession(session)
+  }
 }
 
 // 处理消息部分删除
@@ -232,6 +315,11 @@ function closeFileViewer() {
   showFileViewer.value = false
   clearFileContent()
 }
+
+// 处理提示分类选择
+function handlePromptSelect(prompt: string) {
+  handleSend(prompt)
+}
 </script>
 
 <template>
@@ -244,24 +332,27 @@ function closeFileViewer() {
       :isDraftSession="isDraftSession"
       :files="files"
       :filesLoading="filesLoading"
-      :activeNav="sidebarNav"
+      :mode="appMode"
+      :projects="projects"
+      :currentProjectId="currentProject?.id || null"
       :currentDirectory="currentDirectory"
       :canChangeDirectory="canChangeDirectory()"
       :isSessionRunning="isSessionRunning"
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
       @toggle-collapse="toggleSidebar"
-      @select-session="selectSession"
+      @select-session="(session) => { clearProject(); selectSession(session) }"
       @new-session="handleNewSession"
       @toggle-directory="toggleDirectory"
-      @change-nav="(nav: 'chats' | 'projects' | 'code') => sidebarNav = nav"
       @delete-session="deleteSession"
       @rename-session="renameSession"
       @file-click="handleFileClick"
       @abort-session="abortSession"
       @open-settings="openSettings"
-      @open-search="() => {}"
+      @open-search="showSearch = true"
       @change-directory="changeDirectory"
+      @switch-mode="handleSwitchMode"
+      @select-project="handleSelectProject"
     />
 
     <!-- Main Content -->
@@ -280,31 +371,57 @@ function closeFileViewer() {
       />
 
       <!-- Chat Area -->
-      <div class="chat-panel">
-        <ChatPanel
-          :messages="messages"
-          :isLoading="isLoading"
-          :isStreaming="isStreaming"
-          :pendingQuestions="pendingQuestions"
-          :pendingPermissions="pendingPermissions"
-          :sessionError="sessionError"
-          :currentDirectory="currentDirectory"
-          :canChangeDirectory="canChangeDirectory()"
-          @question-answered="(id, answers) => answerQuestion(id, answers)"
-          @question-rejected="rejectQuestion"
-          @permission-responded="respondPermission"
-          @clear-error="clearSessionError"
-          @open-settings="openSettings"
-          @delete-part="handleDeletePart"
-          @update-part="handleUpdatePart"
-          @change-directory="changeDirectory"
+      <div class="chat-panel" :class="{ 'empty-layout': isEmptyState }">
+        <!-- Project Detail View -->
+        <ProjectDetail
+          v-if="currentProject"
+          :project="currentProject"
+          @update-project="handleUpdateProject"
+          @select-session="handleProjectSelectSession"
+          @new-session="handleProjectNewSession"
+          @close="clearProject"
         />
-        <InputBox
-          :disabled="isLoading"
-          :isStreaming="isStreaming"
-          @send="handleSend"
-          @abort="abortCurrentSession"
-        />
+
+        <!-- Normal Chat View -->
+        <template v-else>
+          <ChatPanel
+            :messages="messages"
+            :isLoading="isLoading"
+            :isStreaming="isStreaming"
+            :pendingQuestions="pendingQuestions"
+            :pendingPermissions="pendingPermissions"
+            :sessionError="sessionError"
+            :currentDirectory="currentDirectory"
+            :canChangeDirectory="canChangeDirectory()"
+            :mode="appMode"
+            @question-answered="(id, answers) => answerQuestion(id, answers)"
+            @question-rejected="rejectQuestion"
+            @permission-responded="respondPermission"
+            @clear-error="clearSessionError"
+            @open-settings="openSettings"
+            @delete-part="handleDeletePart"
+            @update-part="handleUpdatePart"
+            @change-directory="changeDirectory"
+          />
+          <InputBox
+            :disabled="isLoading"
+            :isStreaming="isStreaming"
+            :centered="isEmptyState"
+            :providers="providers"
+            :currentProvider="currentProvider"
+            :currentModel="currentModel"
+            :mode="appMode"
+            @send="handleSend"
+            @abort="abortCurrentSession"
+            @select-model="handleSelectModel"
+          />
+
+          <!-- Prompt Categories (only shown on empty state) -->
+          <PromptCategories
+            v-if="isEmptyState"
+            @select="handlePromptSelect"
+          />
+        </template>
 
         <!-- Todo List Panel -->
         <div v-if="showTodoList" class="todo-panel-container">
@@ -320,6 +437,14 @@ function closeFileViewer() {
 
     <!-- Right Panel (Terminal + Preview) -->
     <RightPanel />
+
+    <!-- Search Overlay -->
+    <SearchOverlay
+      v-if="showSearch"
+      :recentSessions="sessions.slice(0, 10)"
+      @close="showSearch = false"
+      @select="handleSearchSelect"
+    />
 
     <!-- Settings Modal -->
     <SettingsPanel
@@ -378,6 +503,11 @@ function closeFileViewer() {
 
 .chat-panel {
   position: relative;
+}
+
+/* Empty layout: PromptCategories centering */
+.chat-panel.empty-layout :deep(.prompt-categories-wrapper) {
+  margin: 0 auto;
 }
 
 /* Session Notifications */

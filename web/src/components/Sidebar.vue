@@ -1,11 +1,22 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { 
-  PanelLeftClose, PanelLeft, MessageSquare, Plus, Search, 
-  FolderOpen, Code2, Sparkles, Pencil, Trash2, X, Check, 
-  Loader2, Square, ChevronRight, User
+import {
+  PanelLeftClose, PanelLeft, MessageSquare, Plus, Search,
+  FolderOpen, Code2, Sparkles, Pencil, Trash2, X, Check,
+  Loader2, Square, ChevronRight, User, MessageCircle
 } from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
+import type { AppMode } from '../composables/useAppMode'
+
+export interface ProjectInfo {
+  id: string
+  name?: string
+  worktree: string
+  icon?: { url?: string; override?: string; color?: string }
+  instructions?: string
+  time: { created: number; updated: number }
+  sandboxes: string[]
+}
 
 const props = defineProps<{
   collapsed: boolean
@@ -14,7 +25,10 @@ const props = defineProps<{
   isDraftSession: boolean
   files: FileItem[]
   filesLoading: boolean
-  activeNav: 'chats' | 'projects' | 'code'
+  mode: AppMode
+  // Projects
+  projects: ProjectInfo[]
+  currentProjectId: string | null
   // Working directory
   currentDirectory: string
   canChangeDirectory: boolean
@@ -29,7 +43,6 @@ const emit = defineEmits<{
   'select-session': [session: Session]
   'new-session': []
   'toggle-directory': [file: FileItem]
-  'change-nav': [nav: 'chats' | 'projects' | 'code']
   'delete-session': [sessionId: string]
   'rename-session': [sessionId: string, title: string]
   'file-click': [path: string]
@@ -37,10 +50,13 @@ const emit = defineEmits<{
   'open-settings': []
   'open-search': []
   'change-directory': [directory: string]
+  'switch-mode': [mode: AppMode]
+  'select-project': [projectId: string]
 }>()
 
-// 当前展开的 Recents 区域
+// Sections collapse state
 const showRecents = ref(true)
+const showProjects = ref(true)
 
 // 重命名状态
 const renamingSession = ref<Session | null>(null)
@@ -49,7 +65,7 @@ const newTitle = ref('')
 // 删除确认状态
 const deletingSession = ref<Session | null>(null)
 
-// 最近的会话（只显示前5个）
+// 最近的会话（只显示前8个）
 const recentSessions = computed(() => {
   return props.sessions.slice(0, 8)
 })
@@ -91,6 +107,10 @@ function doDelete() {
 function getSessionTitle(session: Session): string {
   return session.title || `会话 ${session.id.slice(0, 6)}`
 }
+
+function getProjectName(project: ProjectInfo): string {
+  return project.name || project.worktree.split('/').pop() || project.id.slice(0, 8)
+}
 </script>
 
 <template>
@@ -106,85 +126,62 @@ function getSessionTitle(session: Session): string {
       </button>
     </div>
 
-    <!-- Navigation Menu (Claude style) -->
+    <!-- Top Actions (expanded) -->
     <nav class="sidebar-nav" v-if="!collapsed">
-      <!-- New Chat -->
       <button class="nav-item new-chat" @click="emit('new-session')">
         <Plus :size="18" />
         <span>New chat</span>
       </button>
-
-      <!-- Search -->
       <button class="nav-item" @click="emit('open-search')">
         <Search :size="18" />
         <span>Search</span>
       </button>
+    </nav>
 
-      <!-- Chats -->
-      <button
-        class="nav-item"
-        :class="{ active: activeNav === 'chats' }"
-        @click="emit('change-nav', 'chats')"
-      >
-        <MessageSquare :size="18" />
-        <span>Chats</span>
+    <!-- Top Actions (collapsed) -->
+    <nav class="sidebar-nav sidebar-nav-collapsed" v-if="collapsed">
+      <button class="nav-item-icon" @click="emit('new-session')" title="New chat">
+        <Plus :size="18" />
       </button>
-
-      <!-- Projects -->
-      <button
-        class="nav-item"
-        :class="{ active: activeNav === 'projects' }"
-        @click="emit('change-nav', 'projects')"
-      >
-        <FolderOpen :size="18" />
-        <span>Projects</span>
-      </button>
-
-      <!-- Code -->
-      <button
-        class="nav-item"
-        :class="{ active: activeNav === 'code' }"
-        @click="emit('change-nav', 'code')"
-      >
-        <Code2 :size="18" />
-        <span>Code</span>
+      <button class="nav-item-icon" @click="emit('open-search')" title="Search">
+        <Search :size="18" />
       </button>
     </nav>
 
     <!-- Recents Section -->
-    <div class="sidebar-recents" v-if="!collapsed">
-      <div class="recents-header" @click="showRecents = !showRecents">
-        <span class="recents-label">Recents</span>
-        <ChevronRight :size="14" class="recents-chevron" :class="{ expanded: showRecents }" />
+    <div class="sidebar-section" v-if="!collapsed">
+      <div class="section-header" @click="showRecents = !showRecents">
+        <span class="section-label">Recents</span>
+        <ChevronRight :size="14" class="section-chevron" :class="{ expanded: showRecents }" />
       </div>
 
-      <div v-if="showRecents" class="recents-list">
+      <div v-if="showRecents" class="section-list">
         <!-- Draft Session -->
         <div
           v-if="isDraftSession"
-          class="recent-item active"
+          class="session-item active"
         >
-          <Sparkles :size="14" class="recent-icon" />
-          <span class="recent-title">新对话</span>
+          <Sparkles :size="14" class="session-icon" />
+          <span class="session-title">新对话</span>
         </div>
 
         <!-- Recent Sessions -->
         <div
           v-for="session in recentSessions"
           :key="session.id"
-          class="recent-item"
-          :class="{ 
+          class="session-item"
+          :class="{
             active: !isDraftSession && currentSession?.id === session.id,
             running: isSessionRunning(session.id)
           }"
           @click="emit('select-session', session)"
         >
-          <Loader2 v-if="isSessionRunning(session.id)" :size="14" class="recent-icon spin" />
-          <MessageSquare v-else :size="14" class="recent-icon" />
-          <span class="recent-title">{{ getSessionTitle(session) }}</span>
-          
+          <Loader2 v-if="isSessionRunning(session.id)" :size="14" class="session-icon spin" />
+          <MessageSquare v-else :size="14" class="session-icon" />
+          <span class="session-title">{{ getSessionTitle(session) }}</span>
+
           <!-- Session Actions (on hover) -->
-          <div class="recent-actions" @click.stop>
+          <div class="session-actions" @click.stop>
             <button
               v-if="isSessionRunning(session.id)"
               class="mini-btn abort"
@@ -203,17 +200,84 @@ function getSessionTitle(session: Session): string {
         </div>
 
         <!-- View All Link -->
-        <button 
-          v-if="sessions.length > 8" 
+        <button
+          v-if="sessions.length > 8"
           class="view-all-btn"
-          @click="emit('change-nav', 'chats')"
         >
           查看全部 {{ sessions.length }} 个会话
         </button>
       </div>
     </div>
 
-    <!-- User Profile Footer (Claude style) -->
+    <!-- Projects Section -->
+    <div class="sidebar-section" v-if="!collapsed">
+      <div class="section-header" @click="showProjects = !showProjects">
+        <span class="section-label">Projects</span>
+        <ChevronRight :size="14" class="section-chevron" :class="{ expanded: showProjects }" />
+      </div>
+
+      <div v-if="showProjects" class="section-list">
+        <div
+          v-for="project in projects"
+          :key="project.id"
+          class="project-item"
+          :class="{ active: currentProjectId === project.id }"
+          @click="emit('select-project', project.id)"
+        >
+          <FolderOpen :size="14" class="project-icon" />
+          <span class="project-name">{{ getProjectName(project) }}</span>
+        </div>
+
+        <div v-if="projects.length === 0" class="section-empty">
+          No projects yet
+        </div>
+      </div>
+    </div>
+
+    <!-- Spacer to push mode switch + footer to bottom -->
+    <div class="sidebar-spacer"></div>
+
+    <!-- Mode Switcher -->
+    <div class="mode-switcher" v-if="!collapsed">
+      <button
+        class="mode-btn"
+        :class="{ active: mode === 'chat' }"
+        @click="emit('switch-mode', 'chat')"
+      >
+        <MessageCircle :size="16" />
+        <span>Chat</span>
+      </button>
+      <button
+        class="mode-btn"
+        :class="{ active: mode === 'code' }"
+        @click="emit('switch-mode', 'code')"
+      >
+        <Code2 :size="16" />
+        <span>Code</span>
+      </button>
+    </div>
+
+    <!-- Collapsed Mode Switcher -->
+    <div class="mode-switcher mode-switcher-collapsed" v-if="collapsed">
+      <button
+        class="nav-item-icon"
+        :class="{ active: mode === 'chat' }"
+        @click="emit('switch-mode', 'chat')"
+        title="Chat mode"
+      >
+        <MessageCircle :size="18" />
+      </button>
+      <button
+        class="nav-item-icon"
+        :class="{ active: mode === 'code' }"
+        @click="emit('switch-mode', 'code')"
+        title="Code mode"
+      >
+        <Code2 :size="18" />
+      </button>
+    </div>
+
+    <!-- User Profile Footer -->
     <div class="sidebar-footer" v-if="!collapsed">
       <div class="user-profile" @click="emit('open-settings')">
         <div class="user-avatar">
@@ -224,6 +288,13 @@ function getSessionTitle(session: Session): string {
           <span class="user-plan">Nine1Bot</span>
         </div>
       </div>
+    </div>
+
+    <!-- Collapsed Footer (avatar only) -->
+    <div class="sidebar-footer sidebar-footer-collapsed" v-if="collapsed">
+      <button class="nav-item-icon" @click="emit('open-settings')" title="设置">
+        <User :size="18" />
+      </button>
     </div>
   </aside>
 
@@ -290,7 +361,8 @@ function getSessionTitle(session: Session): string {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: var(--bg-secondary);
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
   border-right: 0.5px solid var(--border-default);
 }
 
@@ -362,11 +434,6 @@ function getSessionTitle(session: Session): string {
   color: var(--text-primary);
 }
 
-.nav-item.active {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
 .nav-item.new-chat {
   color: var(--text-primary);
   font-weight: 500;
@@ -377,21 +444,24 @@ function getSessionTitle(session: Session): string {
   opacity: 0.7;
 }
 
-.nav-item:hover svg,
-.nav-item.active svg {
+.nav-item:hover svg {
   opacity: 1;
 }
 
-/* === Recents Section === */
-.sidebar-recents {
-  flex: 1;
-  overflow: hidden;
+/* === Sections === */
+.sidebar-section {
   display: flex;
   flex-direction: column;
-  padding: var(--space-sm) 0;
+  padding: var(--space-xs) 0;
+  overflow: hidden;
 }
 
-.recents-header {
+.sidebar-section:first-of-type {
+  flex: 1;
+  min-height: 0;
+}
+
+.section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -399,7 +469,7 @@ function getSessionTitle(session: Session): string {
   cursor: pointer;
 }
 
-.recents-label {
+.section-label {
   font-size: 12px;
   font-weight: 500;
   color: var(--text-muted);
@@ -407,22 +477,29 @@ function getSessionTitle(session: Session): string {
   letter-spacing: 0.5px;
 }
 
-.recents-chevron {
+.section-chevron {
   color: var(--text-muted);
   transition: transform var(--transition-fast);
 }
 
-.recents-chevron.expanded {
+.section-chevron.expanded {
   transform: rotate(90deg);
 }
 
-.recents-list {
-  flex: 1;
+.section-list {
   overflow-y: auto;
   padding: var(--space-xs) var(--space-sm);
 }
 
-.recent-item {
+.section-empty {
+  padding: 6px var(--space-sm);
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* === Session Items === */
+.session-item {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
@@ -433,24 +510,24 @@ function getSessionTitle(session: Session): string {
   position: relative;
 }
 
-.recent-item:hover {
+.session-item:hover {
   background: rgba(0, 0, 0, 0.04);
 }
 
-.recent-item.active {
+.session-item.active {
   background: var(--accent-subtle);
 }
 
-.recent-icon {
+.session-icon {
   flex-shrink: 0;
   color: var(--text-muted);
 }
 
-.recent-item.active .recent-icon {
+.session-item.active .session-icon {
   color: var(--accent);
 }
 
-.recent-title {
+.session-title {
   flex: 1;
   font-size: 13px;
   color: var(--text-secondary);
@@ -459,24 +536,24 @@ function getSessionTitle(session: Session): string {
   white-space: nowrap;
 }
 
-.recent-item.active .recent-title {
+.session-item.active .session-title {
   color: var(--accent);
   font-weight: 500;
 }
 
-.recent-item.running .recent-icon {
+.session-item.running .session-icon {
   color: var(--accent);
 }
 
-/* Mini action buttons */
-.recent-actions {
+/* Session action buttons */
+.session-actions {
   display: flex;
   gap: 2px;
   opacity: 0;
   transition: opacity var(--transition-fast);
 }
 
-.recent-item:hover .recent-actions {
+.session-item:hover .session-actions {
   opacity: 1;
 }
 
@@ -507,6 +584,48 @@ function getSessionTitle(session: Session): string {
   color: var(--error);
 }
 
+/* === Project Items === */
+.project-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 6px var(--space-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.project-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.project-item.active {
+  background: var(--accent-subtle);
+}
+
+.project-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.project-item.active .project-icon {
+  color: var(--accent);
+}
+
+.project-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-item.active .project-name {
+  color: var(--accent);
+  font-weight: 500;
+}
+
 .view-all-btn {
   width: 100%;
   padding: 6px;
@@ -524,6 +643,58 @@ function getSessionTitle(session: Session): string {
 .view-all-btn:hover {
   background: rgba(0, 0, 0, 0.04);
   color: var(--text-primary);
+}
+
+/* === Spacer === */
+.sidebar-spacer {
+  flex: 1;
+  min-height: var(--space-md);
+}
+
+/* === Mode Switcher === */
+.mode-switcher {
+  display: flex;
+  gap: 4px;
+  padding: var(--space-xs) var(--space-sm);
+  margin: 0 var(--space-sm);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.mode-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.mode-btn:hover {
+  color: var(--text-primary);
+}
+
+.mode-btn.active {
+  background: var(--bg-composer);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.mode-switcher-collapsed {
+  flex-direction: column;
+  align-items: center;
+  background: transparent;
+  margin: 0;
+  padding: var(--space-xs) 0;
 }
 
 /* === User Profile Footer === */
@@ -586,12 +757,53 @@ function getSessionTitle(session: Session): string {
 
 /* === Collapsed State === */
 .sidebar.collapsed {
-  width: var(--sidebar-collapsed-width);
+  width: 0px;
+  min-width: 0px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar.collapsed .sidebar-header {
   justify-content: center;
   padding: var(--space-sm);
+}
+
+/* === Collapsed Nav Icons === */
+.sidebar-nav-collapsed {
+  align-items: center;
+  padding: var(--space-xs) 0;
+}
+
+.nav-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.nav-item-icon:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text-primary);
+}
+
+.nav-item-icon.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+/* === Collapsed Footer === */
+.sidebar-footer-collapsed {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-sm) 0;
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 </style>
@@ -707,4 +919,3 @@ function getSessionTitle(session: Session): string {
   margin-right: 4px;
 }
 </style>
-

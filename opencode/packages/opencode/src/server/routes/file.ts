@@ -534,5 +534,65 @@ export const FileRoutes = lazy(() =>
           throw err
         }
       },
+    )
+    .post(
+      "/browse/pick",
+      describeRoute({
+        summary: "Pick directory",
+        description: "Open native OS file picker dialog to select a directory. Returns the selected path.",
+        operationId: "file.pickDirectory",
+        responses: {
+          200: {
+            description: "Selected directory",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    path: z.string(),
+                  })
+                ),
+              },
+            },
+          },
+          204: {
+            description: "User cancelled",
+          },
+        },
+      }),
+      async (c) => {
+        const { exec } = await import("child_process")
+        const { promisify } = await import("util")
+        const execAsync = promisify(exec)
+
+        try {
+          const platform = process.platform
+          let command: string
+
+          if (platform === "darwin") {
+            // macOS: use osascript
+            command = `osascript -e 'POSIX path of (choose folder with prompt "Select working directory")'`
+          } else if (platform === "linux") {
+            // Linux: try zenity first, then kdialog
+            command = `zenity --file-selection --directory --title="Select working directory" 2>/dev/null || kdialog --getexistingdirectory ~ 2>/dev/null`
+          } else {
+            return c.json({ error: "Unsupported platform" }, 400)
+          }
+
+          const { stdout } = await execAsync(command, { timeout: 120000 })
+          const selectedPath = stdout.trim()
+
+          if (!selectedPath) {
+            return c.body(null, 204)
+          }
+
+          return c.json({ path: selectedPath })
+        } catch (err: any) {
+          // User cancelled the dialog (exit code 1 for osascript)
+          if (err.code === 1 || err.killed) {
+            return c.body(null, 204)
+          }
+          return c.json({ error: "Failed to open directory picker" }, 500)
+        }
+      },
     ),
 )

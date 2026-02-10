@@ -17,6 +17,10 @@ export default defineConfig({
       '/config': 'http://localhost:4096',
       '/auth': 'http://localhost:4096',
       '/agent-terminal': 'http://localhost:4096',
+      '/browse': 'http://localhost:4096',
+      '/question': 'http://localhost:4096',
+      '/permission': 'http://localhost:4096',
+      '/preferences': 'http://localhost:4096',
     }
   }
 })

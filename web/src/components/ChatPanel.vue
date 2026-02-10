@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
-import { MessagesSquare, FolderOpen } from 'lucide-vue-next'
+import { ref, watch, nextTick, computed } from 'vue'
+import { FolderOpen } from 'lucide-vue-next'
 import type { Message, QuestionRequest, PermissionRequest } from '../api/client'
+import { api } from '../api/client'
 import MessageItem from './MessageItem.vue'
 import AgentQuestion from './AgentQuestion.vue'
 import PermissionRequestVue from './PermissionRequest.vue'
-import DirectoryBrowser from './DirectoryBrowser.vue'
 
 const props = defineProps<{
   messages: Message[]
@@ -16,6 +16,7 @@ const props = defineProps<{
   sessionError?: { message: string; dismissable?: boolean } | null
   currentDirectory?: string
   canChangeDirectory?: boolean
+  mode?: 'chat' | 'code'
 }>()
 
 const emit = defineEmits<{
@@ -30,22 +31,30 @@ const emit = defineEmits<{
 }>()
 
 const scrollContainer = ref<HTMLDivElement>()
-const showDirectoryBrowser = ref(false)
+const isPickingDirectory = ref(false)
 
-// 打开目录浏览器弹窗
-function openDirectoryBrowser() {
-  showDirectoryBrowser.value = true
-}
+// Time-based greeting (Claude.ai style)
+const greeting = computed(() => {
+  const hour = new Date().getHours()
+  if (hour < 12) return 'Good morning'
+  if (hour < 18) return 'Good afternoon'
+  return 'Good evening'
+})
 
-// 处理目录选择
-function handleDirectorySelect(path: string) {
-  showDirectoryBrowser.value = false
-  emit('changeDirectory', path)
-}
-
-// 取消目录选择
-function handleDirectoryCancel() {
-  showDirectoryBrowser.value = false
+// Open native directory picker
+async function openDirectoryPicker() {
+  if (isPickingDirectory.value) return
+  isPickingDirectory.value = true
+  try {
+    const result = await api.pickDirectory()
+    if (result?.path) {
+      emit('changeDirectory', result.path)
+    }
+  } catch (e) {
+    console.error('Failed to pick directory:', e)
+  } finally {
+    isPickingDirectory.value = false
+  }
 }
 
 // 获取目录显示名称
@@ -102,23 +111,26 @@ function scrollToBottom() {
       </div>
     </div>
 
-    <!-- Empty State -->
+    <!-- Empty State (Claude.ai style centered greeting) -->
     <div v-if="messages.length === 0 && !isLoading && !sessionError" class="chat-empty">
-      <div class="empty-state-icon glass-icon">
-        <MessagesSquare :size="48" stroke-width="1.5" />
-      </div>
-      <p class="empty-state-title">Hello, I'm Nine1Bot</p>
-      <p class="empty-state-description">How can I help you today?</p>
+      <div class="welcome-section">
+        <div class="greeting-row">
+          <!-- Decorative star icon -->
+          <svg class="greeting-icon" width="32" height="32" viewBox="0 0 100 101" fill="none">
+            <path d="M50 0L56.2 37.5L87.5 12.5L68.8 46.9L100 50L68.8 53.1L87.5 87.5L56.2 62.5L50 100L43.8 62.5L12.5 87.5L31.2 53.1L0 50L31.2 46.9L12.5 12.5L43.8 37.5L50 0Z" fill="currentColor"/>
+          </svg>
+          <span class="greeting-text">{{ greeting }}</span>
+        </div>
 
-      <!-- Directory Selector Button (shown only for draft/new sessions) -->
-      <div v-if="canChangeDirectory" class="directory-selector-section">
-        <button class="directory-btn" @click="openDirectoryBrowser">
-          <FolderOpen :size="20" />
-          <span class="directory-btn-text">
-            {{ currentDirectory && getDirectoryName(currentDirectory) ? `工作目录: ${getDirectoryName(currentDirectory)}` : '选择工作目录' }}
-          </span>
-        </button>
-        <p class="directory-hint">选择一个工作目录来开始你的项目</p>
+        <!-- Directory Selector (only in code mode, subtle, below greeting) -->
+        <div v-if="canChangeDirectory && mode === 'code'" class="directory-selector-section">
+          <button class="directory-btn" @click="openDirectoryPicker" :disabled="isPickingDirectory">
+            <FolderOpen :size="16" />
+            <span class="directory-btn-text">
+              {{ isPickingDirectory ? 'Selecting...' : (currentDirectory && getDirectoryName(currentDirectory) ? getDirectoryName(currentDirectory) : '选择工作目录') }}
+            </span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -158,13 +170,6 @@ function scrollToBottom() {
       <div class="bottom-spacer"></div>
     </div>
 
-    <!-- Directory Browser Modal -->
-    <DirectoryBrowser
-      :visible="showDirectoryBrowser"
-      :initial-path="currentDirectory || '~'"
-      @select="handleDirectorySelect"
-      @cancel="handleDirectoryCancel"
-    />
   </div>
 </template>
 
@@ -177,94 +182,94 @@ function scrollToBottom() {
 }
 
 .messages-container {
-  padding: 24px 0;
+  max-width: var(--input-max-width);
+  margin: 0 auto;
+  padding: 24px var(--space-md);
   display: flex;
   flex-direction: column;
+  width: 100%;
 }
 
+/* === Claude.ai Empty State === */
 .chat-empty {
-  height: 100%;
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 20px;
   text-align: center;
-  animation: fade-in 0.5s var(--ease-smooth);
+  animation: fade-in 0.6s ease-out;
+  padding: 0 var(--space-md);
 }
 
-.glass-icon {
-  width: 80px;
-  height: 80px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-xl);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 20px;
-  color: var(--accent);
-}
-
-.empty-state-title {
-  font-size: 22px;
-  font-weight: 600;
-  margin-bottom: 8px;
-  color: var(--text-primary);
-}
-
-.empty-state-description {
-  color: var(--text-muted);
-  font-size: 15px;
-}
-
-.directory-selector-section {
-  margin-top: 32px;
+.welcome-section {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-xl);
+  max-width: var(--input-max-width);
+  width: 100%;
+}
+
+.greeting-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.greeting-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.greeting-text {
+  font-family: var(--font-serif);
+  font-size: 2rem;
+  font-weight: 400;
+  color: var(--text-primary);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+/* Directory selector */
+.directory-selector-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .directory-btn {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px 32px;
-  background: var(--bg-secondary);
-  border: 1.5px dashed var(--border-default);
-  border-radius: var(--radius-lg);
-  color: var(--text-primary);
-  font-size: 16px;
-  font-weight: var(--font-weight-normal);
+  gap: 8px;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 400;
   cursor: pointer;
   transition: all var(--transition-normal);
 }
 
 .directory-btn:hover {
   background: var(--bg-tertiary);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.directory-btn:hover svg {
-  color: var(--accent);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
 }
 
 .directory-btn svg {
-  color: var(--text-muted);
-  transition: color 0.2s ease;
+  color: inherit;
 }
 
 .directory-btn-text {
-  max-width: 300px;
+  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.directory-hint {
-  color: var(--text-muted);
-  font-size: 14px;
 }
 
 .bottom-spacer {
@@ -277,7 +282,8 @@ function scrollToBottom() {
 }
 
 .session-error-banner {
-  margin: var(--space-md) var(--space-lg);
+  max-width: var(--input-max-width);
+  margin: var(--space-md) auto;
   padding: var(--space-md);
   background: var(--error-subtle);
   border: 0.5px solid var(--error);
@@ -285,6 +291,7 @@ function scrollToBottom() {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
+  width: 100%;
 }
 
 .error-content {
@@ -317,7 +324,7 @@ function scrollToBottom() {
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 </style>

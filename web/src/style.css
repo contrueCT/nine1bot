@@ -13,7 +13,7 @@
   --space-xl: 32px;
   --space-2xl: 48px;
 
-  /* Border Radius - Smaller, refined */
+  /* Border Radius */
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
@@ -21,13 +21,14 @@
   --radius-2xl: 20px;
   --radius-full: 9999px;
 
-  /* Typography */
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-display: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Typography - Claude.ai uses serif for the refined aesthetic */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --font-display: 'Source Serif 4', Georgia, 'Times New Roman', serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-  --font-weight-normal: 430;
+  --font-weight-normal: 400;
 
-  /* Custom Easing - Claude's signature smoothness */
+  /* Custom Easing */
   --ease-smooth: cubic-bezier(0.165, 0.85, 0.45, 1);
 
   /* Transitions */
@@ -36,45 +37,61 @@
   --transition-slow: 300ms var(--ease-smooth);
 
   /* Layout */
-  --sidebar-width: 288px;
+  --sidebar-width: 260px;
   --sidebar-collapsed-width: 0px;
-  --header-height: 56px;
+  --header-height: 48px;
+  --input-max-width: 768px;
+
+  /* Typography - Display */
+  --font-weight-display: 400;
+
+  /* Input Box Shadow (Claude.ai exact value) */
+  --input-shadow: 0 0.25rem 1.25rem rgba(0, 0, 0, 0.035);
+  --input-border-color: rgba(0, 0, 0, 0.08);
+  --input-border-color-hover: rgba(0, 0, 0, 0.15);
+
   --z-overlay: 50;
   --z-modal: 100;
   --z-tooltip: 200;
 }
 
-/* === Theme: Light (Default - Claude-inspired warm) === */
+/* === Theme: Light (Default - Claude.ai exact) === */
 :root,
 :root[data-theme="light"] {
-  /* Backgrounds - Warm beige/cream system */
-  --bg-primary: hsl(0, 0%, 100%);
-  --bg-secondary: hsl(48, 33.3%, 97.1%);
-  --bg-tertiary: hsl(53, 28.6%, 94.5%);
-  --bg-elevated: hsl(0, 0%, 100%);
+  /* Backgrounds - Claude.ai cream/warm */
+  --bg-primary: #F5F5F0;
+  --bg-secondary: #F5F5F0;
+  --bg-tertiary: #eae8e1;
+  --bg-elevated: #ffffff;
 
-  /* Glassmorphism Backgrounds (not used heavily, but available) */
-  --bg-glass: rgba(250, 249, 245, 0.85);
+  /* Composer/Input specific */
+  --bg-composer: #ffffff;
+
+  /* Glassmorphism */
+  --bg-glass: rgba(245, 245, 240, 0.85);
   --bg-glass-strong: rgba(255, 255, 255, 0.95);
 
-  /* Text - Warm charcoal tones */
-  --text-primary: rgb(20, 20, 19);
-  --text-secondary: rgb(61, 61, 58);
-  --text-muted: rgb(115, 114, 108);
+  /* Text */
+  --text-primary: #1a1a18;
+  --text-secondary: #4a4a47;
+  --text-muted: #8b8b87;
   --text-inverse: #ffffff;
 
-  /* Borders - Refined 0.5px style */
-  --border-subtle: rgba(31, 30, 29, 0.06);
-  --border-default: rgba(31, 30, 29, 0.15);
-  --border-hover: rgba(31, 30, 29, 0.25);
-  --border-glass: rgba(31, 30, 29, 0.08);
+  /* Borders - Very subtle */
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.15);
+  --border-glass: rgba(0, 0, 0, 0.06);
 
-  /* Accents - Claude's warm terracotta */
-  --accent: rgb(204, 77, 40);
-  --accent-hover: rgb(184, 67, 35);
+  /* Accents - Claude.ai terracotta #ae5630 */
+  --accent: #ae5630;
+  --accent-hover: #c4633a;
   --accent-fg: #ffffff;
-  --accent-subtle: rgba(204, 77, 40, 0.08);
-  --accent-glow: rgba(204, 77, 40, 0.20);
+  --accent-subtle: rgba(174, 86, 48, 0.08);
+  --accent-glow: rgba(174, 86, 48, 0.20);
+
+  /* User message bubble */
+  --user-bubble: #DDD9CE;
 
   /* Status */
   --success: #2D8A5F;
@@ -86,45 +103,56 @@
   --info: #4A76A8;
   --info-subtle: rgba(74, 118, 168, 0.1);
 
-  /* Shadows - Soft, warm */
-  --shadow-sm: 0 1px 2px rgba(31, 30, 29, 0.04);
-  --shadow-md: 0 4px 12px rgba(31, 30, 29, 0.06);
-  --shadow-lg: 0 12px 32px rgba(31, 30, 29, 0.10);
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.10);
   --shadow-glow: 0 0 20px var(--accent-glow);
   --scrollbar-track: transparent;
   --scrollbar-thumb: #D8D4CF;
 }
 
-/* === Theme: Dark (Refined Zinc) === */
+/* === Theme: Dark (Claude.ai warm dark) === */
 :root[data-theme="dark"] {
-  /* Backgrounds - Softer Zinc */
-  --bg-primary: #18181b;
-  --bg-secondary: #1f1f23;
-  --bg-tertiary: #27272a;
-  --bg-elevated: #27272a;
+  /* Backgrounds - Claude.ai warm dark #2b2a27 */
+  --bg-primary: #2b2a27;
+  --bg-secondary: #2b2a27;
+  --bg-tertiary: #393937;
+  --bg-elevated: #333230;
+
+  /* Composer/Input */
+  --bg-composer: #1f1e1b;
 
   /* Glassmorphism */
-  --bg-glass: rgba(31, 31, 35, 0.85);
-  --bg-glass-strong: rgba(31, 31, 35, 0.95);
+  --bg-glass: rgba(43, 42, 39, 0.85);
+  --bg-glass-strong: rgba(43, 42, 39, 0.95);
 
   /* Text */
-  --text-primary: #f4f4f5;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
-  --text-inverse: #09090b;
+  --text-primary: #eeeeee;
+  --text-secondary: #a8a8a4;
+  --text-muted: #71716d;
+  --text-inverse: #1a1a18;
 
   /* Borders */
   --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-default: rgba(255, 255, 255, 0.10);
+  --border-default: rgba(255, 255, 255, 0.08);
   --border-hover: rgba(255, 255, 255, 0.15);
   --border-glass: rgba(255, 255, 255, 0.06);
 
-  /* Accents - Warm terracotta for dark mode too */
+  /* Accents */
   --accent: #E8835A;
   --accent-hover: #F09A78;
   --accent-fg: #ffffff;
   --accent-subtle: rgba(232, 131, 90, 0.12);
   --accent-glow: rgba(232, 131, 90, 0.25);
+
+  /* User message bubble */
+  --user-bubble: #393937;
+
+  /* Input shadow (dark) */
+  --input-shadow: 0 0.25rem 1.25rem rgba(0, 0, 0, 0.15);
+  --input-border-color: rgba(255, 255, 255, 0.08);
+  --input-border-color-hover: rgba(255, 255, 255, 0.15);
 
   /* Status */
   --success: #10b981;
@@ -142,7 +170,7 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
   --shadow-glow: 0 0 20px var(--accent-glow);
   --scrollbar-track: transparent;
-  --scrollbar-thumb: #3f3f46;
+  --scrollbar-thumb: #4a4a47;
 }
 
 /* === Reset & Base === */
@@ -161,7 +189,7 @@ html {
 }
 
 body {
-  font-family: var(--font-sans);
+  font-family: var(--font-serif);
   font-weight: var(--font-weight-normal);
   background-color: var(--bg-primary);
   color: var(--text-primary);
@@ -219,17 +247,19 @@ a:hover {
   width: var(--sidebar-width);
   min-width: var(--sidebar-width);
   height: 100vh;
-  background: var(--bg-secondary);
-  border-right: 0.5px solid var(--border-default);
+  background: var(--bg-primary);
+  border-right: none;
   display: flex;
   flex-direction: column;
-  transition: width var(--transition-normal), min-width var(--transition-normal);
+  transition: width var(--transition-normal), min-width var(--transition-normal), opacity var(--transition-normal);
   overflow: hidden;
 }
 
 .sidebar.collapsed {
-  width: var(--sidebar-collapsed-width);
-  min-width: var(--sidebar-collapsed-width);
+  width: 0px;
+  min-width: 0px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar-header {
@@ -238,7 +268,7 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 0.5px solid var(--border-subtle);
+  border-bottom: none;
   flex-shrink: 0;
 }
 
@@ -256,7 +286,7 @@ a:hover {
 
 .sidebar-footer {
   padding: var(--space-sm) var(--space-md);
-  border-top: 0.5px solid var(--border-subtle);
+  border-top: none;
   flex-shrink: 0;
 }
 
@@ -277,8 +307,8 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--bg-secondary);
-  border-bottom: 0.5px solid var(--border-subtle);
+  background: transparent;
+  border-bottom: none;
   gap: var(--space-md);
 }
 
@@ -351,6 +381,14 @@ a:hover {
   flex-direction: column;
   min-height: 0;
   background: var(--bg-primary);
+  padding: 0 var(--space-md);
+}
+
+/* Empty state: centered layout for welcome page */
+.chat-panel.empty-layout {
+  align-items: center;
+  justify-content: center;
+  padding-top: 0;
 }
 
 .chat-messages {
@@ -534,8 +572,7 @@ a:hover {
 
 /* === Input Box === */
 .input-container {
-  padding: var(--space-md) var(--space-lg) var(--space-lg);
-  background: linear-gradient(to top, var(--bg-primary) 0%, transparent 100%);
+  padding: var(--space-md) 0 var(--space-lg);
 }
 
 .input-box {
