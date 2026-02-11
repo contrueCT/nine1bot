@@ -5,6 +5,7 @@ import { useFiles } from './composables/useFiles'
 import { useSettings } from './composables/useSettings'
 import { useAppMode } from './composables/useAppMode'
 import { useSessionMode } from './composables/useSessionMode'
+// useProjects: logic cleared, stubs only (will be re-implemented with backend)
 import { useProjects } from './composables/useProjects'
 import Header from './components/Header.vue'
 import Sidebar from './components/Sidebar.vue'
@@ -104,12 +105,6 @@ const { setMode: setSessionMode } = useSessionMode()
 const {
   projects,
   currentProject,
-  loadProjects,
-  selectProject: selectProjectFn,
-  clearProject,
-  updateProject,
-  createProject: createProjectFn,
-  deleteLocalProject,
   addSessionToProject,
 } = useProjects()
 
@@ -125,9 +120,6 @@ const showPlanPanel = ref(false)
 // MCP project panel state
 const showMcpPanel = ref(false)
 
-// Pending project tag for auto-tagging new sessions created from project view
-const pendingProjectTag = ref<string | null>(null)
-
 // Search overlay
 const showSearch = ref(false)
 
@@ -138,7 +130,7 @@ const sidebarCollapsed = ref(false)
 
 // Empty state detection for centered layout
 const isEmptyState = computed(() =>
-  messages.value.length === 0 && !isLoading.value && !currentProject.value && !showProjectsPage.value
+  messages.value.length === 0 && !isLoading.value && !showProjectsPage.value
 )
 
 // Handle model selection from InputBox
@@ -172,7 +164,6 @@ onMounted(async () => {
   // 不传 directory 参数以加载所有会话
   await loadSessions()
   await loadFiles('.')
-  await loadProjects()
 
   // 加载模型 providers 和配置（确保模型选择器立即可用）
   await loadProviders()
@@ -219,16 +210,11 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
-// Tag new sessions with current app mode and pending project
+// Tag new sessions with current app mode
 watch(currentSession, (newSession, oldSession) => {
   if (newSession && !oldSession) {
     // A new session was just created (transitioned from draft/null to real session)
     setSessionMode(newSession.id, appMode.value)
-    // Auto-tag with project if pending
-    if (pendingProjectTag.value) {
-      addSessionToProject(pendingProjectTag.value, newSession.id)
-      pendingProjectTag.value = null
-    }
   }
 })
 
@@ -239,9 +225,8 @@ watch(currentDirectory, async (newDir) => {
 })
 
 async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean) {
-  // If viewing a project, clear project view and go to session
-  if (currentProject.value || showProjectsPage.value) {
-    clearProject()
+  // If viewing projects page, close it
+  if (showProjectsPage.value) {
     showProjectsPage.value = false
   }
 
@@ -260,7 +245,6 @@ async function handleSend(content: string, files?: Array<{ type: 'file'; mime: s
 }
 
 function handleNewSession() {
-  clearProject()
   showProjectsPage.value = false
   createSession(currentDirectory.value || '.')
 }
@@ -272,37 +256,25 @@ function toggleSidebar() {
 // Mode switch handler — auto navigate to new chat
 function handleSwitchMode(newMode: 'chat' | 'agent') {
   setAppMode(newMode)
-  clearProject()
   showProjectsPage.value = false
   createSession(currentDirectory.value || '.')
 }
 
-// Project selection handler
-function handleSelectProject(projectId: string) {
-  if (projectId) {
-    selectProjectFn(projectId)
-  } else {
-    // Empty string means go back to list view
-    clearProject()
-  }
+// Project handlers (stubs — will be re-implemented with backend)
+function handleSelectProject(_projectId: string) {
+  // stub
 }
 
-// Open projects page
 function handleOpenProjects() {
   showProjectsPage.value = true
-  clearProject()
 }
 
-// Create a new local project
-function handleCreateProject(name: string, instructions: string, directory?: string) {
-  const newProject = createProjectFn(name, instructions, directory || currentDirectory.value || '.')
-  // Auto-select the newly created project
-  selectProjectFn(newProject.id)
+function handleCreateProject(_name: string, _instructions: string, _directory?: string) {
+  // stub
 }
 
-// Handle project update
-async function handleUpdateProject(projectId: string, updates: { name?: string; instructions?: string }) {
-  await updateProject(projectId, updates)
+async function handleUpdateProject(_projectId: string, _updates: { name?: string; instructions?: string }) {
+  // stub
 }
 
 // Handle search result selection
@@ -311,40 +283,23 @@ function handleSearchSelect(sessionId: string) {
   showProjectsPage.value = false
   const session = sessions.value.find(s => s.id === sessionId)
   if (session) {
-    clearProject()
     selectSession(session)
   }
 }
 
-// Handle creating new session from project
-function handleProjectNewSession(projectId: string) {
-  // Use the project's working directory for the new session
-  const project = projects.value.find(p => p.id === projectId)
-  const dir = project?.worktree || currentDirectory.value || '.'
-
-  // Set pending project tag so the session gets auto-tagged when created
-  pendingProjectTag.value = projectId
-
-  clearProject()
+function handleProjectNewSession(_projectId: string) {
+  // stub
   showProjectsPage.value = false
-
-  // Change to project directory and create session
-  if (project?.worktree) {
-    changeDirectory(project.worktree)
-  }
-  createSession(dir)
+  createSession(currentDirectory.value || '.')
 }
 
-// Handle deleting a project
-function handleDeleteProject(projectId: string) {
-  deleteLocalProject(projectId)
+function handleDeleteProject(_projectId: string) {
+  // stub
 }
 
-// Handle selecting session from project detail
 function handleProjectSelectSession(sessionId: string) {
   const session = sessions.value.find(s => s.id === sessionId)
   if (session) {
-    clearProject()
     showProjectsPage.value = false
     selectSession(session)
   }
@@ -443,7 +398,7 @@ function handlePromptSelect(prompt: string) {
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
       @toggle-collapse="toggleSidebar"
-      @select-session="(session) => { clearProject(); showProjectsPage = false; selectSession(session) }"
+      @select-session="(session) => { showProjectsPage = false; selectSession(session) }"
       @new-session="handleNewSession"
       @toggle-directory="toggleDirectory"
       @delete-session="deleteSession"
@@ -487,7 +442,7 @@ function handlePromptSelect(prompt: string) {
           @delete-project="handleDeleteProject"
           @rename-session="renameSession"
           @delete-session="deleteSession"
-          @close="showProjectsPage = false; clearProject()"
+          @close="showProjectsPage = false"
         />
 
         <!-- Empty State: Centered greeting + input + prompts -->

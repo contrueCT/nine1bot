@@ -59,7 +59,7 @@ const emit = defineEmits<{
 }>()
 
 // Session mode mapping
-const { getMode, getSessionProjects, removeSessionFromProject } = useSessionMode()
+const { getMode } = useSessionMode()
 
 // User profile
 const { profile, brandLogo } = useUserProfile()
@@ -80,13 +80,6 @@ const showProjectPicker = ref(false)
 
 // Toast notification for errors
 const toastMessage = ref('')
-let toastTimer: ReturnType<typeof setTimeout> | null = null
-
-function showToast(message: string) {
-  toastMessage.value = message
-  if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => { toastMessage.value = '' }, 3000)
-}
 
 // Sessions filtered by current mode
 const filteredSessions = computed(() => {
@@ -156,44 +149,24 @@ function contextMenuDelete() {
   closeContextMenu()
 }
 
+// Project logic stubs (will be re-implemented with backend)
 function contextMenuMoveToProject(projectId: string) {
   if (!contextMenu.value) return
-  const session = contextMenu.value.session
-  const project = props.projects.find(p => p.id === projectId)
-
-  // Block if directory doesn't match
-  if (project?.worktree && session.directory &&
-      !session.directory.startsWith(project.worktree) &&
-      !project.worktree.startsWith(session.directory)) {
-    closeContextMenu()
-    showToast(`工作目录不匹配，无法移入该项目`)
-    return
-  }
-
-  emit('move-to-project', session.id, projectId)
+  emit('move-to-project', contextMenu.value.session.id, projectId)
   closeContextMenu()
 }
 
-function contextMenuRemoveFromProject(sessionId: string, projectId: string) {
-  removeSessionFromProject(sessionId, projectId)
+function contextMenuRemoveFromProject(_sessionId: string, _projectId: string) {
+  // stub
   closeContextMenu()
 }
 
-// Get current session's projects for context menu display
-function getSessionProjectNames(sessionId: string): { id: string; name: string }[] {
-  const projectIds = getSessionProjects(sessionId)
-  return projectIds
-    .map(pid => {
-      const project = props.projects.find(p => p.id === pid)
-      return project ? { id: pid, name: project.name || project.worktree.split('/').pop() || pid.slice(0, 8) } : null
-    })
-    .filter((p): p is { id: string; name: string } => p !== null)
+function getSessionProjectNames(_sessionId: string): { id: string; name: string }[] {
+  return []
 }
 
-// Available projects (not yet assigned) for the "move to" sub-menu
-function getAvailableProjects(sessionId: string) {
-  const assigned = getSessionProjects(sessionId)
-  return props.projects.filter(p => !assigned.includes(p.id))
+function getAvailableProjects(_sessionId: string) {
+  return props.projects
 }
 </script>
 

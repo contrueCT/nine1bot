@@ -1,11 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { Plus, Search, FolderOpen, Clock, ArrowLeft, MessageSquare, Save, Pencil, Check, X, Folder, Trash2, Globe, FolderMinus, EllipsisVertical } from 'lucide-vue-next'
-import { api } from '../api/client'
 import type { Session } from '../api/client'
 import type { ProjectInfo } from './Sidebar.vue'
-import { usePreferences } from '../composables/usePreferences'
-import { useSessionMode } from '../composables/useSessionMode'
 import DirectoryBrowser from './DirectoryBrowser.vue'
 
 const props = defineProps<{
@@ -35,10 +32,6 @@ const newProjectInstructions = ref('')
 const newProjectDirectory = ref('')
 const showDirectoryBrowser = ref(false)
 
-// Preferences for Effective Prompt
-const { globalPreferences, loadPreferences: loadPrefs } = usePreferences()
-const { removeSessionFromProject, getSessionsForProject } = useSessionMode()
-
 // Delete project confirmation
 const showDeleteConfirm = ref(false)
 
@@ -55,7 +48,7 @@ const isSaving = ref(false)
 const sessions = ref<Session[]>([])
 const isLoadingSessions = ref(false)
 
-// Filtered projects
+// Filtered projects (stub — props.projects will be empty until backend re-implementation)
 const filteredProjects = computed(() => {
   if (!searchQuery.value.trim()) return props.projects
   const q = searchQuery.value.toLowerCase()
@@ -71,29 +64,8 @@ watch(() => props.currentProject, (project) => {
   if (project) {
     instructions.value = project.instructions || ''
     editName.value = project.name || ''
-    loadSessions()
   }
 }, { immediate: true })
-
-async function loadSessions() {
-  if (!props.currentProject) return
-  isLoadingSessions.value = true
-  try {
-    // All projects use localStorage sessionMode mapping as single source of truth
-    // (Backend auto-assigns projectID to ALL sessions, making it unreliable)
-    const sessionIds = getSessionsForProject(props.currentProject.id)
-    if (sessionIds.length === 0) {
-      sessions.value = []
-    } else {
-      const allSessions = await api.getSessions()
-      sessions.value = allSessions.filter(s => sessionIds.includes(s.id))
-    }
-  } catch (e) {
-    console.error('Failed to load project sessions:', e)
-  } finally {
-    isLoadingSessions.value = false
-  }
-}
 
 function handleCreateProject() {
   if (!newProjectName.value.trim()) return
@@ -118,8 +90,10 @@ function handleDirectoryCancel() {
 }
 
 function startEditName() {
-  editName.value = getProjectName(props.currentProject!)
-  isEditingName.value = true
+  if (props.currentProject) {
+    editName.value = getProjectName(props.currentProject)
+    isEditingName.value = true
+  }
 }
 
 function cancelEditName() {
@@ -144,7 +118,7 @@ async function saveInstructions() {
 }
 
 function getProjectName(project: ProjectInfo): string {
-  return project.name || project.worktree.split('/').pop() || project.id.slice(0, 8)
+  return project.name || project.worktree?.split('/').pop() || project.id.slice(0, 8)
 }
 
 function getSessionTitle(session: Session): string {
@@ -182,7 +156,10 @@ function getProjectDescription(project: ProjectInfo): string {
     : ''
 }
 
-// Session context menu
+// Effective prompt (stub — will be re-implemented with backend)
+const effectivePrompt = computed(() => '')
+
+// Session context menu handlers (stubs — no real data until backend)
 function openSessionContextMenu(e: MouseEvent, session: Session) {
   e.preventDefault()
   sessionContextMenu.value = { x: e.clientX, y: e.clientY, session }
@@ -194,18 +171,14 @@ function closeSessionContextMenu() {
 
 function contextMenuRenameSession() {
   if (!sessionContextMenu.value) return
-  const session = sessionContextMenu.value.session
-  isRenamingSession.value = session.id
-  renameSessionTitle.value = session.title || ''
+  isRenamingSession.value = sessionContextMenu.value.session.id
+  renameSessionTitle.value = sessionContextMenu.value.session.title || ''
   closeSessionContextMenu()
 }
 
 function saveSessionRename(sessionId: string) {
   if (renameSessionTitle.value.trim()) {
     emit('renameSession', sessionId, renameSessionTitle.value.trim())
-    // Update local state
-    const s = sessions.value.find(s => s.id === sessionId)
-    if (s) s.title = renameSessionTitle.value.trim()
   }
   isRenamingSession.value = null
   renameSessionTitle.value = ''
@@ -217,50 +190,15 @@ function cancelSessionRename() {
 }
 
 function contextMenuRemoveFromProject() {
-  if (!sessionContextMenu.value || !props.currentProject) return
-  const sessionId = sessionContextMenu.value.session.id
-  removeSessionFromProject(sessionId, props.currentProject.id)
-  // Remove from local list
-  sessions.value = sessions.value.filter(s => s.id !== sessionId)
+  // stub
   closeSessionContextMenu()
 }
 
 function contextMenuDeleteSession() {
   if (!sessionContextMenu.value) return
-  const sessionId = sessionContextMenu.value.session.id
-  emit('deleteSession', sessionId)
-  sessions.value = sessions.value.filter(s => s.id !== sessionId)
+  emit('deleteSession', sessionContextMenu.value.session.id)
   closeSessionContextMenu()
 }
-
-// Effective Prompt — combined global preferences + project instructions
-const effectivePrompt = computed(() => {
-  const parts: string[] = []
-
-  // Global preferences
-  if (globalPreferences.value.length > 0) {
-    parts.push('## Global Preferences')
-    globalPreferences.value.forEach(p => {
-      parts.push(`- ${p.content}`)
-    })
-  }
-
-  // Project instructions
-  if (props.currentProject?.instructions) {
-    if (parts.length > 0) parts.push('')
-    parts.push('## Project Instructions')
-    parts.push(props.currentProject.instructions)
-  }
-
-  return parts.join('\n')
-})
-
-// Load preferences when project detail view opens
-watch(() => props.currentProject, (project) => {
-  if (project) {
-    loadPrefs()
-  }
-})
 </script>
 
 <template>
