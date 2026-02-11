@@ -153,6 +153,7 @@ export function useSession() {
       isDraftSession.value = false
       currentSession.value = session
       currentDirectory.value = session.directory
+      messages.value = []  // Clear immediately to avoid flash of old content
       messages.value = await api.getMessages(session.id)
     } catch (error) {
       console.error('Failed to load messages:', error)

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
-import { Send, Square, Paperclip, X, FileText, ClipboardList, Plus, ChevronDown, Check } from 'lucide-vue-next'
+import { Send, Square, Paperclip, X, FileText, ClipboardList, Plus, ChevronDown, Check, Server, Zap, Minimize2, ListTodo } from 'lucide-vue-next'
 import { useFileUpload } from '../composables/useFileUpload'
-import type { Provider } from '../api/client'
+import type { Provider, Message } from '../api/client'
 
 const props = defineProps<{
   disabled: boolean
@@ -11,13 +11,20 @@ const props = defineProps<{
   providers?: Provider[]
   currentProvider?: string
   currentModel?: string
-  mode?: 'chat' | 'code'
+  mode?: 'chat' | 'agent'
+  messages?: Message[]
 }>()
 
 const emit = defineEmits<{
   send: [content: string, files: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode: boolean]
   abort: []
   'select-model': [providerId: string, modelId: string]
+  'open-mcp': []
+  'toggle-mcp-panel': []
+  'open-skills': []
+  'compress-session': []
+  'toggle-todo': []
+  'toggle-plan': []
 }>()
 
 // Plan Mode 状态
@@ -60,6 +67,33 @@ function getCurrentModelName(): string {
     }
   }
   return props.currentModel || '选择模型'
+}
+
+// Detect model used in current session (from messages)
+const sessionModel = computed(() => {
+  if (!props.messages?.length) return null
+  // Check last assistant message for model info
+  const lastAssistant = [...props.messages].reverse().find(m => m.info.role === 'assistant')
+  if (lastAssistant?.info.providerID && lastAssistant?.info.modelID) {
+    return { providerID: lastAssistant.info.providerID, modelID: lastAssistant.info.modelID }
+  }
+  // Fallback: check user messages
+  const lastUser = [...props.messages].reverse().find(m => m.info.role === 'user' && m.info.model)
+  if (lastUser?.info.model) return lastUser.info.model
+  return null
+})
+
+const isReadonlyModel = computed(() => !!sessionModel.value)
+
+function getModelNameById(providerId: string, modelId: string): string {
+  if (props.providers) {
+    const provider = props.providers.find(p => p.id === providerId)
+    if (provider) {
+      const model = provider.models.find(m => m.id === modelId)
+      if (model) return model.name || model.id
+    }
+  }
+  return modelId || '未知模型'
 }
 
 function selectModel(providerId: string, modelId: string) {
@@ -270,7 +304,7 @@ function formatSize(bytes: number): string {
 
       <!-- Toolbar (bottom of input box) -->
       <div class="input-toolbar">
-        <!-- Left: "+" Menu (full in code mode, simplified in chat mode) -->
+        <!-- Left: "+" Menu + Plan + Todo buttons -->
         <div class="toolbar-left">
           <div class="plus-menu-container" ref="plusMenuRef">
             <button
@@ -287,7 +321,21 @@ function formatSize(bytes: number): string {
                 <Paperclip :size="16" />
                 <span>Add files or photos</span>
               </button>
-              <template v-if="mode === 'code'">
+              <div class="plus-menu-divider"></div>
+              <button class="plus-menu-item" @click="showPlusMenu = false; emit('toggle-mcp-panel')">
+                <Server :size="16" />
+                <span>MCP Servers</span>
+              </button>
+              <button class="plus-menu-item" @click="showPlusMenu = false; emit('open-skills')">
+                <Zap :size="16" />
+                <span>Skills</span>
+              </button>
+              <div class="plus-menu-divider"></div>
+              <button class="plus-menu-item" @click="showPlusMenu = false; emit('compress-session')">
+                <Minimize2 :size="16" />
+                <span>Compress session</span>
+              </button>
+              <template v-if="mode === 'agent'">
                 <div class="plus-menu-divider"></div>
                 <button class="plus-menu-item" :class="{ active: isPlanMode }" @click="togglePlanMode">
                   <ClipboardList :size="16" />
@@ -299,12 +347,36 @@ function formatSize(bytes: number): string {
               </template>
             </div>
           </div>
+
+          <!-- Plan Button -->
+          <button
+            class="toolbar-btn icon-btn"
+            @click="emit('toggle-plan')"
+            title="View plan"
+          >
+            <ClipboardList :size="18" />
+          </button>
+
+          <!-- Todo Button -->
+          <button
+            class="toolbar-btn icon-btn"
+            @click="emit('toggle-todo')"
+            title="Todo list"
+          >
+            <ListTodo :size="18" />
+          </button>
         </div>
 
         <!-- Right: Model selector + Send -->
         <div class="toolbar-right">
-          <!-- Model Selector (moved from header) -->
-          <div class="model-selector-inline" ref="modelDropdownRef" v-if="providers && providers.length > 0">
+          <!-- Model Display: readonly for sessions with messages -->
+          <div class="model-selector-inline" v-if="isReadonlyModel && sessionModel">
+            <span class="model-display-readonly">
+              {{ getModelNameById(sessionModel.providerID, sessionModel.modelID) }}
+            </span>
+          </div>
+          <!-- Model Selector: interactive for new sessions -->
+          <div class="model-selector-inline" ref="modelDropdownRef" v-else-if="providers && providers.length > 0">
             <button
               class="model-trigger-inline"
               @click.stop="showModelDropdown = !showModelDropdown"
@@ -591,6 +663,17 @@ function formatSize(bytes: number): string {
   cursor: not-allowed;
 }
 
+/* Icon buttons (Plan, Todo) */
+.icon-btn {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.icon-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
 /* Plus Menu Dropdown */
 .plus-menu-container {
   position: relative;
@@ -796,6 +879,16 @@ function formatSize(bytes: number): string {
 
 .check-icon {
   color: var(--accent);
+}
+
+.model-display-readonly {
+  padding: 4px 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 0.6;
+  cursor: default;
+  white-space: nowrap;
 }
 
 /* Send / Abort buttons - Claude.ai style */

@@ -325,7 +325,7 @@ function confirmRemove(name: string) {
     <div class="section-header">
       <div class="section-header-left">
         <h3 class="section-title">MCP 服务器</h3>
-        <p class="section-desc text-muted text-sm">管理 Model Context Protocol 服务器连接</p>
+        <p class="section-desc text-muted text-sm">全局 MCP 配置概览。每个项目可在对话中的 "+" 菜单独立控制 MCP 连接状态。</p>
       </div>
       <button class="btn btn-primary btn-sm" @click="openForm" v-if="!showForm">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

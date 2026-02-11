@@ -177,7 +177,7 @@ function getDisplayText(item: TodoItem): string {
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
-  max-height: 400px;
+  max-height: 560px;
   box-shadow: var(--shadow-md);
 }
 

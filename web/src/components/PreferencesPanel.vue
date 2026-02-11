@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Plus, Trash2, Edit2, Check, X, Globe, FolderOpen } from 'lucide-vue-next'
+import { Plus, Trash2, Edit2, Check, X, Globe } from 'lucide-vue-next'
 import { usePreferences } from '../composables/usePreferences'
 
 const {
-  preferences,
   globalPreferences,
-  projectPreferences,
   loading,
   error,
   editingId,
@@ -22,12 +20,11 @@ const {
 
 // 新增偏好的输入
 const newContent = ref('')
-const newScope = ref<'global' | 'project'>('global')
 
 // 添加偏好
 async function handleAdd() {
   if (!newContent.value.trim()) return
-  await addPreference(newContent.value, newScope.value)
+  await addPreference(newContent.value, 'global')
   newContent.value = ''
 }
 
@@ -49,7 +46,7 @@ onMounted(() => {
     <!-- 头部说明 -->
     <div class="panel-header">
       <p class="description">
-        设置您的偏好，AI 会在每次对话中自动遵循这些偏好。
+        设置您的全局偏好，AI 会在每次对话中自动遵循这些偏好。
       </p>
     </div>
 
@@ -65,25 +62,9 @@ onMounted(() => {
         />
       </div>
       <div class="add-actions">
-        <div class="scope-selector">
-          <button
-            class="scope-btn"
-            :class="{ active: newScope === 'global' }"
-            @click="newScope = 'global'"
-            title="全局偏好（所有项目生效）"
-          >
-            <Globe :size="14" />
-            <span>全局</span>
-          </button>
-          <button
-            class="scope-btn"
-            :class="{ active: newScope === 'project' }"
-            @click="newScope = 'project'"
-            title="项目偏好（仅当前项目生效）"
-          >
-            <FolderOpen :size="14" />
-            <span>项目</span>
-          </button>
+        <div class="scope-label">
+          <Globe :size="14" />
+          <span>全局偏好</span>
         </div>
         <button
           class="add-btn"
@@ -104,68 +85,15 @@ onMounted(() => {
     <!-- 偏好列表 -->
     <div class="preferences-list">
       <!-- 空状态 -->
-      <div v-if="!loading && preferences.length === 0" class="empty-state">
+      <div v-if="!loading && globalPreferences.length === 0" class="empty-state">
         <p>还没有设置任何偏好</p>
         <p class="hint">添加偏好后，AI 会在对话中自动遵循</p>
       </div>
 
       <!-- 加载状态 -->
-      <div v-else-if="loading && preferences.length === 0" class="loading-state">
+      <div v-else-if="loading && globalPreferences.length === 0" class="loading-state">
         <div class="spinner"></div>
         <span>加载中...</span>
-      </div>
-
-      <!-- 项目偏好 -->
-      <div v-if="projectPreferences.length > 0" class="preferences-section">
-        <h3 class="section-title">
-          <FolderOpen :size="14" />
-          <span>项目偏好</span>
-          <span class="count">{{ projectPreferences.length }}</span>
-        </h3>
-        <div class="preference-items">
-          <div
-            v-for="pref in projectPreferences"
-            :key="pref.id"
-            class="preference-item"
-          >
-            <!-- 编辑模式 -->
-            <template v-if="editingId === pref.id">
-              <textarea
-                v-model="editingContent"
-                class="edit-input"
-                rows="2"
-                @keydown.enter.ctrl="saveEdit"
-                @keydown.escape="cancelEdit"
-              />
-              <div class="item-actions">
-                <button class="action-btn save" @click="saveEdit" title="保存">
-                  <Check :size="14" />
-                </button>
-                <button class="action-btn cancel" @click="cancelEdit" title="取消">
-                  <X :size="14" />
-                </button>
-              </div>
-            </template>
-            <!-- 显示模式 -->
-            <template v-else>
-              <div class="item-content">
-                <p class="content-text">{{ pref.content }}</p>
-                <div class="item-meta">
-                  <span class="source">{{ pref.source === 'ai' ? 'AI 添加' : '手动添加' }}</span>
-                  <span class="time">{{ formatTime(pref.createdAt) }}</span>
-                </div>
-              </div>
-              <div class="item-actions">
-                <button class="action-btn edit" @click="startEdit(pref)" title="编辑">
-                  <Edit2 :size="14" />
-                </button>
-                <button class="action-btn delete" @click="handleDelete(pref.id)" title="删除">
-                  <Trash2 :size="14" />
-                </button>
-              </div>
-            </template>
-          </div>
-        </div>
       </div>
 
       <!-- 全局偏好 -->
@@ -285,34 +213,12 @@ onMounted(() => {
   align-items: center;
 }
 
-.scope-selector {
-  display: flex;
-  gap: var(--space-xs);
-}
-
-.scope-btn {
+.scope-label {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  border: 0.5px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
-  color: var(--text-secondary);
+  gap: 6px;
   font-size: 12px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.scope-btn:hover {
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-
-.scope-btn.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: white;
+  color: var(--text-muted);
 }
 
 .add-btn {

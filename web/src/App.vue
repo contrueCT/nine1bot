@@ -4,6 +4,7 @@ import { useSession } from './composables/useSession'
 import { useFiles } from './composables/useFiles'
 import { useSettings } from './composables/useSettings'
 import { useAppMode } from './composables/useAppMode'
+import { useSessionMode } from './composables/useSessionMode'
 import { useProjects } from './composables/useProjects'
 import Header from './components/Header.vue'
 import Sidebar from './components/Sidebar.vue'
@@ -11,10 +12,12 @@ import ChatPanel from './components/ChatPanel.vue'
 import InputBox from './components/InputBox.vue'
 import PromptCategories from './components/PromptCategories.vue'
 import SearchOverlay from './components/SearchOverlay.vue'
-import ProjectDetail from './components/ProjectDetail.vue'
+import ProjectsPage from './components/ProjectsPage.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import FileViewer from './components/FileViewer.vue'
 import TodoList from './components/TodoList.vue'
+import PlanPanel from './components/PlanPanel.vue'
+import McpProjectPanel from './components/McpProjectPanel.vue'
 import RightPanel from './components/RightPanel.vue'
 import { useAgentTerminal } from './composables/useAgentTerminal'
 import { useFilePreview } from './composables/useFilePreview'
@@ -54,7 +57,6 @@ const {
   deleteMessagePart,
   updateMessagePart,
   summarizeSession,
-  isSummarizing,
   todoItems,
   loadTodoItems,
   // 事件处理器注册
@@ -88,10 +90,13 @@ const {
   clearFileContent,
 } = useFiles()
 
-const { showSettings, openSettings, closeSettings, currentProvider, currentModel, providers, selectModel: settingsSelectModel } = useSettings()
+const { showSettings, openSettings, closeSettings, activeTab: settingsTab, currentProvider, currentModel, providers, selectModel: settingsSelectModel, loadProviders, loadConfig } = useSettings()
 
-// App mode (chat / code)
+// App mode (chat / agent)
 const { mode: appMode, setMode: setAppMode } = useAppMode()
+
+// Session ↔ mode mapping
+const { setMode: setSessionMode } = useSessionMode()
 
 // Projects
 const {
@@ -101,6 +106,9 @@ const {
   selectProject: selectProjectFn,
   clearProject,
   updateProject,
+  createProject: createProjectFn,
+  deleteLocalProject,
+  addSessionToProject,
 } = useProjects()
 
 // 文件查看器状态
@@ -109,14 +117,26 @@ const showFileViewer = ref(false)
 // 待办事项面板状态
 const showTodoList = ref(false)
 
+// Plan面板状态
+const showPlanPanel = ref(false)
+
+// MCP project panel state
+const showMcpPanel = ref(false)
+
+// Pending project tag for auto-tagging new sessions created from project view
+const pendingProjectTag = ref<string | null>(null)
+
 // Search overlay
 const showSearch = ref(false)
+
+// Projects page
+const showProjectsPage = ref(false)
 
 const sidebarCollapsed = ref(false)
 
 // Empty state detection for centered layout
 const isEmptyState = computed(() =>
-  messages.value.length === 0 && !isLoading.value && !currentProject.value
+  messages.value.length === 0 && !isLoading.value && !currentProject.value && !showProjectsPage.value
 )
 
 // Handle model selection from InputBox
@@ -151,6 +171,10 @@ onMounted(async () => {
   await loadSessions()
   await loadFiles('.')
   await loadProjects()
+
+  // 加载模型 providers 和配置（确保模型选择器立即可用）
+  await loadProviders()
+  await loadConfig()
 
   if (sessions.value.length > 0) {
     await selectSession(sessions.value[0])
@@ -193,6 +217,19 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
+// Tag new sessions with current app mode and pending project
+watch(currentSession, (newSession, oldSession) => {
+  if (newSession && !oldSession) {
+    // A new session was just created (transitioned from draft/null to real session)
+    setSessionMode(newSession.id, appMode.value)
+    // Auto-tag with project if pending
+    if (pendingProjectTag.value) {
+      addSessionToProject(pendingProjectTag.value, newSession.id)
+      pendingProjectTag.value = null
+    }
+  }
+})
+
 // 监听当前目录变化，更新文件树工作目录
 watch(currentDirectory, async (newDir) => {
   setFilesDirectory(newDir || undefined)
@@ -201,8 +238,9 @@ watch(currentDirectory, async (newDir) => {
 
 async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean) {
   // If viewing a project, clear project view and go to session
-  if (currentProject.value) {
+  if (currentProject.value || showProjectsPage.value) {
     clearProject()
+    showProjectsPage.value = false
   }
 
   // sendMessage 会自动处理草稿模式，在发送前创建会话
@@ -221,6 +259,7 @@ async function handleSend(content: string, files?: Array<{ type: 'file'; mime: s
 
 function handleNewSession() {
   clearProject()
+  showProjectsPage.value = false
   createSession(currentDirectory.value || '.')
 }
 
@@ -228,14 +267,35 @@ function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
-// Mode switch handler
-function handleSwitchMode(newMode: 'chat' | 'code') {
+// Mode switch handler — auto navigate to new chat
+function handleSwitchMode(newMode: 'chat' | 'agent') {
   setAppMode(newMode)
+  clearProject()
+  showProjectsPage.value = false
+  createSession(currentDirectory.value || '.')
 }
 
 // Project selection handler
 function handleSelectProject(projectId: string) {
-  selectProjectFn(projectId)
+  if (projectId) {
+    selectProjectFn(projectId)
+  } else {
+    // Empty string means go back to list view
+    clearProject()
+  }
+}
+
+// Open projects page
+function handleOpenProjects() {
+  showProjectsPage.value = true
+  clearProject()
+}
+
+// Create a new local project
+function handleCreateProject(name: string, instructions: string, directory?: string) {
+  const newProject = createProjectFn(name, instructions, directory || currentDirectory.value || '.')
+  // Auto-select the newly created project
+  selectProjectFn(newProject.id)
 }
 
 // Handle project update
@@ -246,6 +306,7 @@ async function handleUpdateProject(projectId: string, updates: { name?: string; 
 // Handle search result selection
 function handleSearchSelect(sessionId: string) {
   showSearch.value = false
+  showProjectsPage.value = false
   const session = sessions.value.find(s => s.id === sessionId)
   if (session) {
     clearProject()
@@ -254,10 +315,27 @@ function handleSearchSelect(sessionId: string) {
 }
 
 // Handle creating new session from project
-function handleProjectNewSession(_projectId: string) {
-  // TODO: Create session with projectID when backend supports it
+function handleProjectNewSession(projectId: string) {
+  // Use the project's working directory for the new session
+  const project = projects.value.find(p => p.id === projectId)
+  const dir = project?.worktree || currentDirectory.value || '.'
+
+  // Set pending project tag so the session gets auto-tagged when created
+  pendingProjectTag.value = projectId
+
   clearProject()
-  createSession(currentDirectory.value || '.')
+  showProjectsPage.value = false
+
+  // Change to project directory and create session
+  if (project?.worktree) {
+    changeDirectory(project.worktree)
+  }
+  createSession(dir)
+}
+
+// Handle deleting a project
+function handleDeleteProject(projectId: string) {
+  deleteLocalProject(projectId)
 }
 
 // Handle selecting session from project detail
@@ -265,6 +343,7 @@ function handleProjectSelectSession(sessionId: string) {
   const session = sessions.value.find(s => s.id === sessionId)
   if (session) {
     clearProject()
+    showProjectsPage.value = false
     selectSession(session)
   }
 }
@@ -316,6 +395,27 @@ function closeFileViewer() {
   clearFileContent()
 }
 
+// Toggle Plan panel
+function togglePlanPanel() {
+  showPlanPanel.value = !showPlanPanel.value
+}
+
+// Toggle MCP project panel
+function toggleMcpPanel() {
+  showMcpPanel.value = !showMcpPanel.value
+}
+
+// Open settings with specific tab
+function handleOpenMcp() {
+  settingsTab.value = 'mcp'
+  openSettings()
+}
+
+function handleOpenSkills() {
+  settingsTab.value = 'skills'
+  openSettings()
+}
+
 // 处理提示分类选择
 function handlePromptSelect(prompt: string) {
   handleSend(prompt)
@@ -341,7 +441,7 @@ function handlePromptSelect(prompt: string) {
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
       @toggle-collapse="toggleSidebar"
-      @select-session="(session) => { clearProject(); selectSession(session) }"
+      @select-session="(session) => { clearProject(); showProjectsPage = false; selectSession(session) }"
       @new-session="handleNewSession"
       @toggle-directory="toggleDirectory"
       @delete-session="deleteSession"
@@ -353,6 +453,8 @@ function handlePromptSelect(prompt: string) {
       @change-directory="changeDirectory"
       @switch-mode="handleSwitchMode"
       @select-project="handleSelectProject"
+      @open-projects="handleOpenProjects"
+      @move-to-project="(sessionId: string, projectId: string) => addSessionToProject(projectId, sessionId)"
     />
 
     <!-- Main Content -->
@@ -362,27 +464,76 @@ function handlePromptSelect(prompt: string) {
         :session="currentSession"
         :isStreaming="isStreaming"
         :sidebarCollapsed="sidebarCollapsed"
-        :isSummarizing="isSummarizing"
         @toggle-sidebar="toggleSidebar"
         @abort="abortCurrentSession"
-        @open-settings="openSettings"
-        @summarize="handleSummarize"
-        @toggle-todo="toggleTodoList"
       />
 
       <!-- Chat Area -->
       <div class="chat-panel" :class="{ 'empty-layout': isEmptyState }">
-        <!-- Project Detail View -->
-        <ProjectDetail
-          v-if="currentProject"
-          :project="currentProject"
+        <!-- Projects Page -->
+        <ProjectsPage
+          v-if="showProjectsPage"
+          :projects="projects"
+          :currentProject="currentProject"
+          @select-project="handleSelectProject"
           @update-project="handleUpdateProject"
           @select-session="handleProjectSelectSession"
           @new-session="handleProjectNewSession"
-          @close="clearProject"
+          @create-project="handleCreateProject"
+          @delete-project="handleDeleteProject"
+          @rename-session="renameSession"
+          @delete-session="deleteSession"
+          @close="showProjectsPage = false; clearProject()"
         />
 
-        <!-- Normal Chat View -->
+        <!-- Empty State: Centered greeting + input + prompts -->
+        <template v-else-if="isEmptyState">
+          <div class="empty-center-wrapper">
+            <ChatPanel
+              :messages="messages"
+              :isLoading="isLoading"
+              :isStreaming="isStreaming"
+              :pendingQuestions="pendingQuestions"
+              :pendingPermissions="pendingPermissions"
+              :sessionError="sessionError"
+              :currentDirectory="currentDirectory"
+              :canChangeDirectory="canChangeDirectory()"
+              :mode="appMode"
+              @question-answered="(id, answers) => answerQuestion(id, answers)"
+              @question-rejected="rejectQuestion"
+              @permission-responded="respondPermission"
+              @clear-error="clearSessionError"
+              @open-settings="openSettings"
+              @delete-part="handleDeletePart"
+              @update-part="handleUpdatePart"
+              @change-directory="changeDirectory"
+            />
+            <InputBox
+              :disabled="isLoading"
+              :isStreaming="isStreaming"
+              :centered="true"
+              :providers="providers"
+              :currentProvider="currentProvider"
+              :currentModel="currentModel"
+              :mode="appMode"
+              :messages="messages"
+              @send="handleSend"
+              @abort="abortCurrentSession"
+              @select-model="handleSelectModel"
+              @open-mcp="handleOpenMcp"
+              @toggle-mcp-panel="toggleMcpPanel"
+              @open-skills="handleOpenSkills"
+              @compress-session="handleSummarize"
+              @toggle-todo="toggleTodoList"
+              @toggle-plan="togglePlanPanel"
+            />
+            <PromptCategories
+              @select="handlePromptSelect"
+            />
+          </div>
+        </template>
+
+        <!-- Normal Chat View with messages -->
         <template v-else>
           <ChatPanel
             :messages="messages"
@@ -406,31 +557,54 @@ function handlePromptSelect(prompt: string) {
           <InputBox
             :disabled="isLoading"
             :isStreaming="isStreaming"
-            :centered="isEmptyState"
+            :centered="false"
             :providers="providers"
             :currentProvider="currentProvider"
             :currentModel="currentModel"
             :mode="appMode"
+            :messages="messages"
             @send="handleSend"
             @abort="abortCurrentSession"
             @select-model="handleSelectModel"
-          />
-
-          <!-- Prompt Categories (only shown on empty state) -->
-          <PromptCategories
-            v-if="isEmptyState"
-            @select="handlePromptSelect"
+            @open-mcp="handleOpenMcp"
+            @toggle-mcp-panel="toggleMcpPanel"
+            @open-skills="handleOpenSkills"
+            @compress-session="handleSummarize"
+            @toggle-todo="toggleTodoList"
+            @toggle-plan="togglePlanPanel"
           />
         </template>
 
-        <!-- Todo List Panel -->
-        <div v-if="showTodoList" class="todo-panel-container">
-          <TodoList
-            :items="todoItems"
-            :isLoading="isLoading"
-            @close="showTodoList = false"
-            @refresh="loadTodoItems"
-          />
+        <!-- Plan Panel (click outside to close) -->
+        <div v-if="showPlanPanel" class="panel-overlay" @click.self="showPlanPanel = false">
+          <div class="plan-panel-container">
+            <PlanPanel
+              :messages="messages"
+              @close="showPlanPanel = false"
+            />
+          </div>
+        </div>
+
+        <!-- Todo List Panel (click outside to close) -->
+        <div v-if="showTodoList" class="panel-overlay" @click.self="showTodoList = false">
+          <div class="todo-panel-container">
+            <TodoList
+              :items="todoItems"
+              :isLoading="isLoading"
+              @close="showTodoList = false"
+              @refresh="loadTodoItems"
+            />
+          </div>
+        </div>
+
+        <!-- MCP Project Panel (click outside to close) -->
+        <div v-if="showMcpPanel" class="panel-overlay" @click.self="showMcpPanel = false">
+          <div class="mcp-panel-container">
+            <McpProjectPanel
+              :currentDirectory="currentDirectory"
+              @close="showMcpPanel = false"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -492,12 +666,37 @@ function handlePromptSelect(prompt: string) {
 <style scoped>
 /* Layout uses global styles from style.css */
 
+.panel-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 99;
+}
+
+.plan-panel-container {
+  position: absolute;
+  top: calc(var(--header-height) + var(--space-md));
+  left: var(--space-md);
+  z-index: 100;
+  width: 520px;
+  max-width: calc(100% - var(--space-md) * 2);
+}
+
 .todo-panel-container {
   position: absolute;
   top: calc(var(--header-height) + var(--space-md));
   right: var(--space-md);
   z-index: 100;
   width: 360px;
+  max-width: calc(100% - var(--space-md) * 2);
+}
+
+.mcp-panel-container {
+  position: absolute;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  width: 320px;
   max-width: calc(100% - var(--space-md) * 2);
 }
 

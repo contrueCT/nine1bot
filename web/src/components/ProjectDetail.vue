@@ -4,6 +4,9 @@ import { FolderOpen, Plus, MessageSquare, Save, Pencil, Check, X, Clock } from '
 import { api } from '../api/client'
 import type { Session } from '../api/client'
 import type { ProjectInfo } from './Sidebar.vue'
+import { useSessionMode } from '../composables/useSessionMode'
+
+const { getSessionsForProject } = useSessionMode()
 
 const props = defineProps<{
   project: ProjectInfo
@@ -33,7 +36,14 @@ watch(() => props.project, (project) => {
 async function loadSessions() {
   isLoadingSessions.value = true
   try {
-    sessions.value = await api.getProjectSessions(props.project.id)
+    // Use localStorage sessionMode mapping as single source of truth
+    const sessionIds = getSessionsForProject(props.project.id)
+    if (sessionIds.length === 0) {
+      sessions.value = []
+    } else {
+      const allSessions = await api.getSessions()
+      sessions.value = allSessions.filter(s => sessionIds.includes(s.id))
+    }
   } catch (e) {
     console.error('Failed to load project sessions:', e)
   } finally {

@@ -1,11 +1,15 @@
 import { ref, watch } from 'vue'
 
-export type AppMode = 'chat' | 'code'
+export type AppMode = 'chat' | 'agent'
 
 const STORAGE_KEY = 'nine1bot-app-mode'
 
+// Migrate old 'code' value to 'agent'
+const stored = localStorage.getItem(STORAGE_KEY)
+const initialMode: AppMode = stored === 'code' ? 'agent' : (stored as AppMode) || 'chat'
+
 // Singleton mode state shared across all composable users
-const mode = ref<AppMode>((localStorage.getItem(STORAGE_KEY) as AppMode) || 'chat')
+const mode = ref<AppMode>(initialMode)
 
 // Persist to localStorage
 watch(mode, (newMode) => {
@@ -18,7 +22,7 @@ export function useAppMode() {
   }
 
   function toggleMode() {
-    mode.value = mode.value === 'chat' ? 'code' : 'chat'
+    mode.value = mode.value === 'chat' ? 'agent' : 'chat'
   }
 
   return {

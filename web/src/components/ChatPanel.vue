@@ -6,6 +6,7 @@ import { api } from '../api/client'
 import MessageItem from './MessageItem.vue'
 import AgentQuestion from './AgentQuestion.vue'
 import PermissionRequestVue from './PermissionRequest.vue'
+import DirectoryBrowserFallback from './DirectoryBrowserFallback.vue'
 
 const props = defineProps<{
   messages: Message[]
@@ -16,7 +17,7 @@ const props = defineProps<{
   sessionError?: { message: string; dismissable?: boolean } | null
   currentDirectory?: string
   canChangeDirectory?: boolean
-  mode?: 'chat' | 'code'
+  mode?: 'chat' | 'agent'
 }>()
 
 const emit = defineEmits<{
@@ -32,6 +33,7 @@ const emit = defineEmits<{
 
 const scrollContainer = ref<HTMLDivElement>()
 const isPickingDirectory = ref(false)
+const showFallbackBrowser = ref(false)
 
 // Time-based greeting (Claude.ai style)
 const greeting = computed(() => {
@@ -41,7 +43,7 @@ const greeting = computed(() => {
   return 'Good evening'
 })
 
-// Open native directory picker
+// Open native directory picker, with fallback to built-in browser
 async function openDirectoryPicker() {
   if (isPickingDirectory.value) return
   isPickingDirectory.value = true
@@ -51,10 +53,21 @@ async function openDirectoryPicker() {
       emit('changeDirectory', result.path)
     }
   } catch (e) {
-    console.error('Failed to pick directory:', e)
+    console.error('Native picker failed, showing fallback browser:', e)
+    // Fallback to built-in directory browser
+    showFallbackBrowser.value = true
   } finally {
     isPickingDirectory.value = false
   }
+}
+
+function handleFallbackSelect(path: string) {
+  showFallbackBrowser.value = false
+  emit('changeDirectory', path)
+}
+
+function handleFallbackCancel() {
+  showFallbackBrowser.value = false
 }
 
 // 获取目录显示名称
@@ -123,7 +136,7 @@ function scrollToBottom() {
         </div>
 
         <!-- Directory Selector (only in code mode, subtle, below greeting) -->
-        <div v-if="canChangeDirectory && mode === 'code'" class="directory-selector-section">
+        <div v-if="canChangeDirectory && mode === 'agent'" class="directory-selector-section">
           <button class="directory-btn" @click="openDirectoryPicker" :disabled="isPickingDirectory">
             <FolderOpen :size="16" />
             <span class="directory-btn-text">
@@ -170,6 +183,17 @@ function scrollToBottom() {
       <div class="bottom-spacer"></div>
     </div>
 
+    <!-- Fallback Directory Browser (when native picker fails) -->
+    <Teleport to="body">
+      <div v-if="showFallbackBrowser" class="fallback-overlay" @click="handleFallbackCancel">
+        <div @click.stop>
+          <DirectoryBrowserFallback
+            @select="handleFallbackSelect"
+            @cancel="handleFallbackCancel"
+          />
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -192,7 +216,6 @@ function scrollToBottom() {
 
 /* === Claude.ai Empty State === */
 .chat-empty {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -326,5 +349,16 @@ function scrollToBottom() {
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+.fallback-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
 }
 </style>

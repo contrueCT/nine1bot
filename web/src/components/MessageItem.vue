@@ -5,6 +5,9 @@ import DOMPurify from 'dompurify'
 import { Bot, User, Brain, ChevronDown, Pencil, Trash2, X, Check } from 'lucide-vue-next'
 import type { Message, MessagePart } from '../api/client'
 import ToolCall from './ToolCall.vue'
+import { useUserProfile } from '../composables/useUserProfile'
+
+const { profile, botAvatar } = useUserProfile()
 
 const props = defineProps<{
   message: Message
@@ -119,14 +122,23 @@ function formatText(text: string): string {
 <template>
   <div class="message-row" :class="{ 'user-row': message.info.role === 'user', 'agent-row': message.info.role !== 'user' }">
     <div class="avatar shadow-sm">
-      <User v-if="message.info.role === 'user'" :size="18" />
-      <Bot v-else :size="18" />
+      <template v-if="message.info.role === 'user'">
+        <img v-if="profile.avatarUrl" :src="profile.avatarUrl" alt="Avatar" class="avatar-img" />
+        <User v-else :size="18" />
+      </template>
+      <template v-else>
+        <img v-if="botAvatar.botAvatarUrl" :src="botAvatar.botAvatarUrl" alt="Bot" class="avatar-img" />
+        <Bot v-else :size="18" />
+      </template>
     </div>
 
     <div class="message-wrapper" :class="{ 'user-wrapper': message.info.role === 'user' }">
       <div class="message-bubble" :class="{ 'user-bubble': message.info.role === 'user', 'agent-bubble glass': message.info.role !== 'user' }">
 
-      <div class="message-sender-name" v-if="message.info.role !== 'user'">
+      <div class="message-sender-name" v-if="message.info.role === 'user' && profile.name">
+        {{ profile.name }}
+      </div>
+      <div class="message-sender-name" v-else-if="message.info.role !== 'user'">
         {{ message.info.model?.modelID || 'Nine1Bot' }}
       </div>
 
@@ -288,6 +300,13 @@ function formatText(text: string): string {
 .agent-row .avatar {
   background: var(--accent);
   color: white;
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
 }
 
 /* Message wrapper for positioning actions */

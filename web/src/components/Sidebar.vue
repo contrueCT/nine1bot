@@ -3,10 +3,12 @@ import { ref, computed } from 'vue'
 import {
   PanelLeftClose, PanelLeft, MessageSquare, Plus, Search,
   FolderOpen, Code2, Sparkles, Pencil, Trash2, X, Check,
-  Loader2, Square, ChevronRight, User, MessageCircle
+  Loader2, Square, ChevronRight, User, MessageCircle, EllipsisVertical
 } from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
 import type { AppMode } from '../composables/useAppMode'
+import { useSessionMode } from '../composables/useSessionMode'
+import { useUserProfile } from '../composables/useUserProfile'
 
 export interface ProjectInfo {
   id: string
@@ -52,11 +54,18 @@ const emit = defineEmits<{
   'change-directory': [directory: string]
   'switch-mode': [mode: AppMode]
   'select-project': [projectId: string]
+  'open-projects': []
+  'move-to-project': [sessionId: string, projectId: string]
 }>()
+
+// Session mode mapping
+const { getMode, getSessionProjects, removeSessionFromProject } = useSessionMode()
+
+// User profile
+const { profile, brandLogo } = useUserProfile()
 
 // Sections collapse state
 const showRecents = ref(true)
-const showProjects = ref(true)
 
 // 重命名状态
 const renamingSession = ref<Session | null>(null)
@@ -65,16 +74,28 @@ const newTitle = ref('')
 // 删除确认状态
 const deletingSession = ref<Session | null>(null)
 
-// 最近的会话（只显示前8个）
-const recentSessions = computed(() => {
-  return props.sessions.slice(0, 8)
-})
+// Right-click context menu
+const contextMenu = ref<{ x: number; y: number; session: Session } | null>(null)
+const showProjectPicker = ref(false)
 
-function startRename(session: Session, event: Event) {
-  event.stopPropagation()
-  renamingSession.value = session
-  newTitle.value = session.title || `会话 ${session.id.slice(0, 6)}`
+// Toast notification for errors
+const toastMessage = ref('')
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+
+function showToast(message: string) {
+  toastMessage.value = message
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toastMessage.value = '' }, 3000)
 }
+
+// Sessions filtered by current mode
+const filteredSessions = computed(() => {
+  // Show sessions matching current mode, or untagged (legacy) sessions
+  return props.sessions.filter(s => {
+    const sessionMode = getMode(s.id)
+    return sessionMode === props.mode || sessionMode === undefined
+  })
+})
 
 function cancelRename() {
   renamingSession.value = null
@@ -86,11 +107,6 @@ function doRename() {
     emit('rename-session', renamingSession.value.id, newTitle.value.trim())
   }
   cancelRename()
-}
-
-function confirmDelete(session: Session, event: Event) {
-  event.stopPropagation()
-  deletingSession.value = session
 }
 
 function cancelDelete() {
@@ -108,8 +124,76 @@ function getSessionTitle(session: Session): string {
   return session.title || `会话 ${session.id.slice(0, 6)}`
 }
 
-function getProjectName(project: ProjectInfo): string {
-  return project.name || project.worktree.split('/').pop() || project.id.slice(0, 8)
+// Context menu handlers
+function openContextMenu(event: MouseEvent, session: Session) {
+  event.preventDefault()
+  event.stopPropagation()
+  contextMenu.value = {
+    x: event.clientX,
+    y: event.clientY,
+    session
+  }
+  showProjectPicker.value = false
+}
+
+function closeContextMenu() {
+  contextMenu.value = null
+  showProjectPicker.value = false
+}
+
+function contextMenuRename() {
+  if (contextMenu.value) {
+    renamingSession.value = contextMenu.value.session
+    newTitle.value = contextMenu.value.session.title || `会话 ${contextMenu.value.session.id.slice(0, 6)}`
+  }
+  closeContextMenu()
+}
+
+function contextMenuDelete() {
+  if (contextMenu.value) {
+    deletingSession.value = contextMenu.value.session
+  }
+  closeContextMenu()
+}
+
+function contextMenuMoveToProject(projectId: string) {
+  if (!contextMenu.value) return
+  const session = contextMenu.value.session
+  const project = props.projects.find(p => p.id === projectId)
+
+  // Block if directory doesn't match
+  if (project?.worktree && session.directory &&
+      !session.directory.startsWith(project.worktree) &&
+      !project.worktree.startsWith(session.directory)) {
+    closeContextMenu()
+    showToast(`工作目录不匹配，无法移入该项目`)
+    return
+  }
+
+  emit('move-to-project', session.id, projectId)
+  closeContextMenu()
+}
+
+function contextMenuRemoveFromProject(sessionId: string, projectId: string) {
+  removeSessionFromProject(sessionId, projectId)
+  closeContextMenu()
+}
+
+// Get current session's projects for context menu display
+function getSessionProjectNames(sessionId: string): { id: string; name: string }[] {
+  const projectIds = getSessionProjects(sessionId)
+  return projectIds
+    .map(pid => {
+      const project = props.projects.find(p => p.id === pid)
+      return project ? { id: pid, name: project.name || project.worktree.split('/').pop() || pid.slice(0, 8) } : null
+    })
+    .filter((p): p is { id: string; name: string } => p !== null)
+}
+
+// Available projects (not yet assigned) for the "move to" sub-menu
+function getAvailableProjects(sessionId: string) {
+  const assigned = getSessionProjects(sessionId)
+  return props.projects.filter(p => !assigned.includes(p.id))
 }
 </script>
 
@@ -118,6 +202,7 @@ function getProjectName(project: ProjectInfo): string {
     <!-- Header: Brand + Collapse -->
     <div class="sidebar-header">
       <div class="brand-area" v-if="!collapsed">
+        <img v-if="brandLogo.logoUrl" :src="brandLogo.logoUrl" alt="Logo" class="brand-logo" />
         <span class="brand-text">Nine1Bot</span>
       </div>
       <button class="collapse-btn" @click="emit('toggle-collapse')" :title="collapsed ? '展开' : '折叠'">
@@ -126,7 +211,7 @@ function getProjectName(project: ProjectInfo): string {
       </button>
     </div>
 
-    <!-- Top Actions (expanded) -->
+    <!-- Top Navigation (expanded) - Claude.ai style flat list -->
     <nav class="sidebar-nav" v-if="!collapsed">
       <button class="nav-item new-chat" @click="emit('new-session')">
         <Plus :size="18" />
@@ -136,15 +221,22 @@ function getProjectName(project: ProjectInfo): string {
         <Search :size="18" />
         <span>Search</span>
       </button>
+      <button class="nav-item" @click="emit('open-projects')">
+        <FolderOpen :size="18" />
+        <span>Projects</span>
+      </button>
     </nav>
 
-    <!-- Top Actions (collapsed) -->
+    <!-- Top Navigation (collapsed) -->
     <nav class="sidebar-nav sidebar-nav-collapsed" v-if="collapsed">
       <button class="nav-item-icon" @click="emit('new-session')" title="New chat">
         <Plus :size="18" />
       </button>
       <button class="nav-item-icon" @click="emit('open-search')" title="Search">
         <Search :size="18" />
+      </button>
+      <button class="nav-item-icon" @click="emit('open-projects')" title="Projects">
+        <FolderOpen :size="18" />
       </button>
     </nav>
 
@@ -165,9 +257,9 @@ function getProjectName(project: ProjectInfo): string {
           <span class="session-title">新对话</span>
         </div>
 
-        <!-- Recent Sessions -->
+        <!-- Filtered Sessions by Mode -->
         <div
-          v-for="session in recentSessions"
+          v-for="session in filteredSessions"
           :key="session.id"
           class="session-item"
           :class="{
@@ -175,6 +267,7 @@ function getProjectName(project: ProjectInfo): string {
             running: isSessionRunning(session.id)
           }"
           @click="emit('select-session', session)"
+          @contextmenu="openContextMenu($event, session)"
         >
           <Loader2 v-if="isSessionRunning(session.id)" :size="14" class="session-icon spin" />
           <MessageSquare v-else :size="14" class="session-icon" />
@@ -190,46 +283,15 @@ function getProjectName(project: ProjectInfo): string {
             >
               <Square :size="10" fill="currentColor" />
             </button>
-            <button class="mini-btn" @click="startRename(session, $event)" title="重命名">
-              <Pencil :size="10" />
-            </button>
-            <button class="mini-btn danger" @click="confirmDelete(session, $event)" title="删除">
-              <Trash2 :size="10" />
+            <button class="mini-btn" @click="openContextMenu($event, session)" title="更多操作">
+              <EllipsisVertical :size="14" />
             </button>
           </div>
         </div>
 
-        <!-- View All Link -->
-        <button
-          v-if="sessions.length > 8"
-          class="view-all-btn"
-        >
-          查看全部 {{ sessions.length }} 个会话
-        </button>
-      </div>
-    </div>
-
-    <!-- Projects Section -->
-    <div class="sidebar-section" v-if="!collapsed">
-      <div class="section-header" @click="showProjects = !showProjects">
-        <span class="section-label">Projects</span>
-        <ChevronRight :size="14" class="section-chevron" :class="{ expanded: showProjects }" />
-      </div>
-
-      <div v-if="showProjects" class="section-list">
-        <div
-          v-for="project in projects"
-          :key="project.id"
-          class="project-item"
-          :class="{ active: currentProjectId === project.id }"
-          @click="emit('select-project', project.id)"
-        >
-          <FolderOpen :size="14" class="project-icon" />
-          <span class="project-name">{{ getProjectName(project) }}</span>
-        </div>
-
-        <div v-if="projects.length === 0" class="section-empty">
-          No projects yet
+        <!-- Empty state when no sessions match current mode -->
+        <div v-if="filteredSessions.length === 0 && !isDraftSession" class="section-empty">
+          No conversations yet
         </div>
       </div>
     </div>
@@ -249,11 +311,11 @@ function getProjectName(project: ProjectInfo): string {
       </button>
       <button
         class="mode-btn"
-        :class="{ active: mode === 'code' }"
-        @click="emit('switch-mode', 'code')"
+        :class="{ active: mode === 'agent' }"
+        @click="emit('switch-mode', 'agent')"
       >
         <Code2 :size="16" />
-        <span>Code</span>
+        <span>Agent</span>
       </button>
     </div>
 
@@ -269,9 +331,9 @@ function getProjectName(project: ProjectInfo): string {
       </button>
       <button
         class="nav-item-icon"
-        :class="{ active: mode === 'code' }"
-        @click="emit('switch-mode', 'code')"
-        title="Code mode"
+        :class="{ active: mode === 'agent' }"
+        @click="emit('switch-mode', 'agent')"
+        title="Agent mode"
       >
         <Code2 :size="18" />
       </button>
@@ -281,10 +343,11 @@ function getProjectName(project: ProjectInfo): string {
     <div class="sidebar-footer" v-if="!collapsed">
       <div class="user-profile" @click="emit('open-settings')">
         <div class="user-avatar">
-          <User :size="16" />
+          <img v-if="profile.avatarUrl" :src="profile.avatarUrl" alt="Avatar" class="avatar-img" />
+          <User v-else :size="16" />
         </div>
         <div class="user-info">
-          <span class="user-name">用户</span>
+          <span class="user-name">{{ profile.name || '用户' }}</span>
           <span class="user-plan">Nine1Bot</span>
         </div>
       </div>
@@ -352,6 +415,80 @@ function getProjectName(project: ProjectInfo): string {
         </div>
       </div>
     </div>
+
+    <!-- Right-click Context Menu -->
+    <div
+      v-if="contextMenu"
+      class="context-menu-overlay"
+      @click="closeContextMenu"
+      @contextmenu.prevent="closeContextMenu"
+    >
+      <div
+        class="context-menu"
+        :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+        @click.stop
+      >
+        <!-- Current projects (if session belongs to any) -->
+        <template v-if="getSessionProjectNames(contextMenu.session.id).length > 0">
+          <div class="context-menu-label">已在项目</div>
+          <div
+            v-for="proj in getSessionProjectNames(contextMenu.session.id)"
+            :key="proj.id"
+            class="context-menu-item project-tag-item"
+          >
+            <FolderOpen :size="12" />
+            <span class="project-tag-name">{{ proj.name }}</span>
+            <button
+              class="project-tag-remove"
+              @click.stop="contextMenuRemoveFromProject(contextMenu!.session.id, proj.id)"
+              title="移出项目"
+            >
+              <X :size="12" />
+            </button>
+          </div>
+          <div class="context-menu-divider"></div>
+        </template>
+
+        <!-- Move to Project -->
+        <div class="context-menu-item-wrapper">
+          <button class="context-menu-item" @click="showProjectPicker = !showProjectPicker">
+            <FolderOpen :size="14" />
+            <span>移入项目</span>
+            <ChevronRight :size="12" class="context-menu-arrow" />
+          </button>
+          <!-- Project sub-menu (only shows projects not yet assigned) -->
+          <div v-if="showProjectPicker" class="context-submenu">
+            <button
+              v-for="project in getAvailableProjects(contextMenu.session.id)"
+              :key="project.id"
+              class="context-menu-item"
+              @click="contextMenuMoveToProject(project.id)"
+            >
+              <span>{{ project.name || project.worktree }}</span>
+            </button>
+            <div v-if="getAvailableProjects(contextMenu.session.id).length === 0" class="context-menu-empty">
+              {{ projects.length === 0 ? '暂无项目' : '已加入所有项目' }}
+            </div>
+          </div>
+        </div>
+        <button class="context-menu-item" @click="contextMenuRename">
+          <Pencil :size="14" />
+          <span>重命名</span>
+        </button>
+        <div class="context-menu-divider"></div>
+        <button class="context-menu-item danger" @click="contextMenuDelete">
+          <Trash2 :size="14" />
+          <span>删除</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Toast notification -->
+    <Transition name="toast">
+      <div v-if="toastMessage" class="sidebar-toast">
+        {{ toastMessage }}
+      </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -376,6 +513,13 @@ function getProjectName(project: ProjectInfo): string {
 .brand-area {
   display: flex;
   align-items: center;
+}
+
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
 }
 
 .brand-text {
@@ -453,12 +597,9 @@ function getProjectName(project: ProjectInfo): string {
   display: flex;
   flex-direction: column;
   padding: var(--space-xs) 0;
-  overflow: hidden;
-}
-
-.sidebar-section:first-of-type {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .section-header {
@@ -584,71 +725,11 @@ function getProjectName(project: ProjectInfo): string {
   color: var(--error);
 }
 
-/* === Project Items === */
-.project-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: 6px var(--space-sm);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background-color var(--transition-fast);
-}
-
-.project-item:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.project-item.active {
-  background: var(--accent-subtle);
-}
-
-.project-icon {
-  flex-shrink: 0;
-  color: var(--text-muted);
-}
-
-.project-item.active .project-icon {
-  color: var(--accent);
-}
-
-.project-name {
-  flex: 1;
-  font-size: 13px;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-item.active .project-name {
-  color: var(--accent);
-  font-weight: 500;
-}
-
-.view-all-btn {
-  width: 100%;
-  padding: 6px;
-  margin-top: var(--space-xs);
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12px;
-  cursor: pointer;
-  text-align: center;
-  border-radius: var(--radius-sm);
-  transition: all var(--transition-fast);
-}
-
-.view-all-btn:hover {
-  background: rgba(0, 0, 0, 0.04);
-  color: var(--text-primary);
-}
 
 /* === Spacer === */
 .sidebar-spacer {
-  flex: 1;
-  min-height: var(--space-md);
+  flex: 0;
+  min-height: var(--space-sm);
 }
 
 /* === Mode Switcher === */
@@ -726,6 +807,13 @@ function getProjectName(project: ProjectInfo): string {
   background: var(--bg-tertiary);
   border-radius: 50%;
   color: var(--text-muted);
+  overflow: hidden;
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .user-info {
@@ -917,5 +1005,171 @@ function getProjectName(project: ProjectInfo): string {
 
 .dialog-footer .mr-1 {
   margin-right: 4px;
+}
+
+/* === Context Menu === */
+.context-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+}
+
+.context-menu {
+  position: fixed;
+  min-width: 180px;
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: 1101;
+  animation: contextIn 0.1s ease-out;
+}
+
+@keyframes contextIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.context-menu-item-wrapper {
+  position: relative;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+  text-align: left;
+}
+
+.context-menu-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.context-menu-item.danger {
+  color: var(--error);
+}
+
+.context-menu-item.danger:hover {
+  background: var(--error-subtle);
+}
+
+.context-menu-arrow {
+  margin-left: auto;
+  opacity: 0.5;
+}
+
+.context-menu-divider {
+  height: 0.5px;
+  background: var(--border-subtle);
+  margin: 4px 0;
+}
+
+.context-submenu {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  min-width: 160px;
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: 1102;
+}
+
+.context-menu-empty {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Context menu label */
+.context-menu-label {
+  padding: 4px 12px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Project tag items in context menu */
+.project-tag-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.project-tag-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-tag-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0.6;
+  transition: all var(--transition-fast);
+}
+
+.project-tag-remove:hover {
+  background: var(--bg-tertiary);
+  color: var(--error);
+  opacity: 1;
+}
+
+/* Toast notification */
+.sidebar-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  box-shadow: var(--shadow-lg);
+  z-index: 9999;
+  white-space: nowrap;
+}
+
+.toast-enter-active {
+  transition: all 0.25s ease;
+}
+.toast-leave-active {
+  transition: all 0.2s ease;
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(8px);
 }
 </style>
