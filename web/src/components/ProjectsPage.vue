@@ -6,6 +6,7 @@ import type { Session } from '../api/client'
 import type { ProjectInfo } from './Sidebar.vue'
 import { usePreferences } from '../composables/usePreferences'
 import { useSessionMode } from '../composables/useSessionMode'
+import DirectoryBrowser from './DirectoryBrowser.vue'
 
 const props = defineProps<{
   projects: ProjectInfo[]
@@ -32,7 +33,7 @@ const showCreateDialog = ref(false)
 const newProjectName = ref('')
 const newProjectInstructions = ref('')
 const newProjectDirectory = ref('')
-const isPickingDirectory = ref(false)
+const showDirectoryBrowser = ref(false)
 
 // Preferences for Effective Prompt
 const { globalPreferences, loadPreferences: loadPrefs } = usePreferences()
@@ -103,19 +104,17 @@ function handleCreateProject() {
   showCreateDialog.value = false
 }
 
-async function pickDirectory() {
-  if (isPickingDirectory.value) return
-  isPickingDirectory.value = true
-  try {
-    const result = await api.pickDirectory()
-    if (result?.path) {
-      newProjectDirectory.value = result.path
-    }
-  } catch (e) {
-    console.error('Failed to pick directory:', e)
-  } finally {
-    isPickingDirectory.value = false
-  }
+function pickDirectory() {
+  showDirectoryBrowser.value = true
+}
+
+function handleDirectorySelect(path: string) {
+  showDirectoryBrowser.value = false
+  newProjectDirectory.value = path
+}
+
+function handleDirectoryCancel() {
+  showDirectoryBrowser.value = false
 }
 
 function startEditName() {
@@ -477,9 +476,9 @@ watch(() => props.currentProject, (project) => {
             <div class="form-group">
               <label class="form-label">Working directory (optional)</label>
               <div class="directory-picker-row">
-                <button class="directory-pick-btn" @click="pickDirectory" :disabled="isPickingDirectory">
+                <button class="directory-pick-btn" @click="pickDirectory">
                   <Folder :size="14" />
-                  <span>{{ isPickingDirectory ? 'Selecting...' : (newProjectDirectory || 'Choose directory') }}</span>
+                  <span>{{ newProjectDirectory || 'Choose directory' }}</span>
                 </button>
                 <button v-if="newProjectDirectory" class="icon-btn" @click="newProjectDirectory = ''">
                   <X :size="14" />
@@ -560,6 +559,13 @@ watch(() => props.currentProject, (project) => {
         </div>
       </div>
     </Teleport>
+
+    <!-- Directory Browser -->
+    <DirectoryBrowser
+      :visible="showDirectoryBrowser"
+      @select="handleDirectorySelect"
+      @cancel="handleDirectoryCancel"
+    />
   </div>
 </template>
 

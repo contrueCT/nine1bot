@@ -472,23 +472,6 @@ export const api = {
       }))
   },
 
-  // 选择目录（调用系统原生文件选择器）
-  async pickDirectory(): Promise<{ path: string } | null> {
-    try {
-      const res = await fetchWithTimeout(`${BASE_URL}/browse/pick`, {
-        method: 'POST'
-      }, 60000)
-      if (!res.ok) {
-        if (res.status === 204) return null
-        throw new Error(`Failed to pick directory: ${res.status}`)
-      }
-      return await res.json()
-    } catch (e) {
-      console.error('pickDirectory failed:', e)
-      return null
-    }
-  },
-
   // 浏览目录（用于目录选择器）
   async browseDirectory(path: string = '~'): Promise<{
     path: string

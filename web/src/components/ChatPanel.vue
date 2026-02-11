@@ -2,11 +2,10 @@
 import { ref, watch, nextTick, computed } from 'vue'
 import { FolderOpen } from 'lucide-vue-next'
 import type { Message, QuestionRequest, PermissionRequest } from '../api/client'
-import { api } from '../api/client'
 import MessageItem from './MessageItem.vue'
 import AgentQuestion from './AgentQuestion.vue'
 import PermissionRequestVue from './PermissionRequest.vue'
-import DirectoryBrowserFallback from './DirectoryBrowserFallback.vue'
+import DirectoryBrowser from './DirectoryBrowser.vue'
 
 const props = defineProps<{
   messages: Message[]
@@ -32,8 +31,7 @@ const emit = defineEmits<{
 }>()
 
 const scrollContainer = ref<HTMLDivElement>()
-const isPickingDirectory = ref(false)
-const showFallbackBrowser = ref(false)
+const showDirectoryBrowser = ref(false)
 
 // Time-based greeting (Claude.ai style)
 const greeting = computed(() => {
@@ -43,31 +41,17 @@ const greeting = computed(() => {
   return 'Good evening'
 })
 
-// Open native directory picker, with fallback to built-in browser
-async function openDirectoryPicker() {
-  if (isPickingDirectory.value) return
-  isPickingDirectory.value = true
-  try {
-    const result = await api.pickDirectory()
-    if (result?.path) {
-      emit('changeDirectory', result.path)
-    }
-  } catch (e) {
-    console.error('Native picker failed, showing fallback browser:', e)
-    // Fallback to built-in directory browser
-    showFallbackBrowser.value = true
-  } finally {
-    isPickingDirectory.value = false
-  }
+function openDirectoryPicker() {
+  showDirectoryBrowser.value = true
 }
 
-function handleFallbackSelect(path: string) {
-  showFallbackBrowser.value = false
+function handleDirectorySelect(path: string) {
+  showDirectoryBrowser.value = false
   emit('changeDirectory', path)
 }
 
-function handleFallbackCancel() {
-  showFallbackBrowser.value = false
+function handleDirectoryCancel() {
+  showDirectoryBrowser.value = false
 }
 
 // 获取目录显示名称
@@ -137,10 +121,10 @@ function scrollToBottom() {
 
         <!-- Directory Selector (only in code mode, subtle, below greeting) -->
         <div v-if="canChangeDirectory && mode === 'agent'" class="directory-selector-section">
-          <button class="directory-btn" @click="openDirectoryPicker" :disabled="isPickingDirectory">
+          <button class="directory-btn" @click="openDirectoryPicker">
             <FolderOpen :size="16" />
             <span class="directory-btn-text">
-              {{ isPickingDirectory ? 'Selecting...' : (currentDirectory && getDirectoryName(currentDirectory) ? getDirectoryName(currentDirectory) : '选择工作目录') }}
+              {{ currentDirectory && getDirectoryName(currentDirectory) ? getDirectoryName(currentDirectory) : '选择工作目录' }}
             </span>
           </button>
         </div>
@@ -183,17 +167,13 @@ function scrollToBottom() {
       <div class="bottom-spacer"></div>
     </div>
 
-    <!-- Fallback Directory Browser (when native picker fails) -->
-    <Teleport to="body">
-      <div v-if="showFallbackBrowser" class="fallback-overlay" @click="handleFallbackCancel">
-        <div @click.stop>
-          <DirectoryBrowserFallback
-            @select="handleFallbackSelect"
-            @cancel="handleFallbackCancel"
-          />
-        </div>
-      </div>
-    </Teleport>
+    <!-- Directory Browser -->
+    <DirectoryBrowser
+      :visible="showDirectoryBrowser"
+      :initial-path="currentDirectory"
+      @select="handleDirectorySelect"
+      @cancel="handleDirectoryCancel"
+    />
   </div>
 </template>
 
@@ -349,16 +329,5 @@ function scrollToBottom() {
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
-}
-
-.fallback-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  backdrop-filter: blur(2px);
 }
 </style>
