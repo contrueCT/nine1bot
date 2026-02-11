@@ -39,7 +39,9 @@ const activeSessions = new Map<number, string>() // tabId -> sessionId
  * 生成唯一的 session ID
  */
 function generateSessionId(): string {
-  return `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+  return `session_${Date.now()}_${hex}`
 }
 
 /**
@@ -131,10 +133,12 @@ async function handleCdpCommand(method: string, params: any, sessionId?: string)
     // 扩展工具直接转发（不受 CSP 限制）
     case 'Extension.callTool': {
       const { toolName, args } = params || {}
-      const executor = toolExecutors[toolName as keyof typeof toolExecutors]
-      if (!executor) {
-        throw new Error(`Unknown extension tool: ${toolName}. Available: ${Object.keys(toolExecutors).join(', ')}`)
+      // 白名单校验：仅允许已注册的工具名
+      const ALLOWED_TOOLS: ReadonlySet<string> = new Set(Object.keys(toolExecutors))
+      if (typeof toolName !== 'string' || !ALLOWED_TOOLS.has(toolName)) {
+        throw new Error(`Unknown extension tool: ${toolName}. Available: ${[...ALLOWED_TOOLS].join(', ')}`)
       }
+      const executor = toolExecutors[toolName as keyof typeof toolExecutors]
       const toolArgs: Record<string, unknown> = { ...(args || {}) }
       if (tabId && toolArgs.tabId === undefined) {
         toolArgs.tabId = tabId
