@@ -1834,10 +1834,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     providerID: string
     modelID: string
   }) {
-    try {
-      if (input.session.parentID) return
-      if (!Session.isDefaultTitle(input.session.title)) return
+    if (input.session.parentID) return
+    if (!Session.isDefaultTitle(input.session.title)) return
 
+    try {
       // Find first non-synthetic user message
       const firstRealUserIdx = input.history.findIndex(
         (m) => m.info.role === "user" && !m.parts.every((p) => "synthetic" in p && p.synthetic),
@@ -1905,7 +1905,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           { touch: false },
         )
     } catch (e) {
-      log.error("ensureTitle error", { error: e })
+      log.error("failed to generate title", { error: e })
     }
   }
 }

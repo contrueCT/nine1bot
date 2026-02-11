@@ -39,15 +39,15 @@ export function useSession() {
   // 会话错误（如模型不可用）
   const sessionError = ref<{ message: string; dismissable?: boolean } | null>(null)
 
+  // 重试状态（后端正在指数退避重试时显示）
+  const retryInfo = ref<{ attempt: number; message: string; next: number } | null>(null)
+
   // 会话完成通知（用于其他会话完成时的友好提示）
   const sessionNotifications = ref<{ id: string; sessionId: string; sessionTitle: string; message: string; type: 'success' | 'info' }[]>([])
 
   // 待办事项
   const todoItems = ref<TodoItem[]>([])
   const isSummarizing = ref(false)
-
-  // 重试状态信息
-  const retryInfo = ref<{ attempt: number; message: string; next: number } | null>(null)
 
   // 事件源订阅
   let eventSource: EventSource | null = null
@@ -402,30 +402,10 @@ export function useSession() {
         }
         break
 
-      case 'session.error':
-        // 会话错误（如模型不可用）
-        if (properties?.error) {
-          const error = properties.error
-          const message = error.data?.message || error.message || '发生未知错误'
-          sessionError.value = {
-            message,
-            dismissable: true
-          }
-          // Note: session running state is handled by handleGlobalSSEEvent
-        }
-        retryInfo.value = null
-        break
-
-      case 'session.idle':
-        // Note: session running state is handled by handleGlobalSSEEvent
-        retryInfo.value = null
-        break
-
-      case 'session.status': {
-        // Handle retry status for the current session
-        const status = properties?.status
-        if (status && currentSession.value &&
-            (properties?.sessionID === currentSession.value.id)) {
+      case 'session.status':
+        // 会话状态变更（busy/retry/idle）
+        if (properties?.status) {
+          const status = properties.status
           if (status.type === 'retry') {
             retryInfo.value = {
               attempt: status.attempt ?? 1,
@@ -437,7 +417,25 @@ export function useSession() {
           }
         }
         break
-      }
+
+      case 'session.error':
+        // 会话错误（如模型不可用）
+        retryInfo.value = null
+        if (properties?.error) {
+          const error = properties.error
+          const message = error.data?.message || error.message || '发生未知错误'
+          sessionError.value = {
+            message,
+            dismissable: true
+          }
+          // Note: session running state is handled by handleGlobalSSEEvent
+        }
+        break
+
+      case 'session.idle':
+        // Note: session running state is handled by handleGlobalSSEEvent
+        retryInfo.value = null
+        break
 
       case 'todo.updated':
         // 待办事项更新事件
@@ -777,6 +775,7 @@ export function useSession() {
     pendingQuestions,
     pendingPermissions,
     sessionError,
+    retryInfo,
     loadSessions,
     createSession,
     selectSession,
@@ -814,7 +813,5 @@ export function useSession() {
     // 会话通知
     sessionNotifications,
     dismissNotification,
-    // 重试信息
-    retryInfo
   }
 }

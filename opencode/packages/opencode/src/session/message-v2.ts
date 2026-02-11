@@ -786,4 +786,11 @@ export namespace MessageV2 {
         return new NamedError.Unknown({ message: JSON.stringify(e) }, { cause: e })
     }
   }
+
+  function isNetworkLikeError(e: Error): boolean {
+    const code = (e as any).code
+    if (typeof code === "number" && code >= 500 && code < 600) return true
+    const msg = e.message.toLowerCase()
+    return msg.includes("network") || msg.includes("connection lost") || msg.includes("etimedout") || msg.includes("econnrefused") || msg.includes("socket hang up")
+  }
 }

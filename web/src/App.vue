@@ -35,6 +35,7 @@ const {
   pendingQuestions,
   pendingPermissions,
   sessionError,
+  retryInfo,
   loadSessions,
   createSession,
   selectSession,
@@ -57,6 +58,7 @@ const {
   deleteMessagePart,
   updateMessagePart,
   summarizeSession,
+  isSummarizing,
   todoItems,
   loadTodoItems,
   // 事件处理器注册
@@ -68,8 +70,6 @@ const {
   // 会话通知
   sessionNotifications,
   dismissNotification,
-  // 重试信息
-  retryInfo
 } = useSession()
 
 // Agent 终端
@@ -466,6 +466,7 @@ function handlePromptSelect(prompt: string) {
         :session="currentSession"
         :isStreaming="isStreaming"
         :sidebarCollapsed="sidebarCollapsed"
+        :isSummarizing="isSummarizing"
         :retryInfo="retryInfo"
         @toggle-sidebar="toggleSidebar"
         @abort="abortCurrentSession"

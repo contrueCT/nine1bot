@@ -148,11 +148,11 @@ export namespace SessionSummary {
             {
               role: "user" as const,
               content: `
-                The following is the text to summarize:
-                <text>
-                ${textPart?.text ?? ""}
-                </text>
-              `,
+              The following is the text to summarize:
+              <text>
+              ${textPart?.text ?? ""}
+              </text>
+            `,
             },
           ],
           abort: new AbortController().signal,
@@ -165,7 +165,7 @@ export namespace SessionSummary {
         userMsg.summary.title = result
         await Session.updateMessage(userMsg)
       } catch (e) {
-        log.error("summarizeMessage title generation failed", { error: e })
+        log.error("failed to summarize message title", { error: e })
       }
     }
   }

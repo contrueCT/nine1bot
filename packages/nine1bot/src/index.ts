@@ -9,7 +9,7 @@ if (!process.env.NINE1BOT_PROJECT_DIR) {
 // 这些插件依赖 @openauthjs/openauth，在编译后的二进制中无法正确解析
 process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS = 'true'
 
-// Global error handlers to prevent process crash from unhandled LLM/network errors
+// 全局错误兜底：防止未捕获的 Promise rejection 导致服务崩溃
 process.on("unhandledRejection", (e) => {
   console.error("[nine1bot] unhandled rejection:", e instanceof Error ? e.message : e)
 })

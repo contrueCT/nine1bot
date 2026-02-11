@@ -6,6 +6,7 @@ defineProps<{
   session: Session | null
   isStreaming: boolean
   sidebarCollapsed: boolean
+  isSummarizing?: boolean
   retryInfo?: { attempt: number; message: string; next: number } | null
 }>()
 
@@ -113,12 +114,6 @@ const emit = defineEmits<{
   animation: pulse 1.5s infinite;
 }
 
-@keyframes pulse {
-  0% { transform: scale(0.95); opacity: 0.8; }
-  50% { transform: scale(1.05); opacity: 1; }
-  100% { transform: scale(0.95); opacity: 0.8; }
-}
-
 .retry-badge .streaming-text {
   color: var(--warning, #f59e0b);
 }
@@ -130,6 +125,12 @@ const emit = defineEmits<{
   border-radius: 50%;
   animation: pulse 1.5s infinite;
   box-shadow: 0 0 8px var(--warning, #f59e0b);
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
 }
 
 .abort-btn {

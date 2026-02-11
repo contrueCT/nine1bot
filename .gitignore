@@ -24,3 +24,4 @@ runtime/
 web/tsconfig.tsbuildinfo
 packages/nine1bot/config.json
 CLAUDE.md
+config.json
