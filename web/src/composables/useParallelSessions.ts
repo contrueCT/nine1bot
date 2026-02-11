@@ -39,7 +39,7 @@ export function useParallelSessions() {
       // data format: { sessionID: { type: 'idle' | 'busy' | 'retry', ... }, ... }
       for (const [sessionId, info] of Object.entries(data)) {
         const status = info as { type: string }
-        runningStates[sessionId] = status.type === 'busy'
+        runningStates[sessionId] = status.type === 'busy' || status.type === 'retry'
       }
     } catch (error) {
       console.error('Failed to sync session status:', error)
@@ -56,7 +56,7 @@ export function useParallelSessions() {
         // status event: { sessionID, status: { type: 'busy' | 'idle' | 'retry' } }
         const status = event.properties?.status
         if (status) {
-          runningStates[sessionID] = status.type === 'busy'
+          runningStates[sessionID] = status.type === 'busy' || status.type === 'retry'
         }
         break
 

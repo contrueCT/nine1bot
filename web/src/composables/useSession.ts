@@ -46,6 +46,9 @@ export function useSession() {
   const todoItems = ref<TodoItem[]>([])
   const isSummarizing = ref(false)
 
+  // 重试状态信息
+  const retryInfo = ref<{ attempt: number; message: string; next: number } | null>(null)
+
   // 事件源订阅
   let eventSource: EventSource | null = null
 
@@ -410,11 +413,31 @@ export function useSession() {
           }
           // Note: session running state is handled by handleGlobalSSEEvent
         }
+        retryInfo.value = null
         break
 
       case 'session.idle':
         // Note: session running state is handled by handleGlobalSSEEvent
+        retryInfo.value = null
         break
+
+      case 'session.status': {
+        // Handle retry status for the current session
+        const status = properties?.status
+        if (status && currentSession.value &&
+            (properties?.sessionID === currentSession.value.id)) {
+          if (status.type === 'retry') {
+            retryInfo.value = {
+              attempt: status.attempt ?? 1,
+              message: status.message ?? '网络错误',
+              next: status.next ?? Date.now()
+            }
+          } else {
+            retryInfo.value = null
+          }
+        }
+        break
+      }
 
       case 'todo.updated':
         // 待办事项更新事件
@@ -790,6 +813,8 @@ export function useSession() {
     canStartNewAgent,
     // 会话通知
     sessionNotifications,
-    dismissNotification
+    dismissNotification,
+    // 重试信息
+    retryInfo
   }
 }

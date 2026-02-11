@@ -67,7 +67,9 @@ const {
   isSessionRunning,
   // 会话通知
   sessionNotifications,
-  dismissNotification
+  dismissNotification,
+  // 重试信息
+  retryInfo
 } = useSession()
 
 // Agent 终端
@@ -464,6 +466,7 @@ function handlePromptSelect(prompt: string) {
         :session="currentSession"
         :isStreaming="isStreaming"
         :sidebarCollapsed="sidebarCollapsed"
+        :retryInfo="retryInfo"
         @toggle-sidebar="toggleSidebar"
         @abort="abortCurrentSession"
       />
