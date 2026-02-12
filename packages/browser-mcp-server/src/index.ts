@@ -1,18 +1,15 @@
-// Core layer - CDP, Chrome, Extension Relay
+// Core layer - CDP, Chrome, types
 export * from './core/cdp'
 export * from './core/chrome'
-export * from './core/extension-relay'
 export * from './core/types'
 
-// Bridge layer - HTTP server wrapping core
+// Page scripts - injectable browser-side scripts for a11y tree, find, form fill
+export * from './core/page-scripts'
+
+// Bridge layer - server with direct method API + Hono routes
 export { BridgeServer } from './bridge/server'
-export type { BridgeServerOptions, BridgeServerState } from './bridge/server'
+export type { BridgeServerOptions } from './bridge/server'
 
-// Bridge client - connects to existing bridge via HTTP
-export { BridgeClient } from './bridge/client'
-export type { BridgeClientOptions } from './bridge/client'
-
-// MCP layer - MCP server wrapping bridge
-export { createBrowserMcpServer } from './mcp/server'
-export type { BrowserMcpServerOptions, BrowserBackend } from './mcp/server'
-export { TOOL_DEFINITIONS } from './mcp/tools'
+// Relay routes - Bun-native WebSocket relay for extension communication
+export { createRelayRoutes, getExtensionRelay } from './bridge/relay-routes'
+export type { ExtensionRelay, ConnectedTarget, TargetInfo } from './bridge/relay-routes'
