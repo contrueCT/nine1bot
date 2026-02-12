@@ -10,7 +10,7 @@
 import { toolExecutors } from '../tools'
 
 // 配置 - relay URL 可通过 chrome.storage.sync 修改
-const DEFAULT_RELAY_URL = 'ws://127.0.0.1:18793/extension'
+const DEFAULT_RELAY_URL = 'ws://127.0.0.1:4096/browser/extension'
 
 /**
  * 从 chrome.storage.sync 获取 relay URL（支持用户自定义）

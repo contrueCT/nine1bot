@@ -65,4 +65,4 @@ setInterval(() => {
 }, KEEP_ALIVE_INTERVAL)
 
 console.log('[Nine1Bot Browser Control] Service Worker initialized')
-console.log('[Nine1Bot Browser Control] Relay Client will connect to ws://127.0.0.1:18793/extension')
+console.log('[Nine1Bot Browser Control] Relay Client will connect to ws://127.0.0.1:4096/browser/extension')

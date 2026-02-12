@@ -51,11 +51,10 @@ export const SkillsConfigSchema = z.object({
 })
 
 // 浏览器控制配置
+// 浏览器控制已内置到主服务的 /browser/ 路径下，不再需要独立端口
 export const BrowserConfigSchema = z.object({
   // 是否启用浏览器控制
   enabled: z.boolean().default(false),
-  // Bridge Server 端口
-  bridgePort: z.number().default(18791),
   // Chrome CDP 端口
   cdpPort: z.number().default(9222),
   // 是否自动启动 Chrome

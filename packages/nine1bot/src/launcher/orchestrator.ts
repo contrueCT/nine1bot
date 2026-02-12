@@ -5,7 +5,6 @@ import type { Nine1BotConfig } from '../config/schema'
 import { loadConfig, findConfigPath, getDefaultConfigPath } from '../config/loader'
 import { startServer, type ServerInstance } from './server'
 import { createTunnel, type TunnelManager } from '../tunnel'
-import { BridgeServer, type BridgeServerState } from '../../../browser-mcp-server/src/bridge/server'
 
 const execFileAsync = promisify(execFile)
 
@@ -20,8 +19,6 @@ export interface LaunchOptions {
 export interface LaunchResult {
   server: ServerInstance
   tunnel?: TunnelManager
-  browserBridge?: BridgeServerState
-  browserBridgeInstance?: BridgeServer
   localUrl: string
   publicUrl?: string
   configPath: string
@@ -59,26 +56,7 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
 
   const localUrl = server.url || `http://${serverConfig.hostname}:${serverConfig.port}`
 
-  // 2. 启动浏览器 Bridge Server（如果启用）
-  let browserBridge: BridgeServerState | undefined
-  let browserBridgeInstance: BridgeServer | undefined
-  const browserConfig = (config as any).browser
-  if (browserConfig?.enabled) {
-    try {
-      browserBridgeInstance = new BridgeServer({
-        port: browserConfig.bridgePort ?? 18791,
-        cdpPort: browserConfig.cdpPort ?? 9222,
-        autoLaunch: browserConfig.autoLaunch ?? true,
-        headless: browserConfig.headless ?? false,
-      })
-      browserBridge = await browserBridgeInstance.start()
-      console.log(`\n🌐 Browser Bridge Server started at http://127.0.0.1:${browserBridge.port}`)
-    } catch (error: any) {
-      console.warn(`Failed to start Browser Bridge Server: ${error.message}`)
-    }
-  }
-
-  // 3. 创建隧道（如果启用）
+  // 2. 创建隧道（如果启用）
   let tunnel: TunnelManager | undefined
   let publicUrl: string | undefined
 
@@ -106,7 +84,7 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
     }
   }
 
-  // 4. 打开浏览器（如果启用）
+  // 3. 打开浏览器（如果启用）
   if (!options.noBrowser && config.server.openBrowser) {
     try {
       await execFileAsync('which', ['xdg-open'])
@@ -120,8 +98,6 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
   return {
     server,
     tunnel,
-    browserBridge,
-    browserBridgeInstance,
     localUrl,
     publicUrl,
     configPath,
@@ -132,15 +108,6 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
  * 停止 Nine1Bot
  */
 export async function shutdown(result: LaunchResult): Promise<void> {
-  // 停止浏览器 Bridge Server
-  if (result.browserBridgeInstance) {
-    try {
-      await result.browserBridgeInstance.stop()
-    } catch {
-      // 忽略停止错误
-    }
-  }
-
   // 停止隧道
   if (result.tunnel) {
     try {

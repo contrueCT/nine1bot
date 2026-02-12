@@ -86,23 +86,13 @@
     //   "enabled": true
     // }
 
-    // 浏览器控制 MCP Server（由 @nine1bot/browser-mcp-server 提供）
-    // 通过标准 MCP 协议提供 browser_tabs, browser_screenshot, browser_navigate 等工具
-    // BRIDGE_URL 模式：连接到 Nine1Bot 已启动的 Bridge Server，不自行启动
-    "browser": {
-      "type": "local",
-      "command": ["bun", "run", "packages/browser-mcp-server/bin/browser-mcp-server.ts"],
-      "environment": {
-        "BRIDGE_URL": "http://127.0.0.1:18793"
-      },
-      "enabled": true
-    }
   },
 
   // ===== 浏览器控制配置 =====
+  // 浏览器控制已内置到主服务，通过 /browser/ 路径提供
+  // Chrome Extension 连接到 ws://<服务地址>/browser/extension
   "browser": {
     "enabled": true,
-    "bridgePort": 18793,
     "cdpPort": 9223,
     "autoLaunch": true,
     "headless": false

@@ -6,6 +6,8 @@ import { getInstallDir, getGlobalSkillsDir, getAuthPath, getGlobalConfigDir } fr
 import { getGlobalPreferencesPath } from '../preferences'
 // 静态导入 OpenCode 服务器（编译时打包）
 import { Server as OpencodeServer } from '../../../../opencode/packages/opencode/src/server/server'
+import { BridgeServer } from '../../../browser-mcp-server/src/bridge/server'
+import { setBridgeServer } from '../../../../opencode/packages/opencode/src/browser/bridge'
 
 /**
  * 判断是否是发行版模式
@@ -186,6 +188,25 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   const rgPath = resolve(installDir, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg')
   process.env.OPENCODE_RIPGREP_PATH = rgPath
 
+  // 初始化浏览器 Bridge（如果启用）
+  // 必须在 OpencodeServer.listen() 之前完成，因为路由在 listen 时挂载
+  let bridgeServer: BridgeServer | undefined
+  const browserConfig = (fullConfig as any).browser
+  if (browserConfig?.enabled) {
+    try {
+      bridgeServer = new BridgeServer({
+        cdpPort: browserConfig.cdpPort ?? 9222,
+        autoLaunch: browserConfig.autoLaunch ?? true,
+        headless: browserConfig.headless ?? false,
+      })
+      await bridgeServer.start()
+      setBridgeServer(bridgeServer)
+      console.log('[Nine1Bot] Browser control enabled at /browser/')
+    } catch (error: any) {
+      console.warn(`[Nine1Bot] Failed to initialize browser bridge: ${error.message}`)
+    }
+  }
+
   // 使用静态导入的 OpenCode 服务器启动
   const serverInstance = await OpencodeServer.listen({
     port: server.port,
@@ -198,6 +219,9 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
     hostname: serverInstance.hostname ?? server.hostname,
     port: serverInstance.port ?? server.port,
     stop: async () => {
+      if (bridgeServer) {
+        try { await bridgeServer.stop() } catch { /* ignore */ }
+      }
       (serverInstance as any).server?.stop?.()
     },
   }
