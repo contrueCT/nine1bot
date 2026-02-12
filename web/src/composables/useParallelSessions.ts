@@ -56,7 +56,7 @@ export function useParallelSessions() {
         // status event: { sessionID, status: { type: 'busy' | 'idle' | 'retry' } }
         const status = event.properties?.status
         if (status) {
-          runningStates[sessionID] = status.type === 'busy'
+          runningStates[sessionID] = status.type === 'busy' || status.type === 'retry'
         }
         break
 

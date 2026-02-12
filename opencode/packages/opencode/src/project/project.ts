@@ -29,6 +29,7 @@ export namespace Project {
           color: z.string().optional(),
         })
         .optional(),
+      instructions: z.string().optional().describe("Shared system prompt instructions for all sessions in this project"),
       commands: z
         .object({
           start: z.string().optional().describe("Startup script to run when creating a new workspace (worktree)"),
@@ -291,12 +292,14 @@ export namespace Project {
     z.object({
       projectID: z.string(),
       name: z.string().optional(),
+      instructions: z.string().optional(),
       icon: Info.shape.icon.optional(),
       commands: Info.shape.commands.optional(),
     }),
     async (input) => {
       const result = await Storage.update<Info>(["project", input.projectID], (draft) => {
         if (input.name !== undefined) draft.name = input.name
+        if (input.instructions !== undefined) draft.instructions = input.instructions
         if (input.icon !== undefined) {
           draft.icon = {
             ...draft.icon,

@@ -3,7 +3,7 @@ import { providerApi, configApi, mcpApi, skillApi, authApi } from '../api/client
 import type { Provider, McpServer, Skill, Config, McpConfig } from '../api/client'
 
 const showSettings = ref(false)
-const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth' | 'preferences'>('models')
+const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth' | 'preferences' | 'profile'>('models')
 
 // Providers and models
 const providers = ref<Provider[]>([])
@@ -208,6 +208,16 @@ export function useSettings() {
     }
   }
 
+  async function healthMcp(name: string) {
+    try {
+      await mcpApi.health(name)
+      await loadMcpServers()
+    } catch (e) {
+      console.error('Failed to run MCP health check:', e)
+      throw e
+    }
+  }
+
   // 过滤并排序后的供应商
   const filteredProviders = computed(() => {
     const query = providerSearchQuery.value.toLowerCase().trim()
@@ -254,6 +264,7 @@ export function useSettings() {
     disconnectMcp,
     addMcp,
     removeMcp,
+    healthMcp,
     startOAuth,
     setApiKey,
     removeAuth

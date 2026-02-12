@@ -226,7 +226,7 @@ onUnmounted(() => {
   gap: var(--space-xs);
   padding: var(--space-sm) var(--space-lg);
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
 }
 
 .path-btn {
@@ -240,7 +240,7 @@ onUnmounted(() => {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--transition-normal);
   flex-shrink: 0;
 }
 
@@ -262,7 +262,7 @@ onUnmounted(() => {
   padding: var(--space-xs) var(--space-sm);
   background: var(--bg-primary);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   min-width: 0;
 }
 
@@ -327,7 +327,7 @@ onUnmounted(() => {
   background: transparent;
   color: var(--text-primary);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--transition-normal);
   text-align: left;
   width: 100%;
 }

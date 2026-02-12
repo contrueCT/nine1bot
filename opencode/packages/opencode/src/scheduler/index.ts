@@ -52,6 +52,16 @@ export namespace Scheduler {
     entry.timers.set(task.id, timer)
   }
 
+  export function unregister(id: string, scope?: "instance" | "global") {
+    const entry = scope === "global" ? shared : state()
+    const current = entry.timers.get(id)
+    if (current) {
+      clearInterval(current)
+      entry.timers.delete(id)
+    }
+    entry.tasks.delete(id)
+  }
+
   async function run(task: Task) {
     log.info("run", { id: task.id })
     await task.run().catch((error) => {

@@ -100,7 +100,7 @@ function getFileName(path: string): string {
 
 .file-viewer {
   background: var(--bg-primary);
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   width: 100%;
   max-width: 900px;
@@ -115,7 +115,7 @@ function getFileName(path: string): string {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-md);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
 }
 
 .viewer-title {
@@ -182,7 +182,7 @@ function getFileName(path: string): string {
 .loading-spinner {
   width: 24px;
   height: 24px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--border-default);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
@@ -219,7 +219,7 @@ function getFileName(path: string): string {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-sm) var(--space-md);
-  border-top: 1px solid var(--border);
+  border-top: 0.5px solid var(--border-default);
   background: var(--bg-secondary);
   font-size: 12px;
   color: var(--text-muted);

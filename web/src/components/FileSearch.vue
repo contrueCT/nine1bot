@@ -123,7 +123,7 @@ function selectResult(result: FileSearchResult) {
   width: 100%;
   padding: var(--space-sm) var(--space-sm) var(--space-sm) 34px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 13px;
@@ -177,7 +177,7 @@ function selectResult(result: FileSearchResult) {
 .loading-spinner-sm {
   width: 16px;
   height: 16px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--border-default);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 1s linear infinite;
@@ -190,7 +190,7 @@ function selectResult(result: FileSearchResult) {
 .search-results {
   max-height: 300px;
   overflow-y: auto;
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
 }

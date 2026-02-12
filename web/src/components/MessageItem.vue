@@ -5,6 +5,9 @@ import DOMPurify from 'dompurify'
 import { Bot, User, Brain, ChevronDown, Pencil, Trash2, X, Check } from 'lucide-vue-next'
 import type { Message, MessagePart } from '../api/client'
 import ToolCall from './ToolCall.vue'
+import { useUserProfile } from '../composables/useUserProfile'
+
+const { profile, botAvatar } = useUserProfile()
 
 const props = defineProps<{
   message: Message
@@ -119,14 +122,23 @@ function formatText(text: string): string {
 <template>
   <div class="message-row" :class="{ 'user-row': message.info.role === 'user', 'agent-row': message.info.role !== 'user' }">
     <div class="avatar shadow-sm">
-      <User v-if="message.info.role === 'user'" :size="18" />
-      <Bot v-else :size="18" />
+      <template v-if="message.info.role === 'user'">
+        <img v-if="profile.avatarUrl" :src="profile.avatarUrl" alt="Avatar" class="avatar-img" />
+        <User v-else :size="18" />
+      </template>
+      <template v-else>
+        <img v-if="botAvatar.botAvatarUrl" :src="botAvatar.botAvatarUrl" alt="Bot" class="avatar-img" />
+        <Bot v-else :size="18" />
+      </template>
     </div>
 
     <div class="message-wrapper" :class="{ 'user-wrapper': message.info.role === 'user' }">
       <div class="message-bubble" :class="{ 'user-bubble': message.info.role === 'user', 'agent-bubble glass': message.info.role !== 'user' }">
 
-      <div class="message-sender-name" v-if="message.info.role !== 'user'">
+      <div class="message-sender-name" v-if="message.info.role === 'user' && profile.name">
+        {{ profile.name }}
+      </div>
+      <div class="message-sender-name" v-else-if="message.info.role !== 'user'">
         {{ message.info.model?.modelID || 'Nine1Bot' }}
       </div>
 
@@ -254,15 +266,15 @@ function formatText(text: string): string {
 <style scoped>
 .message-row {
   display: flex;
-  gap: 16px;
-  padding: 16px var(--space-lg);
+  gap: 12px;
+  padding: 12px var(--space-lg);
   width: 100%;
   opacity: 0;
-  animation: fade-up 0.4s ease forwards;
+  animation: fade-up 0.3s var(--ease-smooth) forwards;
 }
 
 @keyframes fade-up {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -271,9 +283,9 @@ function formatText(text: string): string {
 }
 
 .avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -286,16 +298,22 @@ function formatText(text: string): string {
 }
 
 .agent-row .avatar {
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  background: var(--accent);
   color: white;
-  box-shadow: 0 4px 12px var(--accent-glow);
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
 }
 
 /* Message wrapper for positioning actions */
 .message-wrapper {
   display: flex;
   flex-direction: column;
-  max-width: 70%;
+  max-width: 720px;
 }
 
 .user-wrapper {
@@ -306,9 +324,8 @@ function formatText(text: string): string {
   width: fit-content;
   max-width: 100%;
   padding: 10px 14px;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   position: relative;
-  box-shadow: var(--shadow-sm);
   line-height: 1.5;
   word-wrap: break-word;
   overflow-wrap: break-word;
@@ -316,21 +333,19 @@ function formatText(text: string): string {
 
 .user-bubble {
   background: var(--bg-tertiary);
-  border-bottom-right-radius: 2px;
   color: var(--text-primary);
 }
 
 .agent-bubble {
-  background: var(--bg-glass-strong);
-  border: 1px solid var(--border-subtle);
-  border-top-left-radius: 4px;
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-default);
 }
 
 .message-sender-name {
   font-size: 11px;
-  font-weight: 700;
-  opacity: 0.5;
-  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 6px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -338,8 +353,8 @@ function formatText(text: string): string {
 /* Thinking Block */
 .thinking-block {
   margin: 8px 0 16px;
-  border: 1px solid var(--border-default);
-  background: var(--bg-tertiary);
+  border: 0.5px solid var(--border-default);
+  background: var(--bg-secondary);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
@@ -350,15 +365,15 @@ function formatText(text: string): string {
   gap: 8px;
   padding: 8px 12px;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
-  background: rgba(0,0,0,0.02);
+  transition: background var(--transition-fast);
 }
 
 .thinking-header:hover {
-  background: rgba(0,0,0,0.04);
+  background: var(--bg-tertiary);
 }
 
 .thinking-label {
@@ -366,7 +381,7 @@ function formatText(text: string): string {
 }
 
 .thinking-chevron {
-  transition: transform 0.2s;
+  transition: transform 0.15s var(--ease-smooth);
 }
 
 .thinking-chevron.expanded {
@@ -375,8 +390,8 @@ function formatText(text: string): string {
 
 .thinking-body {
   padding: 12px;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-tertiary);
+  border-top: 0.5px solid var(--border-subtle);
+  background: var(--bg-secondary);
   font-size: 13px;
   color: var(--text-muted);
   font-style: italic;
@@ -409,6 +424,7 @@ function formatText(text: string): string {
   font-size: 15px;
   line-height: 1.7;
   color: var(--text-primary);
+  font-weight: var(--font-weight-normal);
 }
 
 .markdown-content :deep(p) {
@@ -431,33 +447,23 @@ function formatText(text: string): string {
 .markdown-content :deep(code) {
   background: var(--bg-tertiary);
   padding: 2px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 0.9em;
   color: var(--accent);
 }
 
 .markdown-content :deep(pre) {
-  background: #1e1e1e; /* Always dark for code blocks usually looks better */
+  background: var(--bg-secondary);
   padding: 16px;
   border-radius: var(--radius-md);
   margin: 1em 0;
   overflow-x: auto;
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
 }
 
-/* Adjust code block if light mode is strictly required everywhere, 
-   but usually high contrast dark code blocks are preferred even in light mode.
-   Let's check theme.
-*/
-:root[data-theme='light'] .markdown-content :deep(pre) {
-  background: #fafafa;
-  border: 1px solid #e4e4e7;
-  color: #27272a;
-}
-:root[data-theme='light'] .markdown-content :deep(code) {
-  color: #7c3aed; /* darker accent */
-  background: #f4f4f5;
+:root[data-theme='dark'] .markdown-content :deep(pre) {
+  background: #1a1a1e;
 }
 
 .markdown-content :deep(pre code) {
@@ -468,7 +474,7 @@ function formatText(text: string): string {
   border: none;
 }
 
-.markdown-content :deep(ul), 
+.markdown-content :deep(ul),
 .markdown-content :deep(ol) {
   margin-bottom: 1em;
   padding-left: 1.5em;
@@ -481,7 +487,7 @@ function formatText(text: string): string {
 .markdown-content :deep(a) {
   color: var(--accent);
   text-decoration: underline;
-  text-decoration-color: var(--accent-subtle);
+  text-decoration-color: rgba(204, 77, 40, 0.3);
   text-underline-offset: 2px;
 }
 .markdown-content :deep(a:hover) {
@@ -489,7 +495,7 @@ function formatText(text: string): string {
 }
 
 .markdown-content :deep(blockquote) {
-  border-left: 3px solid var(--accent);
+  border-left: 2px solid var(--accent);
   margin: 1em 0;
   padding-left: 1em;
   font-style: italic;
@@ -536,8 +542,8 @@ function formatText(text: string): string {
 }
 
 .action-btn.danger:hover {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--error, #ef4444);
+  background: var(--error-subtle);
+  color: var(--error);
 }
 
 /* Edit Mode */
@@ -551,8 +557,8 @@ function formatText(text: string): string {
   width: 100%;
   min-width: 300px;
   padding: var(--space-sm);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 14px;
@@ -581,7 +587,7 @@ function formatText(text: string): string {
 }
 
 .btn-danger {
-  background: var(--error, #ef4444);
+  background: var(--error);
   color: white;
   border: none;
 }
@@ -601,11 +607,11 @@ function formatText(text: string): string {
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: transform var(--transition-fast);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
 }
 
 .uploaded-image:hover {
-  transform: scale(1.02);
+  transform: scale(1.01);
 }
 
 .file-badge {
@@ -613,8 +619,8 @@ function formatText(text: string): string {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border-default);
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   font-size: 13px;
   text-decoration: none;
@@ -655,8 +661,8 @@ function formatText(text: string): string {
 }
 
 .dialog {
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   width: 320px;
   max-width: 90vw;
@@ -668,7 +674,7 @@ function formatText(text: string): string {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-md);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-subtle);
   font-weight: 600;
 }
 
@@ -687,7 +693,7 @@ function formatText(text: string): string {
 }
 
 .dialog-header .action-btn:hover {
-  background: var(--bg-elevated);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
@@ -710,7 +716,7 @@ function formatText(text: string): string {
   justify-content: flex-end;
   gap: var(--space-sm);
   padding: var(--space-md);
-  border-top: 1px solid var(--border);
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 .dialog-footer .btn {
@@ -727,7 +733,7 @@ function formatText(text: string): string {
 
 .dialog-footer .btn-ghost {
   background: transparent;
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   color: var(--text-secondary);
 }
 
@@ -737,7 +743,7 @@ function formatText(text: string): string {
 }
 
 .dialog-footer .btn-danger {
-  background: var(--error, #ef4444);
+  background: var(--error);
   color: white;
   border: none;
 }

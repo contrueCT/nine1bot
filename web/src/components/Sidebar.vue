@@ -1,16 +1,36 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { ChevronsLeft, ChevronsRight, MessageSquare, Plus, Folder, MessagesSquare, Pencil, Trash2, X, Check, Loader2, Square } from 'lucide-vue-next'
+import { ref, computed } from 'vue'
+import {
+  PanelLeftClose, PanelLeft, MessageSquare, Plus, Search,
+  FolderOpen, Code2, Sparkles, Pencil, Trash2, X, Check,
+  Loader2, Square, ChevronRight, User, MessageCircle, EllipsisVertical
+} from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
-import FileTree from './FileTree.vue'
-defineProps<{
+import type { AppMode } from '../composables/useAppMode'
+import { useSessionMode } from '../composables/useSessionMode'
+import { useUserProfile } from '../composables/useUserProfile'
+
+export interface ProjectInfo {
+  id: string
+  name?: string
+  worktree: string
+  icon?: { url?: string; override?: string; color?: string }
+  instructions?: string
+  time: { created: number; updated: number }
+  sandboxes: string[]
+}
+
+const props = defineProps<{
   collapsed: boolean
   sessions: Session[]
   currentSession: Session | null
   isDraftSession: boolean
   files: FileItem[]
   filesLoading: boolean
-  activeTab: 'sessions' | 'files'
+  mode: AppMode
+  // Projects
+  projects: ProjectInfo[]
+  currentProjectId: string | null
   // Working directory
   currentDirectory: string
   canChangeDirectory: boolean
@@ -25,13 +45,26 @@ const emit = defineEmits<{
   'select-session': [session: Session]
   'new-session': []
   'toggle-directory': [file: FileItem]
-  'change-tab': [tab: 'sessions' | 'files']
   'delete-session': [sessionId: string]
   'rename-session': [sessionId: string, title: string]
   'file-click': [path: string]
   'abort-session': [sessionId: string]
+  'open-settings': []
+  'open-search': []
   'change-directory': [directory: string]
+  'switch-mode': [mode: AppMode]
+  'select-project': [projectId: string]
+  'open-projects': []
 }>()
+
+// Session mode mapping
+const { getMode } = useSessionMode()
+
+// User profile
+const { profile, brandLogo } = useUserProfile()
+
+// Sections collapse state
+const showRecents = ref(true)
 
 // 重命名状态
 const renamingSession = ref<Session | null>(null)
@@ -40,11 +73,19 @@ const newTitle = ref('')
 // 删除确认状态
 const deletingSession = ref<Session | null>(null)
 
-function startRename(session: Session, event: Event) {
-  event.stopPropagation()
-  renamingSession.value = session
-  newTitle.value = session.title || `会话 ${session.id.slice(0, 6)}`
-}
+// Right-click context menu
+const contextMenu = ref<{ x: number; y: number; session: Session } | null>(null)
+// Toast notification for errors
+const toastMessage = ref('')
+
+// Sessions filtered by current mode
+const filteredSessions = computed(() => {
+  // Show sessions matching current mode, or untagged (legacy) sessions
+  return props.sessions.filter(s => {
+    const sessionMode = getMode(s.id)
+    return sessionMode === props.mode || sessionMode === undefined
+  })
+})
 
 function cancelRename() {
   renamingSession.value = null
@@ -58,11 +99,6 @@ function doRename() {
   cancelRename()
 }
 
-function confirmDelete(session: Session, event: Event) {
-  event.stopPropagation()
-  deletingSession.value = session
-}
-
 function cancelDelete() {
   deletingSession.value = null
 }
@@ -74,85 +110,105 @@ function doDelete() {
   cancelDelete()
 }
 
-function formatTime(session: Session): string {
-  // 优先使用 createdAt，否则使用 time.created
-  const timestamp = session.createdAt
-    ? new Date(session.createdAt).getTime()
-    : session.time?.created
-
-  if (!timestamp) return ''
-
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffMins = Math.floor(diffMs / 60000)
-  const diffHours = Math.floor(diffMs / 3600000)
-  const diffDays = Math.floor(diffMs / 86400000)
-
-  if (diffMins < 1) return '刚刚'
-  if (diffMins < 60) return `${diffMins}分钟前`
-  if (diffHours < 24) return `${diffHours}小时前`
-  if (diffDays < 7) return `${diffDays}天前`
-  return date.toLocaleDateString()
-}
-
 function getSessionTitle(session: Session): string {
   return session.title || `会话 ${session.id.slice(0, 6)}`
 }
+
+// Context menu handlers
+function openContextMenu(event: MouseEvent, session: Session) {
+  event.preventDefault()
+  event.stopPropagation()
+  contextMenu.value = {
+    x: event.clientX,
+    y: event.clientY,
+    session
+  }
+}
+
+function closeContextMenu() {
+  contextMenu.value = null
+}
+
+function contextMenuRename() {
+  if (contextMenu.value) {
+    renamingSession.value = contextMenu.value.session
+    newTitle.value = contextMenu.value.session.title || `会话 ${contextMenu.value.session.id.slice(0, 6)}`
+  }
+  closeContextMenu()
+}
+
+function contextMenuDelete() {
+  if (contextMenu.value) {
+    deletingSession.value = contextMenu.value.session
+  }
+  closeContextMenu()
+}
+
 </script>
 
 <template>
-  <aside class="sidebar glass" :class="{ collapsed }">
+  <aside class="sidebar" :class="{ collapsed }">
+    <!-- Header: Brand + Collapse -->
     <div class="sidebar-header">
       <div class="brand-area" v-if="!collapsed">
-        <div class="brand-logo">N</div>
-        <span class="sidebar-logo">Nine1Bot</span>
-        <div v-if="runningCount > 0" class="running-badge" :title="`${runningCount} 个 agent 正在运行`">
-          {{ runningCount }}/{{ maxParallelAgents }}
-        </div>
+        <img v-if="brandLogo.logoUrl" :src="brandLogo.logoUrl" alt="Logo" class="brand-logo" />
+        <span class="brand-text">Nine1Bot</span>
       </div>
-      <button class="btn btn-ghost btn-icon sm toggle-btn" @click="emit('toggle-collapse')" :title="collapsed ? '展开侧边栏' : '折叠侧边栏'">
-        <ChevronsLeft v-if="!collapsed" :size="18" />
-        <ChevronsRight v-else :size="18" />
+      <button class="collapse-btn" @click="emit('toggle-collapse')" :title="collapsed ? '展开' : '折叠'">
+        <PanelLeftClose v-if="!collapsed" :size="18" />
+        <PanelLeft v-else :size="18" />
       </button>
     </div>
 
-    <div class="sidebar-tabs" v-if="!collapsed">
-      <div class="tabs glass-tabs">
-        <button
-          class="tab"
-          :class="{ active: activeTab === 'sessions' }"
-          @click="emit('change-tab', 'sessions')"
-        >
-          <MessagesSquare :size="14" class="mr-1" /> 会话
-        </button>
-        <button
-          class="tab"
-          :class="{ active: activeTab === 'files' }"
-          @click="emit('change-tab', 'files')"
-        >
-          <Folder :size="14" class="mr-1" /> 文件
-        </button>
-      </div>
-    </div>
+    <!-- Top Navigation (expanded) -->
+    <nav class="sidebar-nav" v-if="!collapsed">
+      <button class="nav-item new-chat" @click="emit('new-session')">
+        <Plus :size="18" />
+        <span>New chat</span>
+      </button>
+      <button class="nav-item" @click="emit('open-search')">
+        <Search :size="18" />
+        <span>Search</span>
+      </button>
+      <button class="nav-item" @click="emit('open-projects')">
+        <FolderOpen :size="18" />
+        <span>Projects</span>
+      </button>
+    </nav>
 
-    <div class="sidebar-content" v-if="!collapsed">
-      <!-- Sessions Tab -->
-      <div v-if="activeTab === 'sessions'" class="session-list">
-        <!-- 草稿会话（新对话）+ 目录选择器 -->
-        <div v-if="isDraftSession" class="draft-session-container">
-          <div class="session-item active draft">
-            <div class="session-icon">
-              <Plus :size="16" />
-            </div>
-            <div class="session-item-content">
-              <span class="session-item-title">新对话</span>
-              <span class="session-item-time">未保存</span>
-            </div>
-          </div>
-        </div>
+    <!-- Top Navigation (collapsed) -->
+    <nav class="sidebar-nav sidebar-nav-collapsed" v-if="collapsed">
+      <button class="nav-item-icon" @click="emit('new-session')" title="New chat">
+        <Plus :size="18" />
+      </button>
+      <button class="nav-item-icon" @click="emit('open-search')" title="Search">
+        <Search :size="18" />
+      </button>
+      <button class="nav-item-icon" @click="emit('open-projects')" title="Projects">
+        <FolderOpen :size="18" />
+      </button>
+    </nav>
+
+    <!-- Recents Section -->
+    <div class="sidebar-section" v-if="!collapsed">
+      <div class="section-header" @click="showRecents = !showRecents">
+        <span class="section-label">Recents</span>
+        <ChevronRight :size="14" class="section-chevron" :class="{ expanded: showRecents }" />
+      </div>
+
+      <div v-if="showRecents" class="section-list">
+        <!-- Draft Session -->
         <div
-          v-for="session in sessions"
+          v-if="isDraftSession"
+          class="session-item active"
+        >
+          <Sparkles :size="14" class="session-icon" />
+          <span class="session-title">新对话</span>
+        </div>
+
+        <!-- Filtered Sessions by Mode -->
+        <div
+          v-for="session in filteredSessions"
           :key="session.id"
           class="session-item"
           :class="{
@@ -160,56 +216,96 @@ function getSessionTitle(session: Session): string {
             running: isSessionRunning(session.id)
           }"
           @click="emit('select-session', session)"
+          @contextmenu="openContextMenu($event, session)"
         >
-          <div class="session-icon" :class="{ 'icon-running': isSessionRunning(session.id) }">
-            <Loader2 v-if="isSessionRunning(session.id)" :size="16" class="spin" />
-            <MessageSquare v-else :size="16" />
-          </div>
-          <div class="session-item-content">
-            <span class="session-item-title">{{ getSessionTitle(session) }}</span>
-            <span class="session-item-time">
-              <span v-if="isSessionRunning(session.id)" class="running-text">运行中</span>
-              <span v-else>{{ formatTime(session) }}</span>
-            </span>
-          </div>
+          <Loader2 v-if="isSessionRunning(session.id)" :size="14" class="session-icon spin" />
+          <MessageSquare v-else :size="14" class="session-icon" />
+          <span class="session-title">{{ getSessionTitle(session) }}</span>
+
+          <!-- Session Actions (on hover) -->
           <div class="session-actions" @click.stop>
             <button
               v-if="isSessionRunning(session.id)"
-              class="action-btn abort"
+              class="mini-btn abort"
               @click="emit('abort-session', session.id)"
               title="停止"
             >
-              <Square :size="12" fill="currentColor" />
+              <Square :size="10" fill="currentColor" />
             </button>
-            <button class="action-btn" @click="startRename(session, $event)" title="重命名">
-              <Pencil :size="14" />
-            </button>
-            <button class="action-btn danger" @click="confirmDelete(session, $event)" title="删除">
-              <Trash2 :size="14" />
+            <button class="mini-btn" @click="openContextMenu($event, session)" title="更多操作">
+              <EllipsisVertical :size="14" />
             </button>
           </div>
         </div>
 
-        <div v-if="sessions.length === 0" class="empty-state">
-          <p class="text-muted text-sm">暂无会话</p>
+        <!-- Empty state when no sessions match current mode -->
+        <div v-if="filteredSessions.length === 0 && !isDraftSession" class="section-empty">
+          No conversations yet
         </div>
-      </div>
-
-      <!-- Files Tab -->
-      <div v-if="activeTab === 'files'" class="files-container">
-        <FileTree
-          :files="files"
-          :isLoading="filesLoading"
-          @toggle="emit('toggle-directory', $event)"
-          @select="(node) => emit('file-click', node.path)"
-        />
       </div>
     </div>
 
+    <!-- Spacer to push mode switch + footer to bottom -->
+    <div class="sidebar-spacer"></div>
+
+    <!-- Mode Switcher -->
+    <div class="mode-switcher" v-if="!collapsed">
+      <button
+        class="mode-btn"
+        :class="{ active: mode === 'chat' }"
+        @click="emit('switch-mode', 'chat')"
+      >
+        <MessageCircle :size="16" />
+        <span>Chat</span>
+      </button>
+      <button
+        class="mode-btn"
+        :class="{ active: mode === 'agent' }"
+        @click="emit('switch-mode', 'agent')"
+      >
+        <Code2 :size="16" />
+        <span>Agent</span>
+      </button>
+    </div>
+
+    <!-- Collapsed Mode Switcher -->
+    <div class="mode-switcher mode-switcher-collapsed" v-if="collapsed">
+      <button
+        class="nav-item-icon"
+        :class="{ active: mode === 'chat' }"
+        @click="emit('switch-mode', 'chat')"
+        title="Chat mode"
+      >
+        <MessageCircle :size="18" />
+      </button>
+      <button
+        class="nav-item-icon"
+        :class="{ active: mode === 'agent' }"
+        @click="emit('switch-mode', 'agent')"
+        title="Agent mode"
+      >
+        <Code2 :size="18" />
+      </button>
+    </div>
+
+    <!-- User Profile Footer -->
     <div class="sidebar-footer" v-if="!collapsed">
-      <button class="btn btn-primary w-full new-chat-btn" @click="emit('new-session')">
-        <Plus :size="18" class="mr-1" />
-        <span>新建会话</span>
+      <div class="user-profile" @click="emit('open-settings')">
+        <div class="user-avatar">
+          <img v-if="profile.avatarUrl" :src="profile.avatarUrl" alt="Avatar" class="avatar-img" />
+          <User v-else :size="16" />
+        </div>
+        <div class="user-info">
+          <span class="user-name">{{ profile.name || '用户' }}</span>
+          <span class="user-plan">Nine1Bot</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collapsed Footer (avatar only) -->
+    <div class="sidebar-footer sidebar-footer-collapsed" v-if="collapsed">
+      <button class="nav-item-icon" @click="emit('open-settings')" title="设置">
+        <User :size="18" />
       </button>
     </div>
   </aside>
@@ -268,208 +364,238 @@ function getSessionTitle(session: Session): string {
         </div>
       </div>
     </div>
+
+    <!-- Right-click Context Menu -->
+    <div
+      v-if="contextMenu"
+      class="context-menu-overlay"
+      @click="closeContextMenu"
+      @contextmenu.prevent="closeContextMenu"
+    >
+      <div
+        class="context-menu"
+        :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+        @click.stop
+      >
+        <button class="context-menu-item" @click="contextMenuRename">
+          <Pencil :size="14" />
+          <span>重命名</span>
+        </button>
+        <div class="context-menu-divider"></div>
+        <button class="context-menu-item danger" @click="contextMenuDelete">
+          <Trash2 :size="14" />
+          <span>删除</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Toast notification -->
+    <Transition name="toast">
+      <div v-if="toastMessage" class="sidebar-toast">
+        {{ toastMessage }}
+      </div>
+    </Transition>
   </Teleport>
 </template>
 
 <style scoped>
+/* === Sidebar === */
 .sidebar {
-  /* Overriding general styles for specifics */
-  border-right: 1px solid var(--border-subtle);
-  background: var(--bg-glass-strong);
-}
-
-.brand-area {
   display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.brand-logo {
-  width: 24px;
-  height: 24px;
-  background: var(--accent);
-  color: white;
-  border-radius: 6px;
-  font-weight: 700;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 0 10px var(--accent-glow);
-}
-
-.sidebar-logo {
-  font-weight: 600;
-  letter-spacing: -0.5px;
+  flex-direction: column;
+  height: 100vh;
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  border-right: 0.5px solid var(--border-default);
 }
 
 .sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-md);
-  height: var(--header-height);
+  padding: var(--space-md) var(--space-md) var(--space-sm);
 }
 
-.sidebar.collapsed .sidebar-header {
-  justify-content: center;
-  padding: var(--space-sm);
-}
-
-.glass-tabs {
-  background: var(--bg-tertiary);
-  padding: 4px;
-  border-radius: var(--radius-md);
+.brand-area {
   display: flex;
-  gap: 4px;
-  border: none; /* Override global .tabs border */
-  margin: 0;    /* Override global .tabs margin */
+  align-items: center;
 }
 
-.tab {
-  flex: 1;
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
   border-radius: var(--radius-sm);
-  font-size: 13px;
-  font-weight: 500;
-  padding: 6px;
+}
+
+.brand-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.3px;
+}
+
+.collapse-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--transition-fast);
-  color: var(--text-secondary);
-  background: transparent;
+  width: 28px;
+  height: 28px;
   border: none;
-  cursor: pointer;
-  margin: 0; /* Override global .tab margin */
-}
-
-.tab.active {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
-}
-
-.tab:hover:not(.active) {
-  color: var(--text-primary);
-}
-
-.mr-1 { margin-right: 4px; }
-
-.sidebar-tabs {
-  padding: 0 var(--space-md) var(--space-sm);
-}
-
-.session-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  margin: 2px var(--space-sm);
-  padding: var(--space-sm);
-  border-radius: var(--radius-md);
-  transition: all var(--transition-fast);
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.session-item:hover {
-  background: var(--bg-tertiary);
-}
-
-.session-item.active {
-  background: var(--accent-subtle);
-  border-color: var(--accent-subtle);
-}
-
-.session-icon {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-muted);
-  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
 }
 
-.session-item:hover .session-icon {
-  color: var(--text-secondary);
-}
-
-.session-item.active .session-icon {
-  background: var(--accent);
-  color: white;
-  box-shadow: 0 2px 8px var(--accent-glow);
-}
-
-/* 草稿会话容器样式 */
-.draft-session-container {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-  padding: var(--space-xs) var(--space-sm);
-  margin-bottom: var(--space-sm);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.draft-session-container .session-item {
-  margin: 0;
-}
-
-/* 草稿会话样式 */
-.session-item.draft {
-  border-style: dashed;
-  opacity: 0.9;
-}
-
-.session-item.draft .session-icon {
+.collapse-btn:hover {
   background: var(--bg-tertiary);
-  color: var(--accent);
+  color: var(--text-primary);
 }
 
-.session-item.draft .session-item-time {
-  color: var(--accent);
-  font-style: italic;
-}
-
-.session-item-content {
-  flex: 1;
-  min-width: 0;
+/* === Navigation Menu === */
+.sidebar-nav {
+  padding: var(--space-xs) var(--space-sm);
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.session-item-title {
-  font-weight: 500;
-  font-size: 14px;
-}
-
-.files-container {
-  padding: var(--space-xs);
-}
-
-.new-chat-btn {
+.nav-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  height: 40px;
-  font-weight: 600;
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  gap: 12px;
+  padding: 6px var(--space-md);
   border: none;
-  box-shadow: 0 4px 12px var(--accent-glow);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: var(--font-weight-normal);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--transition-fast);
+  width: 100%;
 }
 
-.new-chat-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px var(--accent-glow);
+.nav-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text-primary);
 }
 
-/* Session actions */
+.nav-item.new-chat {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.nav-item svg {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.nav-item:hover svg {
+  opacity: 1;
+}
+
+/* === Sections === */
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-xs) 0;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-xs) var(--space-md);
+  cursor: pointer;
+}
+
+.section-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.section-chevron {
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.section-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.section-list {
+  overflow-y: auto;
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.section-empty {
+  padding: 6px var(--space-sm);
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* === Session Items === */
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 6px var(--space-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+  position: relative;
+}
+
+.session-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.session-item.active {
+  background: var(--accent-subtle);
+}
+
+.session-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.session-item.active .session-icon {
+  color: var(--accent);
+}
+
+.session-title {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item.active .session-title {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.session-item.running .session-icon {
+  color: var(--accent);
+}
+
+/* Session action buttons */
 .session-actions {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   opacity: 0;
   transition: opacity var(--transition-fast);
 }
@@ -478,75 +604,142 @@ function getSessionTitle(session: Session): string {
   opacity: 1;
 }
 
-.action-btn {
-  width: 28px;
-  height: 28px;
+.mini-btn {
+  width: 20px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-muted);
   cursor: pointer;
+  border-radius: 4px;
   transition: all var(--transition-fast);
 }
 
-.action-btn:hover {
-  background: var(--bg-elevated);
+.mini-btn:hover {
+  background: var(--bg-primary);
   color: var(--text-primary);
 }
 
-.action-btn.danger:hover {
-  background: rgba(239, 68, 68, 0.1);
-  color: var(--error, #ef4444);
+.mini-btn.danger:hover {
+  color: var(--error);
 }
 
-.action-btn.abort {
-  background: var(--error, #ef4444);
-  color: white;
+.mini-btn.abort {
+  color: var(--error);
 }
 
-.action-btn.abort:hover {
-  background: #dc2626;
+
+/* === Spacer === */
+.sidebar-spacer {
+  flex: 0;
+  min-height: var(--space-sm);
 }
 
-/* Running badge in header */
-.running-badge {
-  background: var(--accent);
-  color: white;
+/* === Mode Switcher === */
+.mode-switcher {
+  display: flex;
+  gap: 4px;
+  padding: var(--space-xs) var(--space-sm);
+  margin: 0 var(--space-sm);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.mode-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.mode-btn:hover {
+  color: var(--text-primary);
+}
+
+.mode-btn.active {
+  background: var(--bg-composer);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.mode-switcher-collapsed {
+  flex-direction: column;
+  align-items: center;
+  background: transparent;
+  margin: 0;
+  padding: var(--space-xs) 0;
+}
+
+/* === User Profile Footer === */
+.sidebar-footer {
+  padding: var(--space-sm) var(--space-md);
+  border-top: 0.5px solid var(--border-subtle);
+}
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.user-profile:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.user-avatar {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-tertiary);
+  border-radius: 50%;
+  color: var(--text-muted);
+  overflow: hidden;
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.user-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.user-plan {
   font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-weight: 600;
-  animation: pulse-badge 2s ease-in-out infinite;
+  color: var(--text-muted);
 }
 
-@keyframes pulse-badge {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
-
-/* Running session styles */
-.session-item.running .session-icon {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.session-item.running.active .session-icon {
-  background: var(--accent);
-  color: white;
-}
-
-.icon-running {
-  animation: pulse-icon 2s ease-in-out infinite;
-}
-
-@keyframes pulse-icon {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-
+/* === Animations === */
 .spin {
   animation: spin 1s linear infinite;
 }
@@ -556,14 +749,55 @@ function getSessionTitle(session: Session): string {
   to { transform: rotate(360deg); }
 }
 
-.running-text {
-  color: var(--accent);
-  font-weight: 500;
+/* === Collapsed State === */
+.sidebar.collapsed {
+  width: 0px;
+  min-width: 0px;
+  opacity: 0;
+  pointer-events: none;
 }
 
-/* Show abort button always for running sessions */
-.session-item.running .session-actions {
-  opacity: 1;
+.sidebar.collapsed .sidebar-header {
+  justify-content: center;
+  padding: var(--space-sm);
+}
+
+/* === Collapsed Nav Icons === */
+.sidebar-nav-collapsed {
+  align-items: center;
+  padding: var(--space-xs) 0;
+}
+
+.nav-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.nav-item-icon:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--text-primary);
+}
+
+.nav-item-icon.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+/* === Collapsed Footer === */
+.sidebar-footer-collapsed {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-sm) 0;
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 </style>
@@ -582,8 +816,8 @@ function getSessionTitle(session: Session): string {
 }
 
 .dialog {
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   width: 320px;
   max-width: 90vw;
@@ -595,7 +829,7 @@ function getSessionTitle(session: Session): string {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-md);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-subtle);
   font-weight: 600;
 }
 
@@ -614,7 +848,7 @@ function getSessionTitle(session: Session): string {
 }
 
 .dialog-header .action-btn:hover {
-  background: var(--bg-elevated);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
@@ -625,11 +859,12 @@ function getSessionTitle(session: Session): string {
 .dialog-input {
   width: 100%;
   padding: var(--space-sm) var(--space-md);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 14px;
+  font-weight: var(--font-weight-normal);
 }
 
 .dialog-input:focus {
@@ -652,7 +887,7 @@ function getSessionTitle(session: Session): string {
   justify-content: flex-end;
   gap: var(--space-sm);
   padding: var(--space-md);
-  border-top: 1px solid var(--border);
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 .dialog-footer .btn-sm {
@@ -665,7 +900,7 @@ function getSessionTitle(session: Session): string {
 }
 
 .dialog-footer .btn-danger {
-  background: var(--error, #ef4444);
+  background: var(--error);
   color: white;
   border: none;
 }
@@ -677,5 +912,170 @@ function getSessionTitle(session: Session): string {
 .dialog-footer .mr-1 {
   margin-right: 4px;
 }
-</style>
 
+/* === Context Menu === */
+.context-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+}
+
+.context-menu {
+  position: fixed;
+  min-width: 180px;
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: 1101;
+  animation: contextIn 0.1s ease-out;
+}
+
+@keyframes contextIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.context-menu-item-wrapper {
+  position: relative;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+  text-align: left;
+}
+
+.context-menu-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.context-menu-item.danger {
+  color: var(--error);
+}
+
+.context-menu-item.danger:hover {
+  background: var(--error-subtle);
+}
+
+.context-menu-arrow {
+  margin-left: auto;
+  opacity: 0.5;
+}
+
+.context-menu-divider {
+  height: 0.5px;
+  background: var(--border-subtle);
+  margin: 4px 0;
+}
+
+.context-submenu {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  min-width: 160px;
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: 1102;
+}
+
+.context-menu-empty {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Context menu label */
+.context-menu-label {
+  padding: 4px 12px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Project tag items in context menu */
+.project-tag-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.project-tag-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-tag-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0.6;
+  transition: all var(--transition-fast);
+}
+
+.project-tag-remove:hover {
+  background: var(--bg-tertiary);
+  color: var(--error);
+  opacity: 1;
+}
+
+/* Toast notification */
+.sidebar-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  box-shadow: var(--shadow-lg);
+  z-index: 9999;
+  white-space: nowrap;
+}
+
+.toast-enter-active {
+  transition: all 0.25s ease;
+}
+.toast-leave-active {
+  transition: all 0.2s ease;
+}
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(8px);
+}
+</style>

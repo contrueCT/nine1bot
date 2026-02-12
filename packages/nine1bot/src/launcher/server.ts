@@ -6,6 +6,8 @@ import { getInstallDir, getGlobalSkillsDir, getAuthPath, getGlobalConfigDir } fr
 import { getGlobalPreferencesPath } from '../preferences'
 // 静态导入 OpenCode 服务器（编译时打包）
 import { Server as OpencodeServer } from '../../../../opencode/packages/opencode/src/server/server'
+import { BridgeServer } from '../../../browser-mcp-server/src/bridge/server'
+import { setBridgeServer } from '../../../../opencode/packages/opencode/src/browser/bridge'
 
 /**
  * 判断是否是发行版模式
@@ -52,7 +54,7 @@ export interface StartServerOptions {
 /**
  * Nine1Bot 特有的配置字段（需要从 opencode 配置中过滤掉）
  */
-const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills', 'sandbox']
+const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills', 'sandbox', 'browser']
 
 /**
  * 生成 opencode 兼容的配置文件
@@ -69,15 +71,22 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
         if (Object.keys(rest).length > 0) {
           opencodeConfig[key] = rest
         }
-      } else if (key === 'mcp') {
-        // 过滤掉 mcp 中的继承控制字段，这些字段由环境变量控制
+      }
+      // 特殊处理 mcp 字段：过滤掉 nine1bot 特有的继承控制字段
+      else if (key === 'mcp' && typeof value === 'object' && value !== null) {
         const { inheritOpencode, inheritClaudeCode, ...mcpServers } = value as any
-        opencodeConfig[key] = mcpServers
-      } else if (key === 'provider') {
-        // 过滤掉 provider 中的继承控制字段
+        if (Object.keys(mcpServers).length > 0) {
+          opencodeConfig[key] = mcpServers
+        }
+      }
+      // 特殊处理 provider 字段：过滤掉 nine1bot 特有的继承控制字段
+      else if (key === 'provider' && typeof value === 'object' && value !== null) {
         const { inheritOpencode, ...providers } = value as any
-        opencodeConfig[key] = providers
-      } else {
+        if (Object.keys(providers).length > 0) {
+          opencodeConfig[key] = providers
+        }
+      }
+      else {
         opencodeConfig[key] = value
       }
     }
@@ -179,6 +188,25 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   const rgPath = resolve(installDir, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg')
   process.env.OPENCODE_RIPGREP_PATH = rgPath
 
+  // 初始化浏览器 Bridge（如果启用）
+  // 必须在 OpencodeServer.listen() 之前完成，因为路由在 listen 时挂载
+  let bridgeServer: BridgeServer | undefined
+  const browserConfig = (fullConfig as any).browser
+  if (browserConfig?.enabled) {
+    try {
+      bridgeServer = new BridgeServer({
+        cdpPort: browserConfig.cdpPort ?? 9222,
+        autoLaunch: browserConfig.autoLaunch ?? true,
+        headless: browserConfig.headless ?? false,
+      })
+      await bridgeServer.start()
+      setBridgeServer(bridgeServer)
+      console.log('[Nine1Bot] Browser control enabled at /browser/')
+    } catch (error: any) {
+      console.warn(`[Nine1Bot] Failed to initialize browser bridge: ${error.message}`)
+    }
+  }
+
   // 使用静态导入的 OpenCode 服务器启动
   const serverInstance = await OpencodeServer.listen({
     port: server.port,
@@ -191,6 +219,9 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
     hostname: serverInstance.hostname ?? server.hostname,
     port: serverInstance.port ?? server.port,
     stop: async () => {
+      if (bridgeServer) {
+        try { await bridgeServer.stop() } catch { /* ignore */ }
+      }
       (serverInstance as any).server?.stop?.()
     },
   }

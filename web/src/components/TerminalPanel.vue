@@ -203,7 +203,7 @@ watch(panelWidth, () => {
   position: relative;
   height: 100%;
   background: var(--bg-primary);
-  border-left: 1px solid var(--border);
+  border-left: 0.5px solid var(--border-default);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -230,7 +230,7 @@ watch(panelWidth, () => {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
   flex-shrink: 0;
 }
 
@@ -276,7 +276,7 @@ watch(panelWidth, () => {
   flex-wrap: wrap;
   gap: var(--space-xs);
   padding: var(--space-sm);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0.5px solid var(--border-default);
   flex-shrink: 0;
 }
 
@@ -286,7 +286,7 @@ watch(panelWidth, () => {
   gap: 6px;
   padding: 6px 10px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   font-size: 12px;
   color: var(--text-secondary);
@@ -309,7 +309,7 @@ watch(panelWidth, () => {
 }
 
 .terminal-tab.active .status-dot {
-  border: 1px solid white;
+  border: 0.5px solid white;
 }
 
 .status-dot {
@@ -395,7 +395,7 @@ watch(panelWidth, () => {
 }
 
 .separator {
-  color: var(--border);
+  color: var(--border-default);
 }
 
 .empty-state {
@@ -431,7 +431,7 @@ watch(panelWidth, () => {
   gap: 4px;
   padding: 8px 12px;
   background: var(--bg-primary);
-  border: 1px solid var(--border);
+  border: 0.5px solid var(--border-default);
   border-right: none;
   border-radius: var(--radius-md) 0 0 var(--radius-md);
   color: var(--text-secondary);

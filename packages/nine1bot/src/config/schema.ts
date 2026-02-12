@@ -50,6 +50,19 @@ export const SkillsConfigSchema = z.object({
   inheritClaudeCode: z.boolean().default(true),
 })
 
+// 浏览器控制配置
+// 浏览器控制已内置到主服务的 /browser/ 路径下，不再需要独立端口
+export const BrowserConfigSchema = z.object({
+  // 是否启用浏览器控制
+  enabled: z.boolean().default(false),
+  // Chrome CDP 端口
+  cdpPort: z.number().default(9222),
+  // 是否自动启动 Chrome
+  autoLaunch: z.boolean().default(true),
+  // 是否使用无头模式
+  headless: z.boolean().default(false),
+})
+
 // ===== OpenCode 兼容配置（简化版）=====
 
 const PermissionActionSchema = z.enum(['ask', 'allow', 'deny'])
@@ -131,6 +144,7 @@ export const Nine1BotConfigSchema = z.object({
   tunnel: TunnelConfigSchema.default({}),
   isolation: IsolationConfigSchema.default({}),
   skills: SkillsConfigSchema.default({}),
+  browser: BrowserConfigSchema.default({}),
 
   // OpenCode 兼容配置
   model: z.string().optional(),
@@ -199,3 +213,4 @@ export type NgrokConfig = z.infer<typeof NgrokConfigSchema>
 export type NatappConfig = z.infer<typeof NatappConfigSchema>
 export type IsolationConfig = z.infer<typeof IsolationConfigSchema>
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>
+export type BrowserConfig = z.infer<typeof BrowserConfigSchema>

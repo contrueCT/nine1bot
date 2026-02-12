@@ -412,11 +412,20 @@ export const api = {
     return Array.isArray(data) ? data : (data.data || [])
   },
 
-  // 获取项目列表
-  async getProjects(): Promise<any[]> {
-    const res = await fetch(`${BASE_URL}/project`)
+  // 搜索会话
+  async searchSessions(query: string, limit: number = 20): Promise<Session[]> {
+    const params = new URLSearchParams({
+      search: query,
+      roots: 'true',
+      limit: String(limit)
+    })
+    const res = await fetchWithTimeout(`${BASE_URL}/session?${params}`)
     const data = await res.json()
-    return data.data || []
+    const sessions = Array.isArray(data) ? data : (data.data || [])
+    return sessions.map((s: Session) => ({
+      ...s,
+      createdAt: s.time ? new Date(s.time.created).toISOString() : undefined
+    }))
   },
 
   // 浏览目录（用于目录选择器）
@@ -541,6 +550,7 @@ export interface McpServer {
   error?: string
   tools?: McpTool[]
   resources?: McpResource[]
+  health?: McpHealth
 }
 
 export interface McpTool {
@@ -554,6 +564,15 @@ export interface McpResource {
   name?: string
   description?: string
   mimeType?: string
+}
+
+export interface McpHealth {
+  ok: boolean
+  checkedAt: string
+  latencyMs?: number
+  tools?: number
+  resources?: number
+  error?: string
 }
 
 // MCP 配置类型
@@ -614,7 +633,7 @@ export interface Config {
 // === Extended API ===
 export const mcpApi = {
   // 获取所有 MCP 服务器状态
-  // 后端返回 Record<string, MCP.Status>，转换为数组
+  // 后端返回 Record<string, MCP.StatusInfo>，转换为数组
   async list(): Promise<McpServer[]> {
     const res = await fetch(`${BASE_URL}/mcp`)
     const data = await res.json()
@@ -625,7 +644,8 @@ export const mcpApi = {
         status: info.status || 'disconnected',
         error: info.error,
         tools: info.tools || [],
-        resources: info.resources || []
+        resources: info.resources || [],
+        health: info.health
       }))
     }
     return []
@@ -676,6 +696,14 @@ export const mcpApi = {
     })
     const data = await res.json()
     return { url: data.authorizationUrl || data.url }
+  },
+
+  async health(name: string): Promise<McpHealth> {
+    const res = await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}/health`, {
+      method: 'POST'
+    })
+    const data = await res.json()
+    return data
   }
 }
 

@@ -325,7 +325,7 @@ function confirmRemove(name: string) {
     <div class="section-header">
       <div class="section-header-left">
         <h3 class="section-title">MCP 服务器</h3>
-        <p class="section-desc text-muted text-sm">管理 Model Context Protocol 服务器连接</p>
+        <p class="section-desc text-muted text-sm">全局 MCP 配置概览。每个项目可在对话中的 "+" 菜单独立控制 MCP 连接状态。</p>
       </div>
       <button class="btn btn-primary btn-sm" @click="openForm" v-if="!showForm">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -397,7 +397,7 @@ function confirmRemove(name: string) {
             type="text"
             class="form-input"
             v-model="formCommand"
-            placeholder="例如: npx -y @anthropic-ai/mcp-server-filesystem /path"
+            placeholder="例如: npx -y @modelcontextprotocol/server-filesystem /path"
             @keyup.enter="submitForm"
           />
           <span class="form-hint">完整命令行，空格分隔参数</span>
@@ -589,7 +589,7 @@ function confirmRemove(name: string) {
 /* 添加表单样式 */
 .add-form {
   background: var(--bg-tertiary);
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
@@ -599,7 +599,7 @@ function confirmRemove(name: string) {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
 }
 
 .form-title {
@@ -647,7 +647,7 @@ function confirmRemove(name: string) {
 
 .form-input {
   padding: var(--space-sm) var(--space-md);
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -699,7 +699,7 @@ function confirmRemove(name: string) {
   justify-content: flex-end;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  border-top: 1px solid var(--border-subtle);
+  border-top: 0.5px solid var(--border-subtle);
   background: var(--bg-secondary);
 }
 
@@ -708,12 +708,12 @@ function confirmRemove(name: string) {
   display: flex;
   padding: var(--space-sm) var(--space-md);
   gap: var(--space-xs);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
 }
 
 .mode-btn {
   padding: var(--space-xs) var(--space-sm);
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
@@ -752,7 +752,7 @@ function confirmRemove(name: string) {
 .json-textarea {
   width: 100%;
   padding: var(--space-sm) var(--space-md);
-  border: 1px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -802,7 +802,7 @@ function confirmRemove(name: string) {
 
 .tools-section {
   padding-top: var(--space-md);
-  border-top: 1px solid var(--border-subtle);
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 .tools-title {

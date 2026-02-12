@@ -679,6 +679,15 @@ export namespace MessageV2 {
     return result
   }
 
+  function isNetworkLikeError(e: Error): boolean {
+    const code = (e as any).code
+    if (typeof code === "number" && code >= 500 && code < 600) return true
+    const msg = e.message.toLowerCase()
+    return msg.includes("network") || msg.includes("connection lost")
+      || msg.includes("etimedout") || msg.includes("econnrefused")
+      || msg.includes("socket hang up")
+  }
+
   const isOpenAiErrorRetryable = (e: APICallError) => {
     const status = e.statusCode
     if (!status) return e.isRetryable

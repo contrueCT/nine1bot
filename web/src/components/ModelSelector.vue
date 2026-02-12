@@ -158,7 +158,7 @@ const emit = defineEmits<{
   gap: var(--space-sm);
   padding: var(--space-md);
   background: var(--bg-tertiary);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: all var(--transition-fast);

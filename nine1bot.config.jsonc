@@ -85,6 +85,17 @@
     //   },
     //   "enabled": true
     // }
+
+  },
+
+  // ===== 浏览器控制配置 =====
+  // 浏览器控制已内置到主服务，通过 /browser/ 路径提供
+  // Chrome Extension 连接到 ws://<服务地址>/browser/extension
+  "browser": {
+    "enabled": true,
+    "cdpPort": 9223,
+    "autoLaunch": true,
+    "headless": false
   },
 
   // ===== 沙箱配置 =====

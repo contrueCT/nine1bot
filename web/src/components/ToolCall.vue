@@ -317,7 +317,7 @@ function formatSize(bytes: number): string {
   padding: var(--space-sm);
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
+  border: 0.5px solid var(--border-subtle);
 }
 
 .attachment-item {
@@ -328,7 +328,7 @@ function formatSize(bytes: number): string {
 }
 
 .attachment-item:not(:last-child) {
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
   padding-bottom: var(--space-sm);
   margin-bottom: var(--space-xs);
 }
@@ -383,9 +383,9 @@ function formatSize(bytes: number): string {
 .tool-preview {
   margin-top: var(--space-sm);
   padding: var(--space-sm);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(99, 102, 241, 0.03));
+  background: var(--accent-subtle);
   border-radius: var(--radius-md);
-  border: 1px solid rgba(99, 102, 241, 0.2);
+  border: 0.5px solid var(--accent);
 }
 
 .preview-item {

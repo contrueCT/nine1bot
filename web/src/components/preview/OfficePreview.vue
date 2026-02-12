@@ -133,7 +133,7 @@ function downloadFile() {
 .loading-spinner {
   width: 24px;
   height: 24px;
-  border: 3px solid var(--border);
+  border: 3px solid var(--border-default);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -210,7 +210,7 @@ function downloadFile() {
 
 .docx-container :deep(td),
 .docx-container :deep(th) {
-  border: 1px solid #ddd;
+  border: 0.5px solid #ddd;
   padding: 8px;
 }
 </style>

@@ -76,6 +76,15 @@ export namespace SessionRetry {
         return undefined
       }
     })
+
+    // Fallback: detect network-related errors by message keywords
+    const rawMsg = typeof error.data?.message === "string" ? error.data.message.toLowerCase() : ""
+    if (rawMsg.includes("network") || rawMsg.includes("connection lost")
+        || rawMsg.includes("etimedout") || rawMsg.includes("econnrefused")
+        || rawMsg.includes("socket hang up")) {
+      return "Network error"
+    }
+
     if (!json || typeof json !== "object") return undefined
     const code = typeof json.code === "string" ? json.code : ""
 
@@ -94,12 +103,6 @@ export namespace SessionRetry {
       !!json.error
     ) {
       return "Provider Server Error"
-    }
-
-    // Fallback: detect network-related errors by message keywords
-    const msg = (error.data?.message ?? "").toLowerCase()
-    if (msg.includes("network") || msg.includes("connection lost") || msg.includes("etimedout") || msg.includes("econnrefused") || msg.includes("socket hang up")) {
-      return "Network error"
     }
   }
 }

@@ -1,15 +1,24 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSession } from './composables/useSession'
 import { useFiles } from './composables/useFiles'
 import { useSettings } from './composables/useSettings'
+import { useAppMode } from './composables/useAppMode'
+import { useSessionMode } from './composables/useSessionMode'
+// useProjects: logic cleared, stubs only (will be re-implemented with backend)
+import { useProjects } from './composables/useProjects'
 import Header from './components/Header.vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import InputBox from './components/InputBox.vue'
+import PromptCategories from './components/PromptCategories.vue'
+import SearchOverlay from './components/SearchOverlay.vue'
+import ProjectsPage from './components/ProjectsPage.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import FileViewer from './components/FileViewer.vue'
 import TodoList from './components/TodoList.vue'
+import PlanPanel from './components/PlanPanel.vue'
+import McpProjectPanel from './components/McpProjectPanel.vue'
 import RightPanel from './components/RightPanel.vue'
 import { useAgentTerminal } from './composables/useAgentTerminal'
 import { useFilePreview } from './composables/useFilePreview'
@@ -61,7 +70,7 @@ const {
   isSessionRunning,
   // 会话通知
   sessionNotifications,
-  dismissNotification
+  dismissNotification,
 } = useSession()
 
 // Agent 终端
@@ -82,15 +91,21 @@ const {
   contentError,
   loadFileContent,
   clearFileContent,
-  // 文件搜索 (预留功能)
-  // searchResults,
-  // isSearching,
-  // searchError,
-  // searchFiles,
-  // clearSearch
 } = useFiles()
 
-const { showSettings, openSettings, closeSettings, currentProvider, currentModel } = useSettings()
+const { showSettings, openSettings, closeSettings, activeTab: settingsTab, currentProvider, currentModel, providers, selectModel: settingsSelectModel, loadProviders, loadConfig } = useSettings()
+
+// App mode (chat / agent)
+const { mode: appMode, setMode: setAppMode } = useAppMode()
+
+// Session ↔ mode mapping
+const { setMode: setSessionMode } = useSessionMode()
+
+// Projects
+const {
+  projects,
+  currentProject,
+} = useProjects()
 
 // 文件查看器状态
 const showFileViewer = ref(false)
@@ -98,8 +113,29 @@ const showFileViewer = ref(false)
 // 待办事项面板状态
 const showTodoList = ref(false)
 
+// Plan面板状态
+const showPlanPanel = ref(false)
+
+// MCP project panel state
+const showMcpPanel = ref(false)
+
+// Search overlay
+const showSearch = ref(false)
+
+// Projects page
+const showProjectsPage = ref(false)
+
 const sidebarCollapsed = ref(false)
-const sidebarTab = ref<'sessions' | 'files'>('sessions')
+
+// Empty state detection for centered layout
+const isEmptyState = computed(() =>
+  messages.value.length === 0 && !isLoading.value && !showProjectsPage.value
+)
+
+// Handle model selection from InputBox
+async function handleSelectModel(providerId: string, modelId: string) {
+  await settingsSelectModel(providerId, modelId)
+}
 
 // 保存 watch 停止函数以便在 unmount 时清理
 let stopSessionWatch: (() => void) | null = null
@@ -128,6 +164,10 @@ onMounted(async () => {
   await loadSessions()
   await loadFiles('.')
 
+  // 加载模型 providers 和配置（确保模型选择器立即可用）
+  await loadProviders()
+  await loadConfig()
+
   if (sessions.value.length > 0) {
     await selectSession(sessions.value[0])
   } else {
@@ -137,10 +177,14 @@ onMounted(async () => {
 
   // 加载待处理的问题和权限请求
   await loadPendingRequests()
+
+  // Cmd+K / Ctrl+K shortcut for search
+  document.addEventListener('keydown', handleGlobalKeydown)
 })
 
 onUnmounted(() => {
   unsubscribe()
+  document.removeEventListener('keydown', handleGlobalKeydown)
   // 清理 watch
   if (stopSessionWatch) {
     stopSessionWatch()
@@ -158,6 +202,21 @@ onUnmounted(() => {
   }
 })
 
+function handleGlobalKeydown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault()
+    showSearch.value = !showSearch.value
+  }
+}
+
+// Tag new sessions with current app mode
+watch(currentSession, (newSession, oldSession) => {
+  if (newSession && !oldSession) {
+    // A new session was just created (transitioned from draft/null to real session)
+    setSessionMode(newSession.id, appMode.value)
+  }
+})
+
 // 监听当前目录变化，更新文件树工作目录
 watch(currentDirectory, async (newDir) => {
   setFilesDirectory(newDir || undefined)
@@ -165,6 +224,11 @@ watch(currentDirectory, async (newDir) => {
 })
 
 async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean) {
+  // If viewing projects page, close it
+  if (showProjectsPage.value) {
+    showProjectsPage.value = false
+  }
+
   // sendMessage 会自动处理草稿模式，在发送前创建会话
   const model = currentProvider.value && currentModel.value
     ? { providerID: currentProvider.value, modelID: currentModel.value }
@@ -180,11 +244,64 @@ async function handleSend(content: string, files?: Array<{ type: 'file'; mime: s
 }
 
 function handleNewSession() {
+  showProjectsPage.value = false
   createSession(currentDirectory.value || '.')
 }
 
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
+}
+
+// Mode switch handler — auto navigate to new chat
+function handleSwitchMode(newMode: 'chat' | 'agent') {
+  setAppMode(newMode)
+  showProjectsPage.value = false
+  createSession(currentDirectory.value || '.')
+}
+
+// Project handlers (stubs — will be re-implemented with backend)
+function handleSelectProject(_projectId: string) {
+  // stub
+}
+
+function handleOpenProjects() {
+  showProjectsPage.value = true
+}
+
+function handleCreateProject(_name: string, _instructions: string, _directory?: string) {
+  // stub
+}
+
+async function handleUpdateProject(_projectId: string, _updates: { name?: string; instructions?: string }) {
+  // stub
+}
+
+// Handle search result selection
+function handleSearchSelect(sessionId: string) {
+  showSearch.value = false
+  showProjectsPage.value = false
+  const session = sessions.value.find(s => s.id === sessionId)
+  if (session) {
+    selectSession(session)
+  }
+}
+
+function handleProjectNewSession(_projectId: string) {
+  // stub
+  showProjectsPage.value = false
+  createSession(currentDirectory.value || '.')
+}
+
+function handleDeleteProject(_projectId: string) {
+  // stub
+}
+
+function handleProjectSelectSession(sessionId: string) {
+  const session = sessions.value.find(s => s.id === sessionId)
+  if (session) {
+    showProjectsPage.value = false
+    selectSession(session)
+  }
 }
 
 // 处理消息部分删除
@@ -233,6 +350,32 @@ function closeFileViewer() {
   showFileViewer.value = false
   clearFileContent()
 }
+
+// Toggle Plan panel
+function togglePlanPanel() {
+  showPlanPanel.value = !showPlanPanel.value
+}
+
+// Toggle MCP project panel
+function toggleMcpPanel() {
+  showMcpPanel.value = !showMcpPanel.value
+}
+
+// Open settings with specific tab
+function handleOpenMcp() {
+  settingsTab.value = 'mcp'
+  openSettings()
+}
+
+function handleOpenSkills() {
+  settingsTab.value = 'skills'
+  openSettings()
+}
+
+// 处理提示分类选择
+function handlePromptSelect(prompt: string) {
+  handleSend(prompt)
+}
 </script>
 
 <template>
@@ -245,22 +388,28 @@ function closeFileViewer() {
       :isDraftSession="isDraftSession"
       :files="files"
       :filesLoading="filesLoading"
-      :activeTab="sidebarTab"
+      :mode="appMode"
+      :projects="projects"
+      :currentProjectId="currentProject?.id || null"
       :currentDirectory="currentDirectory"
       :canChangeDirectory="canChangeDirectory()"
       :isSessionRunning="isSessionRunning"
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
       @toggle-collapse="toggleSidebar"
-      @select-session="selectSession"
+      @select-session="(session) => { showProjectsPage = false; selectSession(session) }"
       @new-session="handleNewSession"
       @toggle-directory="toggleDirectory"
-      @change-tab="(tab) => sidebarTab = tab"
       @delete-session="deleteSession"
       @rename-session="renameSession"
       @file-click="handleFileClick"
       @abort-session="abortSession"
+      @open-settings="openSettings"
+      @open-search="showSearch = true"
       @change-directory="changeDirectory"
+      @switch-mode="handleSwitchMode"
+      @select-project="handleSelectProject"
+      @open-projects="handleOpenProjects"
     />
 
     <!-- Main Content -->
@@ -274,52 +423,159 @@ function closeFileViewer() {
         :retryInfo="retryInfo"
         @toggle-sidebar="toggleSidebar"
         @abort="abortCurrentSession"
-        @open-settings="openSettings"
-        @summarize="handleSummarize"
-        @toggle-todo="toggleTodoList"
       />
 
       <!-- Chat Area -->
-      <div class="chat-panel">
-        <ChatPanel
-          :messages="messages"
-          :isLoading="isLoading"
-          :isStreaming="isStreaming"
-          :pendingQuestions="pendingQuestions"
-          :pendingPermissions="pendingPermissions"
-          :sessionError="sessionError"
-          :currentDirectory="currentDirectory"
-          :canChangeDirectory="canChangeDirectory()"
-          @question-answered="(id, answers) => answerQuestion(id, answers)"
-          @question-rejected="rejectQuestion"
-          @permission-responded="respondPermission"
-          @clear-error="clearSessionError"
-          @open-settings="openSettings"
-          @delete-part="handleDeletePart"
-          @update-part="handleUpdatePart"
-          @change-directory="changeDirectory"
-        />
-        <InputBox
-          :disabled="isLoading"
-          :isStreaming="isStreaming"
-          @send="handleSend"
-          @abort="abortCurrentSession"
+      <div class="chat-panel" :class="{ 'empty-layout': isEmptyState }">
+        <!-- Projects Page -->
+        <ProjectsPage
+          v-if="showProjectsPage"
+          :projects="projects"
+          :currentProject="currentProject"
+          @select-project="handleSelectProject"
+          @update-project="handleUpdateProject"
+          @select-session="handleProjectSelectSession"
+          @new-session="handleProjectNewSession"
+          @create-project="handleCreateProject"
+          @delete-project="handleDeleteProject"
+          @rename-session="renameSession"
+          @delete-session="deleteSession"
+          @close="showProjectsPage = false"
         />
 
-        <!-- Todo List Panel -->
-        <div v-if="showTodoList" class="todo-panel-container">
-          <TodoList
-            :items="todoItems"
+        <!-- Empty State: Centered greeting + input + prompts -->
+        <template v-else-if="isEmptyState">
+          <div class="empty-center-wrapper">
+            <ChatPanel
+              :messages="messages"
+              :isLoading="isLoading"
+              :isStreaming="isStreaming"
+              :pendingQuestions="pendingQuestions"
+              :pendingPermissions="pendingPermissions"
+              :sessionError="sessionError"
+              :currentDirectory="currentDirectory"
+              :canChangeDirectory="canChangeDirectory()"
+              :mode="appMode"
+              @question-answered="(id, answers) => answerQuestion(id, answers)"
+              @question-rejected="rejectQuestion"
+              @permission-responded="respondPermission"
+              @clear-error="clearSessionError"
+              @open-settings="openSettings"
+              @delete-part="handleDeletePart"
+              @update-part="handleUpdatePart"
+              @change-directory="changeDirectory"
+            />
+            <InputBox
+              :disabled="isLoading"
+              :isStreaming="isStreaming"
+              :centered="true"
+              :providers="providers"
+              :currentProvider="currentProvider"
+              :currentModel="currentModel"
+              :mode="appMode"
+              :messages="messages"
+              @send="handleSend"
+              @abort="abortCurrentSession"
+              @select-model="handleSelectModel"
+              @open-mcp="handleOpenMcp"
+              @toggle-mcp-panel="toggleMcpPanel"
+              @open-skills="handleOpenSkills"
+              @compress-session="handleSummarize"
+              @toggle-todo="toggleTodoList"
+              @toggle-plan="togglePlanPanel"
+            />
+            <PromptCategories
+              @select="handlePromptSelect"
+            />
+          </div>
+        </template>
+
+        <!-- Normal Chat View with messages -->
+        <template v-else>
+          <ChatPanel
+            :messages="messages"
             :isLoading="isLoading"
-            @close="showTodoList = false"
-            @refresh="loadTodoItems"
+            :isStreaming="isStreaming"
+            :pendingQuestions="pendingQuestions"
+            :pendingPermissions="pendingPermissions"
+            :sessionError="sessionError"
+            :currentDirectory="currentDirectory"
+            :canChangeDirectory="canChangeDirectory()"
+            :mode="appMode"
+            @question-answered="(id, answers) => answerQuestion(id, answers)"
+            @question-rejected="rejectQuestion"
+            @permission-responded="respondPermission"
+            @clear-error="clearSessionError"
+            @open-settings="openSettings"
+            @delete-part="handleDeletePart"
+            @update-part="handleUpdatePart"
+            @change-directory="changeDirectory"
           />
+          <InputBox
+            :disabled="isLoading"
+            :isStreaming="isStreaming"
+            :centered="false"
+            :providers="providers"
+            :currentProvider="currentProvider"
+            :currentModel="currentModel"
+            :mode="appMode"
+            :messages="messages"
+            @send="handleSend"
+            @abort="abortCurrentSession"
+            @select-model="handleSelectModel"
+            @open-mcp="handleOpenMcp"
+            @toggle-mcp-panel="toggleMcpPanel"
+            @open-skills="handleOpenSkills"
+            @compress-session="handleSummarize"
+            @toggle-todo="toggleTodoList"
+            @toggle-plan="togglePlanPanel"
+          />
+        </template>
+
+        <!-- Plan Panel (click outside to close) -->
+        <div v-if="showPlanPanel" class="panel-overlay" @click.self="showPlanPanel = false">
+          <div class="plan-panel-container">
+            <PlanPanel
+              :messages="messages"
+              @close="showPlanPanel = false"
+            />
+          </div>
+        </div>
+
+        <!-- Todo List Panel (click outside to close) -->
+        <div v-if="showTodoList" class="panel-overlay" @click.self="showTodoList = false">
+          <div class="todo-panel-container">
+            <TodoList
+              :items="todoItems"
+              :isLoading="isLoading"
+              @close="showTodoList = false"
+              @refresh="loadTodoItems"
+            />
+          </div>
+        </div>
+
+        <!-- MCP Project Panel (click outside to close) -->
+        <div v-if="showMcpPanel" class="panel-overlay" @click.self="showMcpPanel = false">
+          <div class="mcp-panel-container">
+            <McpProjectPanel
+              :currentDirectory="currentDirectory"
+              @close="showMcpPanel = false"
+            />
+          </div>
         </div>
       </div>
     </div>
 
     <!-- Right Panel (Terminal + Preview) -->
     <RightPanel />
+
+    <!-- Search Overlay -->
+    <SearchOverlay
+      v-if="showSearch"
+      :recentSessions="sessions.slice(0, 10)"
+      @close="showSearch = false"
+      @select="handleSearchSelect"
+    />
 
     <!-- Settings Modal -->
     <SettingsPanel
@@ -367,6 +623,21 @@ function closeFileViewer() {
 <style scoped>
 /* Layout uses global styles from style.css */
 
+.panel-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 99;
+}
+
+.plan-panel-container {
+  position: absolute;
+  top: calc(var(--header-height) + var(--space-md));
+  left: var(--space-md);
+  z-index: 100;
+  width: 520px;
+  max-width: calc(100% - var(--space-md) * 2);
+}
+
 .todo-panel-container {
   position: absolute;
   top: calc(var(--header-height) + var(--space-md));
@@ -376,8 +647,23 @@ function closeFileViewer() {
   max-width: calc(100% - var(--space-md) * 2);
 }
 
+.mcp-panel-container {
+  position: absolute;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  width: 320px;
+  max-width: calc(100% - var(--space-md) * 2);
+}
+
 .chat-panel {
   position: relative;
+}
+
+/* Empty layout: PromptCategories centering */
+.chat-panel.empty-layout :deep(.prompt-categories-wrapper) {
+  margin: 0 auto;
 }
 
 /* Session Notifications */
@@ -397,21 +683,21 @@ function closeFileViewer() {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  animation: slideIn 0.3s ease-out;
+  animation: slideIn 0.3s var(--ease-smooth);
 }
 
 .notification-toast.success {
-  border-color: var(--color-success);
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), var(--color-bg-elevated));
+  border-color: var(--success);
+  background: var(--bg-elevated);
 }
 
 .notification-toast.info {
-  border-color: var(--color-accent);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), var(--color-bg-elevated));
+  border-color: var(--accent);
+  background: var(--bg-elevated);
 }
 
 .notification-icon {
@@ -426,12 +712,12 @@ function closeFileViewer() {
 
 .notification-toast.success .notification-icon {
   background: rgba(34, 197, 94, 0.2);
-  color: var(--color-success);
+  color: var(--success);
 }
 
 .notification-toast.info .notification-icon {
   background: rgba(99, 102, 241, 0.2);
-  color: var(--color-accent);
+  color: var(--accent);
 }
 
 .notification-content {
@@ -443,17 +729,17 @@ function closeFileViewer() {
 }
 
 .notification-title {
-  font-size: var(--font-size-sm);
+  font-size: 0.875rem;
   font-weight: 500;
-  color: var(--color-text-primary);
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .notification-message {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
 .notification-close {
@@ -464,7 +750,7 @@ function closeFileViewer() {
   height: 20px;
   border: none;
   background: transparent;
-  color: var(--color-text-muted);
+  color: var(--text-muted);
   cursor: pointer;
   border-radius: var(--radius-sm);
   flex-shrink: 0;
@@ -472,8 +758,8 @@ function closeFileViewer() {
 }
 
 .notification-close:hover {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 @keyframes slideIn {
