@@ -55,7 +55,6 @@ const emit = defineEmits<{
   'switch-mode': [mode: AppMode]
   'select-project': [projectId: string]
   'open-projects': []
-  'move-to-project': [sessionId: string, projectId: string]
 }>()
 
 // Session mode mapping
@@ -76,8 +75,6 @@ const deletingSession = ref<Session | null>(null)
 
 // Right-click context menu
 const contextMenu = ref<{ x: number; y: number; session: Session } | null>(null)
-const showProjectPicker = ref(false)
-
 // Toast notification for errors
 const toastMessage = ref('')
 
@@ -126,12 +123,10 @@ function openContextMenu(event: MouseEvent, session: Session) {
     y: event.clientY,
     session
   }
-  showProjectPicker.value = false
 }
 
 function closeContextMenu() {
   contextMenu.value = null
-  showProjectPicker.value = false
 }
 
 function contextMenuRename() {
@@ -149,25 +144,6 @@ function contextMenuDelete() {
   closeContextMenu()
 }
 
-// Project logic stubs (will be re-implemented with backend)
-function contextMenuMoveToProject(projectId: string) {
-  if (!contextMenu.value) return
-  emit('move-to-project', contextMenu.value.session.id, projectId)
-  closeContextMenu()
-}
-
-function contextMenuRemoveFromProject(_sessionId: string, _projectId: string) {
-  // stub
-  closeContextMenu()
-}
-
-function getSessionProjectNames(_sessionId: string): { id: string; name: string }[] {
-  return []
-}
-
-function getAvailableProjects(_sessionId: string) {
-  return props.projects
-}
 </script>
 
 <template>
@@ -401,49 +377,6 @@ function getAvailableProjects(_sessionId: string) {
         :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
         @click.stop
       >
-        <!-- Current projects (if session belongs to any) -->
-        <template v-if="getSessionProjectNames(contextMenu.session.id).length > 0">
-          <div class="context-menu-label">已在项目</div>
-          <div
-            v-for="proj in getSessionProjectNames(contextMenu.session.id)"
-            :key="proj.id"
-            class="context-menu-item project-tag-item"
-          >
-            <FolderOpen :size="12" />
-            <span class="project-tag-name">{{ proj.name }}</span>
-            <button
-              class="project-tag-remove"
-              @click.stop="contextMenuRemoveFromProject(contextMenu!.session.id, proj.id)"
-              title="移出项目"
-            >
-              <X :size="12" />
-            </button>
-          </div>
-          <div class="context-menu-divider"></div>
-        </template>
-
-        <!-- Move to Project -->
-        <div class="context-menu-item-wrapper">
-          <button class="context-menu-item" @click="showProjectPicker = !showProjectPicker">
-            <FolderOpen :size="14" />
-            <span>移入项目</span>
-            <ChevronRight :size="12" class="context-menu-arrow" />
-          </button>
-          <!-- Project sub-menu (only shows projects not yet assigned) -->
-          <div v-if="showProjectPicker" class="context-submenu">
-            <button
-              v-for="project in getAvailableProjects(contextMenu.session.id)"
-              :key="project.id"
-              class="context-menu-item"
-              @click="contextMenuMoveToProject(project.id)"
-            >
-              <span>{{ project.name || project.worktree }}</span>
-            </button>
-            <div v-if="getAvailableProjects(contextMenu.session.id).length === 0" class="context-menu-empty">
-              {{ projects.length === 0 ? '暂无项目' : '已加入所有项目' }}
-            </div>
-          </div>
-        </div>
         <button class="context-menu-item" @click="contextMenuRename">
           <Pencil :size="14" />
           <span>重命名</span>

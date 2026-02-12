@@ -105,7 +105,6 @@ const { setMode: setSessionMode } = useSessionMode()
 const {
   projects,
   currentProject,
-  addSessionToProject,
 } = useProjects()
 
 // 文件查看器状态
@@ -411,7 +410,6 @@ function handlePromptSelect(prompt: string) {
       @switch-mode="handleSwitchMode"
       @select-project="handleSelectProject"
       @open-projects="handleOpenProjects"
-      @move-to-project="(sessionId: string, projectId: string) => addSessionToProject(projectId, sessionId)"
     />
 
     <!-- Main Content -->

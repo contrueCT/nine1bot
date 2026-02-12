@@ -56,10 +56,6 @@ export function useProjects() {
     return []
   }
 
-  function addSessionToProject(_projectId: string, _sessionId: string) {
-    // stub
-  }
-
   return {
     projects,
     currentProject,
@@ -71,6 +67,5 @@ export function useProjects() {
     updateProject,
     deleteLocalProject,
     getProjectSessions,
-    addSessionToProject
   }
 }

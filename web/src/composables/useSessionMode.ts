@@ -36,33 +36,11 @@ export function useSessionMode() {
     })
   }
 
-  // Stubs for project-related functions (will be re-implemented with backend)
-  function getSessionProjects(_sessionId: string): string[] {
-    return []
-  }
-
-  function removeSessionFromProject(_sessionId: string, _projectId: string) {
-    // stub
-  }
-
-  function getSessionsForProject(_projectId: string): string[] {
-    return []
-  }
-
-  function addSessionToProject(_sessionId: string, _projectId: string) {
-    // stub
-  }
-
   return {
     sessionModes,
     getMode,
     setMode,
     removeMode,
     filterByMode,
-    // Project stubs (kept for callers that still reference them)
-    getSessionProjects,
-    removeSessionFromProject,
-    getSessionsForProject,
-    addSessionToProject,
   }
 }

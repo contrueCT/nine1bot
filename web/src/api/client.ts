@@ -428,50 +428,6 @@ export const api = {
     }))
   },
 
-  // 获取项目列表
-  async getProjects(): Promise<any[]> {
-    const res = await fetch(`${BASE_URL}/project`)
-    const data = await res.json()
-    return Array.isArray(data) ? data : (data.data || [])
-  },
-
-  // 获取单个项目
-  async getProject(projectId: string): Promise<any> {
-    // Use the list endpoint and find by ID since there's no individual GET endpoint
-    const projects = await api.getProjects()
-    const project = projects.find((p: any) => p.id === projectId)
-    if (!project) throw new Error(`Project not found: ${projectId}`)
-    return project
-  },
-
-  // 更新项目
-  async updateProject(projectId: string, updates: { name?: string; instructions?: string; icon?: any }): Promise<any> {
-    const res = await fetch(`${BASE_URL}/project/${encodeURIComponent(projectId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    })
-    if (!res.ok) {
-      throw new Error(`Failed to update project: ${res.status}`)
-    }
-    const data = await res.json()
-    return data.data || data
-  },
-
-  // 获取项目的会话列表
-  async getProjectSessions(projectId: string): Promise<Session[]> {
-    const params = new URLSearchParams({ roots: 'true' })
-    const res = await fetchWithTimeout(`${BASE_URL}/session?${params}`)
-    const data = await res.json()
-    const sessions = Array.isArray(data) ? data : (data.data || [])
-    return sessions
-      .filter((s: Session) => s.projectID === projectId)
-      .map((s: Session) => ({
-        ...s,
-        createdAt: s.time ? new Date(s.time.created).toISOString() : undefined
-      }))
-  },
-
   // 浏览目录（用于目录选择器）
   async browseDirectory(path: string = '~'): Promise<{
     path: string
