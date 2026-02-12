@@ -397,7 +397,7 @@ function confirmRemove(name: string) {
             type="text"
             class="form-input"
             v-model="formCommand"
-            placeholder="例如: npx -y @anthropic-ai/mcp-server-filesystem /path"
+            placeholder="例如: npx -y @modelcontextprotocol/server-filesystem /path"
             @keyup.enter="submitForm"
           />
           <span class="form-hint">完整命令行，空格分隔参数</span>

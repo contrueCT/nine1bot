@@ -33,7 +33,7 @@ const emit = defineEmits<{
 const scrollContainer = ref<HTMLDivElement>()
 const showDirectoryBrowser = ref(false)
 
-// Time-based greeting (Claude.ai style)
+// Time-based greeting
 const greeting = computed(() => {
   const hour = new Date().getHours()
   if (hour < 12) return 'Good morning'
@@ -108,7 +108,7 @@ function scrollToBottom() {
       </div>
     </div>
 
-    <!-- Empty State (Claude.ai style centered greeting) -->
+    <!-- Empty State -->
     <div v-if="messages.length === 0 && !isLoading && !sessionError" class="chat-empty">
       <div class="welcome-section">
         <div class="greeting-row">
@@ -194,7 +194,7 @@ function scrollToBottom() {
   width: 100%;
 }
 
-/* === Claude.ai Empty State === */
+/* === Empty State === */
 .chat-empty {
   display: flex;
   flex-direction: column;

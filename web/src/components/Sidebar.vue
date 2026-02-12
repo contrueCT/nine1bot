@@ -147,7 +147,7 @@ function contextMenuDelete() {
 </script>
 
 <template>
-  <aside class="sidebar claude-style" :class="{ collapsed }">
+  <aside class="sidebar" :class="{ collapsed }">
     <!-- Header: Brand + Collapse -->
     <div class="sidebar-header">
       <div class="brand-area" v-if="!collapsed">
@@ -160,7 +160,7 @@ function contextMenuDelete() {
       </button>
     </div>
 
-    <!-- Top Navigation (expanded) - Claude.ai style flat list -->
+    <!-- Top Navigation (expanded) -->
     <nav class="sidebar-nav" v-if="!collapsed">
       <button class="nav-item new-chat" @click="emit('new-session')">
         <Plus :size="18" />
@@ -399,8 +399,8 @@ function contextMenuDelete() {
 </template>
 
 <style scoped>
-/* === Claude-Style Sidebar === */
-.sidebar.claude-style {
+/* === Sidebar === */
+.sidebar {
   display: flex;
   flex-direction: column;
   height: 100vh;

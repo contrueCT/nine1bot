@@ -276,7 +276,7 @@ function formatSize(bytes: number): string {
       </button>
     </div>
 
-    <!-- Input Box (Claude.ai style with 3-layer shadow) -->
+    <!-- Input Box -->
     <div class="input-glass-wrapper" :class="{ 'plan-mode-active': isPlanMode }">
       <!-- Hidden file input -->
       <input
@@ -558,7 +558,7 @@ function formatSize(bytes: number): string {
   color: var(--error);
 }
 
-/* === Claude.ai Input Box === */
+/* === Input Box === */
 .input-glass-wrapper {
   position: relative;
   border-radius: var(--radius-2xl);
@@ -641,7 +641,7 @@ function formatSize(bytes: number): string {
   transition: all var(--transition-fast);
 }
 
-/* Plus (+) button - Claude.ai attachment style */
+/* Plus (+) button - Attachment style */
 .plus-btn {
   background: transparent;
   color: var(--text-muted);
@@ -891,7 +891,7 @@ function formatSize(bytes: number): string {
   white-space: nowrap;
 }
 
-/* Send / Abort buttons - Claude.ai style */
+/* Send / Abort buttons */
 .send-btn {
   background: var(--accent);
   color: white;

@@ -195,7 +195,7 @@ onMounted(loadServers)
           v-model="formCommand"
           type="text"
           class="mcp-form-input"
-          placeholder="命令，如: npx -y @anthropic-ai/mcp-server-filesystem /path"
+          placeholder="命令，如: npx -y @modelcontextprotocol/server-filesystem /path"
           @keyup.enter="submitAdd"
         />
         <input

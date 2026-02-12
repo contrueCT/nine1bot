@@ -1,6 +1,6 @@
 /* ============================================
    Nine1Bot Design System V3
-   Claude.ai Inspired - Warm, Elegant, Minimal
+   Warm, Elegant, Minimal
    ============================================ */
 
 /* === Design Tokens: Shared === */
@@ -21,7 +21,7 @@
   --radius-2xl: 20px;
   --radius-full: 9999px;
 
-  /* Typography - Claude.ai uses serif for the refined aesthetic */
+  /* Typography - Serif for the refined aesthetic */
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
   --font-display: 'Source Serif 4', Georgia, 'Times New Roman', serif;
@@ -45,7 +45,7 @@
   /* Typography - Display */
   --font-weight-display: 400;
 
-  /* Input Box Shadow (Claude.ai exact value) */
+  /* Input Box Shadow */
   --input-shadow: 0 0.25rem 1.25rem rgba(0, 0, 0, 0.035);
   --input-border-color: rgba(0, 0, 0, 0.08);
   --input-border-color-hover: rgba(0, 0, 0, 0.15);
@@ -55,10 +55,10 @@
   --z-tooltip: 200;
 }
 
-/* === Theme: Light (Default - Claude.ai exact) === */
+/* === Theme: Light (Default) === */
 :root,
 :root[data-theme="light"] {
-  /* Backgrounds - Claude.ai cream/warm */
+  /* Backgrounds - Cream/warm */
   --bg-primary: #F5F5F0;
   --bg-secondary: #F5F5F0;
   --bg-tertiary: #eae8e1;
@@ -83,7 +83,7 @@
   --border-hover: rgba(0, 0, 0, 0.15);
   --border-glass: rgba(0, 0, 0, 0.06);
 
-  /* Accents - Claude.ai terracotta #ae5630 */
+  /* Accents - Terracotta #ae5630 */
   --accent: #ae5630;
   --accent-hover: #c4633a;
   --accent-fg: #ffffff;
@@ -112,9 +112,9 @@
   --scrollbar-thumb: #D8D4CF;
 }
 
-/* === Theme: Dark (Claude.ai warm dark) === */
+/* === Theme: Dark (Warm dark) === */
 :root[data-theme="dark"] {
-  /* Backgrounds - Claude.ai warm dark #2b2a27 */
+  /* Backgrounds - Warm dark #2b2a27 */
   --bg-primary: #2b2a27;
   --bg-secondary: #2b2a27;
   --bg-tertiary: #393937;

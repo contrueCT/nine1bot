@@ -53,7 +53,7 @@ const categories = [
   },
   {
     id: 'choice',
-    label: "Claude's choice",
+    label: "Recommended",
     icon: Sparkles,
     suggestions: [
       'Surprise me with something interesting',
