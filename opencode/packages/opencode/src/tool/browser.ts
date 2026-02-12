@@ -1,6 +1,7 @@
 import z from "zod"
 import { Tool } from "./tool"
 import { getBridgeServer } from "../browser/bridge"
+import { Identifier } from "../id/id"
 import type { BrowserTarget } from "browser-mcp-server"
 
 function requireBridge() {
@@ -174,9 +175,12 @@ Parameters:
       metadata: {},
       attachments: [
         {
+          id: Identifier.ascending("part"),
+          sessionID: ctx.sessionID,
+          messageID: ctx.messageID,
           type: "file" as const,
-          mimeType: result.mimeType,
-          data: result.data,
+          mime: result.mimeType,
+          url: `data:${result.mimeType};base64,${result.data}`,
         },
       ],
     }

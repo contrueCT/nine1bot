@@ -455,23 +455,32 @@ export namespace MessageV2 {
           return attachment.url.startsWith("data:") && attachment.url.includes(",")
         })
 
-        // Filter to only AI model supported MIME types (images and PDF)
-        const supportedAttachments = dataUrlAttachments.filter((a) =>
+        // Filter to supported MIME types (images and PDF)
+        const mimeSupported = dataUrlAttachments.filter((a) =>
           a.mime.startsWith("image/") || a.mime === "application/pdf"
         )
 
-        // Count unsupported attachments (file:// URLs and unsupported MIME types)
-        const unsupportedCount = allAttachments.length - supportedAttachments.length
+        // Filter by model capabilities (e.g. skip images for non-vision models)
+        const supportedAttachments = mimeSupported.filter((a) => {
+          if (a.mime.startsWith("image/")) return model.capabilities.input.image
+          if (a.mime === "application/pdf") return model.capabilities.input.pdf
+          return false
+        })
 
-        // Generate text description for unsupported/non-inline attachments
-        const unsupportedText = unsupportedCount > 0
-          ? `\n\n[${unsupportedCount} file(s) sent to user for download - content not available for analysis]`
-          : ""
+        // Count filtered attachments by reason
+        const otherCount = allAttachments.length - mimeSupported.length
+        const capabilityCount = mimeSupported.length - supportedAttachments.length
+
+        let extraText = ""
+        if (otherCount > 0)
+          extraText += `\n\n[${otherCount} file(s) not available for analysis]`
+        if (capabilityCount > 0)
+          extraText += `\n\n[${capabilityCount} file(s) omitted — current model does not support this input type]`
 
         return {
           type: "content",
           value: [
-            { type: "text", text: outputObject.text + unsupportedText },
+            { type: "text", text: outputObject.text + extraText },
             ...supportedAttachments.map((attachment) => ({
               type: "media",
               mediaType: attachment.mime,

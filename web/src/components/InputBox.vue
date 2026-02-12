@@ -69,33 +69,6 @@ function getCurrentModelName(): string {
   return props.currentModel || '选择模型'
 }
 
-// Detect model used in current session (from messages)
-const sessionModel = computed(() => {
-  if (!props.messages?.length) return null
-  // Check last assistant message for model info
-  const lastAssistant = [...props.messages].reverse().find(m => m.info.role === 'assistant')
-  if (lastAssistant?.info.providerID && lastAssistant?.info.modelID) {
-    return { providerID: lastAssistant.info.providerID, modelID: lastAssistant.info.modelID }
-  }
-  // Fallback: check user messages
-  const lastUser = [...props.messages].reverse().find(m => m.info.role === 'user' && m.info.model)
-  if (lastUser?.info.model) return lastUser.info.model
-  return null
-})
-
-const isReadonlyModel = computed(() => !!sessionModel.value)
-
-function getModelNameById(providerId: string, modelId: string): string {
-  if (props.providers) {
-    const provider = props.providers.find(p => p.id === providerId)
-    if (provider) {
-      const model = provider.models.find(m => m.id === modelId)
-      if (model) return model.name || model.id
-    }
-  }
-  return modelId || '未知模型'
-}
-
 function selectModel(providerId: string, modelId: string) {
   emit('select-model', providerId, modelId)
   showModelDropdown.value = false
@@ -369,14 +342,8 @@ function formatSize(bytes: number): string {
 
         <!-- Right: Model selector + Send -->
         <div class="toolbar-right">
-          <!-- Model Display: readonly for sessions with messages -->
-          <div class="model-selector-inline" v-if="isReadonlyModel && sessionModel">
-            <span class="model-display-readonly">
-              {{ getModelNameById(sessionModel.providerID, sessionModel.modelID) }}
-            </span>
-          </div>
-          <!-- Model Selector: interactive for new sessions -->
-          <div class="model-selector-inline" ref="modelDropdownRef" v-else-if="providers && providers.length > 0">
+          <!-- Model Selector -->
+          <div class="model-selector-inline" ref="modelDropdownRef" v-if="providers && providers.length > 0">
             <button
               class="model-trigger-inline"
               @click.stop="showModelDropdown = !showModelDropdown"
@@ -879,16 +846,6 @@ function formatSize(bytes: number): string {
 
 .check-icon {
   color: var(--accent);
-}
-
-.model-display-readonly {
-  padding: 4px 10px;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-weight: 500;
-  opacity: 0.6;
-  cursor: default;
-  white-space: nowrap;
 }
 
 /* Send / Abort buttons */
