@@ -86,6 +86,14 @@ export function useSession() {
     currentSession.value = null
     currentDirectory.value = directory || '.'
     messages.value = []
+    // 重置所有会话级状态，防止旧会话的状态残留
+    streamingMessage.value = null
+    pendingQuestions.value = []
+    pendingPermissions.value = []
+    sessionError.value = null
+    retryInfo.value = null
+    todoItems.value = []
+    seenUserMessageIds.clear()
   }
 
   /**
@@ -154,6 +162,14 @@ export function useSession() {
       isLoading.value = true
       // 切换到已存在的会话，退出草稿模式
       isDraftSession.value = false
+      // 重置所有会话级状态，防止旧会话的状态残留
+      streamingMessage.value = null
+      pendingQuestions.value = []
+      pendingPermissions.value = []
+      sessionError.value = null
+      retryInfo.value = null
+      todoItems.value = []
+      seenUserMessageIds.clear()
       currentSession.value = session
       currentDirectory.value = session.directory
       messages.value = []  // Clear immediately to avoid flash of old content
@@ -271,6 +287,10 @@ export function useSession() {
         // 新消息创建
         if (properties.message) {
           const msg = properties.message as Message
+          // 防御性校验：跳过不属于当前会话的消息
+          if (msg.info.sessionID && currentSession.value && msg.info.sessionID !== currentSession.value.id) {
+            break
+          }
           streamingMessage.value = msg
           const msgId = msg.info.id
           const msgRole = msg.info.role
@@ -308,6 +328,10 @@ export function useSession() {
         // 消息更新 - 仅更新已存在的消息
         if (properties.info) {
           const info = properties.info
+          // 防御性校验：跳过不属于当前会话的消息
+          if (info.sessionID && currentSession.value && info.sessionID !== currentSession.value.id) {
+            break
+          }
           const index = messages.value.findIndex(m => m.info.id === info.id)
           if (index !== -1) {
             messages.value[index] = {
@@ -323,6 +347,10 @@ export function useSession() {
         // 部分更新（流式文本、工具调用等）
         if (properties.part) {
           const part = properties.part as MessagePart
+          // 防御性校验：跳过不属于当前会话的消息部分
+          if (part.sessionID && currentSession.value && part.sessionID !== currentSession.value.id) {
+            break
+          }
           const messageID = part.messageID
           if (messageID) {
             let messageIndex = messages.value.findIndex(m => m.info.id === messageID)
@@ -406,6 +434,10 @@ export function useSession() {
         // 会话状态变更（busy/retry/idle）
         if (properties?.status) {
           const status = properties.status
+          // 防御性校验：跳过不属于当前会话的状态事件
+          if (status.sessionID && currentSession.value && status.sessionID !== currentSession.value.id) {
+            break
+          }
           if (status.type === 'retry') {
             retryInfo.value = {
               attempt: status.attempt ?? 1,
@@ -420,6 +452,9 @@ export function useSession() {
 
       case 'session.error':
         // 会话错误（如模型不可用）
+        if (properties?.error?.sessionID && currentSession.value && properties.error.sessionID !== currentSession.value.id) {
+          break
+        }
         retryInfo.value = null
         if (properties?.error) {
           const error = properties.error
@@ -434,6 +469,9 @@ export function useSession() {
 
       case 'session.idle':
         // Note: session running state is handled by handleGlobalSSEEvent
+        if (properties?.sessionID && currentSession.value && properties.sessionID !== currentSession.value.id) {
+          break
+        }
         retryInfo.value = null
         break
 
@@ -493,8 +531,13 @@ export function useSession() {
         || event.properties?.status?.sessionID
         || event.properties?.error?.sessionID
 
+      // 草稿模式下没有当前会话，跳过所有会话级事件，防止其他会话的消息泄漏
+      if (!currentSession.value) {
+        return
+      }
+
       // Handle notifications for other sessions
-      if (sessionID && currentSession.value && sessionID !== currentSession.value.id) {
+      if (sessionID && sessionID !== currentSession.value.id) {
         // Show friendly notification when other session completes
         if (event.type === 'session.idle' || (event.type === 'session.status' && event.properties?.status?.type === 'idle')) {
           const session = sessions.value.find(s => s.id === sessionID)

@@ -149,7 +149,7 @@ function downloadFile(attachment: FileAttachment) {
   // If it's a file:// URL, convert to API download endpoint
   if (attachment.url.startsWith('file://')) {
     const filepath = attachment.url.slice(7) // Remove "file://"
-    downloadUrl = `/api/file/download?path=${encodeURIComponent(filepath)}`
+    downloadUrl = `/file/download?path=${encodeURIComponent(filepath)}`
   }
 
   const link = document.createElement('a')
