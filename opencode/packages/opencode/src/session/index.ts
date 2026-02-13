@@ -399,6 +399,46 @@ export namespace Session {
         messageID: input.messageID,
         partID: input.partID,
       })
+
+      // 检查消息是否还有剩余 parts，如果没有则清理幽灵消息
+      const remainingParts = await MessageV2.parts(input.messageID)
+      if (remainingParts.length === 0) {
+        let msgInfo: MessageV2.Info | undefined
+        try {
+          msgInfo = await Storage.read<MessageV2.Info>(["message", input.sessionID, input.messageID])
+        } catch {}
+
+        // 移除无 parts 的幽灵消息 info
+        await Storage.remove(["message", input.sessionID, input.messageID])
+        Bus.publish(MessageV2.Event.Removed, {
+          sessionID: input.sessionID,
+          messageID: input.messageID,
+        })
+
+        // 如果是 user 消息，级联删除其配对的 assistant 消息（防止消息交替断裂）
+        if (msgInfo?.role === "user") {
+          const allMessages = await Array.fromAsync(await Storage.list(["message", input.sessionID]))
+          for (const item of allMessages) {
+            try {
+              const info = await Storage.read<MessageV2.Info>(item)
+              if (info.role === "assistant" && (info as MessageV2.Assistant).parentID === input.messageID) {
+                // 删除 assistant 的所有 parts
+                const asstParts = await MessageV2.parts(info.id)
+                for (const part of asstParts) {
+                  await Storage.remove(["part", info.id, part.id])
+                }
+                // 删除 assistant 消息 info
+                await Storage.remove(["message", input.sessionID, info.id])
+                Bus.publish(MessageV2.Event.Removed, {
+                  sessionID: input.sessionID,
+                  messageID: info.id,
+                })
+              }
+            } catch {}
+          }
+        }
+      }
+
       return input.partID
     },
   )

@@ -38,6 +38,19 @@ export namespace SessionCompaction {
     return count > usable
   }
 
+  const CONTEXT_LENGTH_ERROR_PATTERNS = [
+    "context_length", "maximum context", "token limit", "too many tokens",
+    "input_too_long", "prompt is too long", "input tokens", "input is too long",
+    "request too large", "context window",
+  ]
+
+  export function isContextLengthError(error: { name: string; data?: any }): boolean {
+    if (!MessageV2.APIError.isInstance(error)) return false
+    if (error.data.statusCode !== 400 && error.data.statusCode !== 413) return false
+    const text = ((error.data.message || "") + " " + (error.data.responseBody || "")).toLowerCase()
+    return CONTEXT_LENGTH_ERROR_PATTERNS.some(p => text.includes(p))
+  }
+
   export const PRUNE_MINIMUM = 20_000
   export const PRUNE_PROTECT = 40_000
 
@@ -68,7 +81,12 @@ export namespace SessionCompaction {
             if (PRUNE_PROTECTED_TOOLS.includes(part.tool)) continue
 
             if (part.state.time.compacted) break loop
-            const estimate = Token.estimate(part.state.output)
+            let estimate = Token.estimate(part.state.output)
+            if (part.state.attachments?.length) {
+              for (const att of part.state.attachments) {
+                estimate += Token.estimate(att.url)
+              }
+            }
             total += estimate
             if (total > PRUNE_PROTECT) {
               pruned += estimate

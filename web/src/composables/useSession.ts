@@ -387,6 +387,22 @@ export function useSession() {
         // 消息完成
         break
 
+      case 'message.removed':
+        // 消息被完全删除（含级联删除配对的 assistant 消息）
+        if (properties?.messageID) {
+          const messageID = properties.messageID
+          const sessionID = properties.sessionID
+          // 防御性校验：跳过不属于当前会话的事件
+          if (sessionID && currentSession.value && sessionID !== currentSession.value.id) {
+            break
+          }
+          const index = messages.value.findIndex(m => m.info.id === messageID)
+          if (index !== -1) {
+            messages.value.splice(index, 1)
+          }
+        }
+        break
+
       case 'question.asked':
         // 新问题请求
         if (properties) {
@@ -709,14 +725,13 @@ export function useSession() {
     try {
       await api.deleteMessagePart(currentSession.value.id, messageId, partId)
 
-      // 从本地消息列表中删除
+      // 乐观更新：仅移除 part
       const msgIndex = messages.value.findIndex(m => m.info.id === messageId)
       if (msgIndex !== -1) {
         messages.value[msgIndex].parts = messages.value[msgIndex].parts.filter(p => p.id !== partId)
-        // 如果消息没有任何部分了，也删除消息
-        if (messages.value[msgIndex].parts.length === 0) {
-          messages.value.splice(msgIndex, 1)
-        } else {
+        // 当所有 parts 被移除后，后端会级联删除消息及其配对的 assistant
+        // 通过 SSE message.removed 事件自动从本地列表中移除
+        if (messages.value[msgIndex].parts.length > 0) {
           // 触发响应式更新
           messages.value[msgIndex] = { ...messages.value[msgIndex] }
         }

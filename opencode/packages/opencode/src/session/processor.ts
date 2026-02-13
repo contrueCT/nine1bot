@@ -438,6 +438,11 @@ Possible questions to ask:
               stack: JSON.stringify(e.stack),
             })
             const error = MessageV2.fromError(e, { providerID: input.model.providerID })
+            if (SessionCompaction.isContextLengthError(error)) {
+              log.info("context length error, triggering compaction", { sessionID: input.sessionID })
+              needsCompaction = true
+              break
+            }
             const retry = SessionRetry.retryable(error)
             if (retry !== undefined) {
               attempt++

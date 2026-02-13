@@ -533,6 +533,31 @@ export namespace SessionPrompt {
         continue
       }
 
+      // pre-flight context window check: estimate token count before sending
+      if (model.limit.context > 0) {
+        const modelMessages = MessageV2.toModelMessages(clone(msgs), model)
+        let charCount = 0
+        for (const msg of modelMessages) {
+          if (typeof msg.content === "string") {
+            charCount += msg.content.length
+          } else if (Array.isArray(msg.content)) {
+            for (const part of msg.content) {
+              if ("text" in part && typeof part.text === "string") charCount += part.text.length
+              if ("data" in part && typeof part.data === "string") charCount += part.data.length
+              if ("input" in part && part.input) charCount += JSON.stringify(part.input).length
+            }
+          }
+        }
+        const estimatedTokens = Math.ceil(charCount / 4 * 1.1)
+        const outputReserve = Math.min(model.limit.output, OUTPUT_TOKEN_MAX) || OUTPUT_TOKEN_MAX
+        const usable = model.limit.input || model.limit.context - outputReserve
+        if (estimatedTokens > usable) {
+          log.info("pre-flight overflow detected", { estimatedTokens, usable, sessionID })
+          await SessionCompaction.prune({ sessionID })
+          msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
+        }
+      }
+
       // normal processing
       const agent = await Agent.get(lastUser.agent)
       const maxSteps = agent.steps ?? Infinity
