@@ -38,7 +38,7 @@ Supports programming, file management, information retrieval, content creation, 
 - **User Preferences** - Record personal preferences, AI follows your habits across all sessions
 - **Terminal History** - Scrollback history support for terminal output
 - **Tunnel Support** - Built-in ngrok and NATAPP support for public access
-- **Password Protection** - Optional web access password protection
+- **Password Protection** - Optional web access password protection (username: `nine1bot`)
 - **Parallel Sessions** - Run up to 10 AI sessions simultaneously
 - **Hot Reload** - Skills and MCP config changes take effect automatically without restart
 - **Ready to Use** - Download and run, includes Bun runtime
@@ -252,7 +252,7 @@ Config file locations:
     "openBrowser": true,
   },
 
-  // Password protection
+  // Password protection (username is fixed as "nine1bot")
   "auth": {
     "enabled": true,
     "password": "your-password",
