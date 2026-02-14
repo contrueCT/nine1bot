@@ -16,15 +16,18 @@ const emit = defineEmits<{
 
 const {
   activeTab,
-  providers,
+  filteredProviders,
   currentProvider,
   currentModel,
+  defaultProvider,
+  defaultModel,
   loadingProviders,
   mcpServers,
   loadingMcp,
   skills,
   loadingSkills,
   selectModel,
+  setDefaultModel,
   connectMcp,
   disconnectMcp,
   addMcp,
@@ -152,11 +155,14 @@ function handleOverlayClick(e: MouseEvent) {
         <!-- Models Tab -->
         <ModelSelector
           v-if="activeTab === 'models'"
-          :providers="providers"
+          :providers="filteredProviders"
           :currentProvider="currentProvider"
           :currentModel="currentModel"
+          :defaultProvider="defaultProvider"
+          :defaultModel="defaultModel"
           :loading="loadingProviders"
           @select="selectModel"
+          @set-default="setDefaultModel"
         />
 
         <!-- MCP Tab -->

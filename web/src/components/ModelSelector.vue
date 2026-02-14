@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import type { Provider } from '../api/client'
 
-defineProps<{
+const props = defineProps<{
   providers: Provider[]
   currentProvider: string
   currentModel: string
+  defaultProvider: string
+  defaultModel: string
   loading: boolean
 }>()
 
 const emit = defineEmits<{
   select: [providerId: string, modelId: string]
+  'set-default': [providerId: string, modelId: string]
 }>()
+
+function isDefault(providerId: string, modelId: string) {
+  return props.defaultProvider === providerId && props.defaultModel === modelId
+}
 </script>
 
 <template>
@@ -66,9 +73,19 @@ const emit = defineEmits<{
               </div>
             </div>
             <div class="model-info">
-              <div class="model-name">{{ model.name || model.id }}</div>
+              <div class="model-name-row">
+                <span class="model-name">{{ model.name || model.id }}</span>
+                <span v-if="isDefault(provider.id, model.id)" class="badge-default">默认</span>
+              </div>
               <div class="model-meta text-xs text-muted">
                 <span v-if="model.contextWindow">{{ (model.contextWindow / 1000).toFixed(0) }}K context</span>
+                <button
+                  v-if="provider.authenticated && !isDefault(provider.id, model.id)"
+                  class="set-default-btn"
+                  @click.stop="emit('set-default', provider.id, model.id)"
+                >
+                  设为默认
+                </button>
               </div>
             </div>
           </div>
@@ -211,13 +228,46 @@ const emit = defineEmits<{
   min-width: 0;
 }
 
+.model-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
 .model-name {
   font-weight: 500;
-  margin-bottom: 2px;
+}
+
+.badge-default {
+  font-size: 10px;
+  padding: 1px 6px;
+  background: var(--accent);
+  color: white;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  line-height: 1.4;
+  flex-shrink: 0;
 }
 
 .model-meta {
   display: flex;
+  align-items: center;
   gap: var(--space-sm);
+}
+
+.set-default-btn {
+  font-size: 11px;
+  padding: 0 4px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: color var(--transition-fast);
+}
+
+.set-default-btn:hover {
+  color: var(--accent);
 }
 </style>

@@ -774,6 +774,22 @@ export const providerApi = {
   }
 }
 
+export const nine1botConfigApi = {
+  // 获取 Nine1Bot 默认配置（nine1bot.config.jsonc）
+  async get(): Promise<{ model?: string; small_model?: string; configPath: string }> {
+    const res = await fetchWithTimeout(`${BASE_URL}/config/nine1bot`)
+    return res.json()
+  },
+  // 更新 Nine1Bot 默认配置
+  async update(config: { model?: string; small_model?: string }): Promise<void> {
+    await fetchWithTimeout(`${BASE_URL}/config/nine1bot`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    })
+  }
+}
+
 export const configApi = {
   // 获取当前配置
   async get(): Promise<Config> {

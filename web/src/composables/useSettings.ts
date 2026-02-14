@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { providerApi, configApi, mcpApi, skillApi, authApi } from '../api/client'
+import { providerApi, configApi, mcpApi, skillApi, authApi, nine1botConfigApi } from '../api/client'
 import type { Provider, McpServer, Skill, Config, McpConfig } from '../api/client'
 
 const showSettings = ref(false)
@@ -34,6 +34,10 @@ const loadingSkills = ref(false)
 // Config
 const config = ref<Config>({})
 
+// Nine1Bot 默认模型（持久化在 nine1bot.config.jsonc）
+const defaultProvider = ref<string>('')
+const defaultModel = ref<string>('')
+
 export function useSettings() {
   function openSettings() {
     showSettings.value = true
@@ -41,6 +45,7 @@ export function useSettings() {
     loadMcpServers()
     loadSkills()
     loadConfig()
+    loadNine1botConfig()
   }
 
   function closeSettings() {
@@ -218,6 +223,34 @@ export function useSettings() {
     }
   }
 
+  async function loadNine1botConfig() {
+    try {
+      const data = await nine1botConfigApi.get()
+      const modelStr = data.model || ''
+      if (modelStr.includes('/')) {
+        const [provider, ...modelParts] = modelStr.split('/')
+        defaultProvider.value = provider
+        defaultModel.value = modelParts.join('/')
+      } else {
+        defaultProvider.value = ''
+        defaultModel.value = modelStr
+      }
+    } catch (e) {
+      console.error('Failed to load nine1bot config:', e)
+    }
+  }
+
+  async function setDefaultModel(providerId: string, modelId: string) {
+    try {
+      const modelStr = `${providerId}/${modelId}`
+      await nine1botConfigApi.update({ model: modelStr })
+      defaultProvider.value = providerId
+      defaultModel.value = modelId
+    } catch (e) {
+      console.error('Failed to set default model:', e)
+    }
+  }
+
   // 过滤并排序后的供应商
   const filteredProviders = computed(() => {
     const query = providerSearchQuery.value.toLowerCase().trim()
@@ -230,8 +263,11 @@ export function useSettings() {
       )
     }
 
-    // 按优先级排序
+    // 已认证的供应商排前面，同认证状态内按优先级排序
     return [...list].sort((a, b) => {
+      if (a.authenticated !== b.authenticated) {
+        return a.authenticated ? -1 : 1
+      }
       const pa = PROVIDER_PRIORITY[a.id] ?? 99
       const pb = PROVIDER_PRIORITY[b.id] ?? 99
       if (pa !== pb) return pa - pb
@@ -247,6 +283,8 @@ export function useSettings() {
     providerSearchQuery,
     currentProvider,
     currentModel,
+    defaultProvider,
+    defaultModel,
     loadingProviders,
     mcpServers,
     loadingMcp,
@@ -257,9 +295,11 @@ export function useSettings() {
     closeSettings,
     loadProviders,
     loadConfig,
+    loadNine1botConfig,
     loadMcpServers,
     loadSkills,
     selectModel,
+    setDefaultModel,
     connectMcp,
     disconnectMcp,
     addMcp,
