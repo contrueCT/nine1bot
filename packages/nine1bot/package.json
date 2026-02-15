@@ -1,6 +1,6 @@
 {
   "name": "nine1bot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI coding assistant with web interface and tunnel support",
   "type": "module",
   "bin": {
