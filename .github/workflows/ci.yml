@@ -25,6 +25,7 @@ jobs:
           cd opencode && bun install --frozen-lockfile || bun install
           cd ../packages/nine1bot && bun install --frozen-lockfile || bun install
           cd ../../web && bun install --frozen-lockfile || bun install
+          cd ../packages/browser-extension && bun install --frozen-lockfile || bun install
 
       - name: Typecheck opencode
         # TODO: Fix TypeScript errors inherited from upstream opencode
@@ -91,6 +92,16 @@ jobs:
       - name: Build web frontend
         run: |
           cd web
+          bun run build
+
+      - name: Install dependencies (browser-extension)
+        run: |
+          cd packages/browser-extension
+          bun install --frozen-lockfile || bun install
+
+      - name: Build browser extension
+        run: |
+          cd packages/browser-extension
           bun run build
 
       - name: Compile and package

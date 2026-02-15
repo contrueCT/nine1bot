@@ -2,18 +2,19 @@
 
 [简体中文](./README.zh.md)
 
-A versatile personal AI assistant featuring a web interface and tunnel support for remote access.
+A lightweight, versatile personal AI assistant featuring a web interface and tunnel support for remote access.
+
+The convenience of Claude / ChatGPT web apps, with the power of Claude Desktop.
 
 Supports programming, file management, information retrieval, content creation, and more through natural language interaction.
 
-> **Security Warning**
->
-> Nine1Bot can execute system commands and read/write files. Security is not fully guaranteed yet:
->
-> - Avoid running complex tasks on devices with important data
-> - Don't let AI access sensitive files or credentials
-> - Consider using in a virtual machine or test environment
-> - Back up important data regularly
+**Zero dependencies** - download, extract, and run. No runtime or package manager required.
+
+## Screenshots
+
+<!-- Add your screenshots here, for example: -->
+<!-- ![Chat Interface](./docs/images/chat.png) -->
+<!-- ![Settings](./docs/images/settings.png) -->
 
 ## Features
 
@@ -38,10 +39,34 @@ Supports programming, file management, information retrieval, content creation, 
 - **User Preferences** - Record personal preferences, AI follows your habits across all sessions
 - **Terminal History** - Scrollback history support for terminal output
 - **Tunnel Support** - Built-in ngrok and NATAPP support for public access
+- **Browser Control** - Built-in browser automation via Chrome / Edge extension
 - **Password Protection** - Optional web access password protection (username: `nine1bot`)
 - **Parallel Sessions** - Run up to 10 AI sessions simultaneously
 - **Hot Reload** - Skills and MCP config changes take effect automatically without restart
 - **Ready to Use** - Download and run, includes Bun runtime
+
+### Browser Control
+
+Nine1Bot has built-in browser automation with two modes: control the user's own browser via an extension (Chrome / Edge and other Chromium-based browsers), or launch a dedicated AI-controlled browser process. The AI can navigate pages, fill forms, take screenshots, click elements, and more.
+
+**Setup:**
+
+1. Open your browser's extension management page:
+   - Chrome: `chrome://extensions/`
+   - Edge: `edge://extensions/`
+2. Enable **Developer mode** (top-right toggle)
+3. Click **Load unpacked** and select the `browser-extension` folder from your Nine1Bot installation
+4. Enable browser control in your config:
+
+```jsonc
+{
+  "browser": {
+    "enabled": true
+  }
+}
+```
+
+> **Note**: The extension uses sensitive permissions (debugger, scripting, all_urls) for full browser automation. Only use in trusted environments.
 
 ### Built-in Skills
 
@@ -58,6 +83,8 @@ Nine1Bot includes several built-in skills, invoked via `/skill-name`:
 
 You can also add custom Skills in `~/.config/nine1bot/skills/`.
 
+> **Tip**: You can install MCP servers and custom Skills simply by telling the AI in chat. Just describe what you need or paste a relevant URL, and the AI will handle the installation automatically.
+
 ### Configuration Compatibility
 
 Nine1Bot supports integrating configurations from:
@@ -67,7 +94,6 @@ Nine1Bot supports integrating configurations from:
 | MCP Servers        | ✅       | ✅          | Can inherit MCP config from OpenCode and Claude Code               |
 | Skills             | ✅       | ✅          | Can inherit custom skills from OpenCode and Claude Code            |
 | Provider Auth      | ✅       | ❌          | Can inherit API Keys and OAuth from OpenCode                       |
-| Official Providers | ❌       | -           | OpenCode official providers not supported (requires authorization) |
 
 Control inheritance through config:
 
@@ -93,7 +119,15 @@ Download from [Releases](https://github.com/contrueCT/nine1bot/releases):
 | macOS    | Apple Silicon | `nine1bot-darwin-arm64-vX.X.X.tar.gz` |
 | Windows  | x64           | `nine1bot-windows-x64-vX.X.X.zip`     |
 
-**Linux / macOS:**
+**macOS (Homebrew recommended):**
+
+```bash
+brew install contrueCT/nine1bot/nine1bot
+```
+
+Update with `brew upgrade nine1bot`, uninstall with `brew uninstall nine1bot`.
+
+**Linux:**
 
 ```bash
 # Download and extract (Linux x64 example)
@@ -364,31 +398,6 @@ cd opencode && bun install && cd ..
 cd packages/nine1bot && bun install && cd ../..
 cd web && bun install && bun run build && cd ..
 ```
-
-## Uninstall
-
-### Release Installation
-
-Simply delete the extracted directory.
-
-### Script Installation
-
-```bash
-~/.nine1bot/scripts/uninstall.sh
-```
-
-Or manually:
-
-```bash
-rm -rf ~/.nine1bot
-rm ~/.local/bin/nine1bot
-```
-
-## System Requirements
-
-- **OS**: Linux, macOS, Windows
-- **Memory**: 4GB+ recommended
-- **Network**: Access to AI Provider APIs required
 
 ## FAQ
 

@@ -243,12 +243,12 @@ export async function runSetup(): Promise<void> {
     }
   }
 
-  // 保存配置
+  // 保存配置到全局配置目录
   const spinner = prompts.spinner()
   spinner.start('Saving configuration...')
 
   try {
-    const configPath = getDefaultConfigPath()
+    const configPath = getGlobalConfigPath()
     await saveConfig(config, configPath)
     spinner.stop(`Configuration saved to ${configPath}`)
   } catch (error: any) {

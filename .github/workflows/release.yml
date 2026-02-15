@@ -69,6 +69,16 @@ jobs:
           cd web
           bun run build
 
+      - name: Install dependencies (browser-extension)
+        run: |
+          cd packages/browser-extension
+          bun install --frozen-lockfile || bun install
+
+      - name: Build browser extension
+        run: |
+          cd packages/browser-extension
+          bun run build
+
       - name: Compile and package
         shell: bash
         run: |

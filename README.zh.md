@@ -2,17 +2,19 @@
 
 [English](./README.md)
 
-多功能个人 AI 助手，提供 Web 界面和隧道支持，可远程访问。
+轻量级多功能个人 AI 助手，提供 Web 界面和隧道支持，可远程访问。
+
+实现与Claude、ChatGPT网页端同等的便捷体验及Claude Desktop同等的强大能力
 
 支持编程开发、文件管理、信息检索、内容创作等多种任务，通过自然语言交互完成复杂操作。
 
-> **安全警告**
->
-> Nine1Bot 具备执行系统命令、读写文件等能力。目前的安全性尚未得到完全保障，请注意：
-> - 避免在存储重要数据的设备上执行复杂任务
-> - 不要让 AI 访问敏感文件或凭据
-> - 建议在虚拟机或测试环境中使用
-> - 定期备份重要数据
+**无需安装任何依赖** - 下载解压即可运行，无需运行时或包管理器。
+
+## 截图
+
+<!-- 在这里添加截图，例如： -->
+<!-- ![聊天界面](./docs/images/chat.png) -->
+<!-- ![设置页面](./docs/images/settings.png) -->
 
 ## 功能特点
 
@@ -37,10 +39,34 @@
 - **用户偏好** - 记录个人偏好，AI 会在所有会话中遵循你的习惯
 - **终端历史** - 支持终端输出的滚动回溯查看
 - **隧道支持** - 内置 ngrok 和 NATAPP 支持，可从公网访问
+- **浏览器控制** - 内置浏览器自动化功能，通过 Chrome / Edge 扩展实现
 - **密码保护** - 可选的 Web 访问密码保护（用户名固定为 `nine1bot`）
 - **并行会话** - 支持同时运行至多10个 AI 会话
 - **热更新** - Skills 和 MCP 配置修改后自动生效，无需重启
 - **开箱即用** - 下载即可运行，内置 Bun 运行时
+
+### 浏览器控制
+
+Nine1Bot 内置浏览器自动化功能，支持两种模式：通过浏览器扩展控制用户自己的浏览器（支持 Chrome、Edge 及其他 Chromium 内核浏览器），或启动 AI 独立的浏览器进程。AI 可以导航页面、填写表单、截图、点击元素等。
+
+**安装步骤：**
+
+1. 打开浏览器扩展管理页面：
+   - Chrome：`chrome://extensions/`
+   - Edge：`edge://extensions/`
+2. 启用右上角的**开发者模式**
+3. 点击**加载已解压的扩展程序**，选择 Nine1Bot 安装目录中的 `browser-extension` 文件夹
+4. 在配置文件中启用浏览器控制：
+
+```jsonc
+{
+  "browser": {
+    "enabled": true
+  }
+}
+```
+
+> **注意**：浏览器扩展使用敏感权限（debugger、scripting、all_urls）来实现完整的浏览器自动化。请仅在可信环境中使用。
 
 ### 内置 Skills
 
@@ -57,6 +83,8 @@ Nine1Bot 内置了多个实用技能，通过 `/技能名` 调用：
 
 你也可以在 `~/.config/nine1bot/skills/` 添加自定义 Skills。
 
+> **提示**：你可以直接在对话中告诉 AI 需要安装的 MCP 服务器或自定义 Skills，只需描述需求或粘贴相关网址，AI 会自动完成安装配置。
+
 ### 配置兼容性
 
 Nine1Bot 支持集成以下配置：
@@ -66,7 +94,6 @@ Nine1Bot 支持集成以下配置：
 | MCP 服务器 | ✅ | ✅ | 可继承 OpenCode 和 Claude Code 的 MCP 配置 |
 | Skills 技能 | ✅ | ✅ | 可继承 OpenCode 和 Claude Code 的自定义技能 |
 | 服务商认证 | ✅ | ❌ | 可继承 OpenCode 的 API Key 和 OAuth 认证 |
-| 官方服务商 | ❌ | - | 不支持 OpenCode 官方服务商（需要官方授权） |
 
 可通过配置文件控制是否继承这些配置：
 
@@ -92,7 +119,15 @@ Nine1Bot 支持集成以下配置：
 | macOS | Apple Silicon | `nine1bot-darwin-arm64-vX.X.X.tar.gz` |
 | Windows | x64 | `nine1bot-windows-x64-vX.X.X.zip` |
 
-**Linux / macOS:**
+**macOS（推荐使用 Homebrew）：**
+
+```bash
+brew install contrueCT/nine1bot/nine1bot
+```
+
+更新使用 `brew upgrade nine1bot`，卸载使用 `brew uninstall nine1bot`。
+
+**Linux：**
 
 ```bash
 # 下载并解压（以 Linux x64 为例）
@@ -103,7 +138,7 @@ cd nine1bot-linux-x64
 ./nine1bot
 ```
 
-**Windows:**
+**Windows：**
 
 1. 下载 `nine1bot-windows-x64-vX.X.X.zip`
 2. 解压到任意目录
@@ -359,31 +394,6 @@ cd opencode && bun install && cd ..
 cd packages/nine1bot && bun install && cd ../..
 cd web && bun install && bun run build && cd ..
 ```
-
-## 卸载
-
-### Release 安装方式
-
-直接删除解压的目录即可。
-
-### 脚本安装方式
-
-```bash
-~/.nine1bot/scripts/uninstall.sh
-```
-
-或手动删除：
-
-```bash
-rm -rf ~/.nine1bot
-rm ~/.local/bin/nine1bot
-```
-
-## 系统要求
-
-- **操作系统**：Linux、macOS、Windows
-- **内存**：建议 4GB 以上
-- **网络**：需要能访问 AI Provider API
 
 ## 常见问题
 

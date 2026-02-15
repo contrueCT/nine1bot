@@ -52,6 +52,15 @@ else
     exit 1
 fi
 
+# 3.5 复制浏览器扩展
+echo "Copying browser extension..."
+if [ -d "$PROJECT_ROOT/packages/browser-extension/dist" ]; then
+    mkdir -p "$BUILD_DIR/browser-extension"
+    cp -r "$PROJECT_ROOT/packages/browser-extension/dist/"* "$BUILD_DIR/browser-extension/"
+else
+    echo "WARNING: browser-extension/dist not found. Skipping browser extension."
+fi
+
 # 4. 复制更新脚本
 echo "Copying update script..."
 mkdir -p "$BUILD_DIR/scripts"

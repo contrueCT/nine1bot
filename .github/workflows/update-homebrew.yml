@@ -78,6 +78,7 @@ jobs:
               libexec.install "bin"
               libexec.install "skills"
               libexec.install "web"
+              libexec.install "browser-extension"
               libexec.install "scripts"
             end
 
@@ -90,6 +91,9 @@ jobs:
 
                 配置向导:
                   nine1bot setup
+
+                浏览器扩展:
+                  #{libexec}/browser-extension
 
                 更多帮助:
                   nine1bot --help
