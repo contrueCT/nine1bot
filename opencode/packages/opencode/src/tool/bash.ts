@@ -5,6 +5,7 @@ import path from "path"
 import DESCRIPTION from "./bash.txt"
 import { Log } from "../util/log"
 import { Instance } from "../project/instance"
+import { ProjectEnvironment } from "../project/environment"
 import { Flag } from "../flag/flag"
 import { Shell } from "../shell/shell"
 
@@ -75,6 +76,7 @@ export const BashTool = Tool.define("bash", async () => {
         cwd,
         env: {
           ...process.env,
+          ...(await ProjectEnvironment.getAll(Instance.project.id)),
         },
         stdio: ["ignore", "pipe", "pipe"],
         detached: process.platform !== "win32",

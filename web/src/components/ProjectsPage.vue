@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Plus, Search, FolderOpen, Clock, ArrowLeft, MessageSquare, Save, Pencil, Check, X, Folder, Trash2, Globe, FolderMinus, EllipsisVertical } from 'lucide-vue-next'
-import type { Session } from '../api/client'
+import { Plus, Search, FolderOpen, Clock, ArrowLeft, MessageSquare, Save, Pencil, Check, X, Folder, Trash2, Globe, EllipsisVertical, Upload } from 'lucide-vue-next'
+import { projectApi, type Session, type ProjectEnvironmentResponse, type ProjectSharedFile } from '../api/client'
 import type { ProjectInfo } from './Sidebar.vue'
 import DirectoryBrowser from './DirectoryBrowser.vue'
 
@@ -13,7 +13,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   selectProject: [projectId: string]
   updateProject: [projectId: string, updates: { name?: string; instructions?: string }]
-  selectSession: [sessionId: string]
+  selectSession: [session: Session]
   newSession: [projectId: string]
   createProject: [name: string, instructions: string, directory?: string]
   deleteProject: [projectId: string]
@@ -21,6 +21,8 @@ const emit = defineEmits<{
   deleteSession: [sessionId: string]
   close: []
 }>()
+
+const ENV_KEY_REGEX = /^[A-Z_][A-Z0-9_]*$/
 
 // Search
 const searchQuery = ref('')
@@ -47,8 +49,16 @@ const instructions = ref('')
 const isSaving = ref(false)
 const sessions = ref<Session[]>([])
 const isLoadingSessions = ref(false)
+const environment = ref<ProjectEnvironmentResponse>({ keys: [], variables: {} })
+const envKey = ref('')
+const envValue = ref('')
+const envError = ref('')
+const isSavingEnv = ref(false)
+const sharedFiles = ref<ProjectSharedFile[]>([])
+const isLoadingSharedFiles = ref(false)
+const isUploadingSharedFile = ref(false)
+const sharedFileInput = ref<HTMLInputElement | null>(null)
 
-// Filtered projects (stub — props.projects will be empty until backend re-implementation)
 const filteredProjects = computed(() => {
   if (!searchQuery.value.trim()) return props.projects
   const q = searchQuery.value.toLowerCase()
@@ -60,16 +70,61 @@ const filteredProjects = computed(() => {
 })
 
 // Watch current project changes for detail view
-watch(() => props.currentProject, (project) => {
-  if (project) {
+watch(
+  () => props.currentProject,
+  async (project) => {
+    if (!project) {
+      instructions.value = ''
+      editName.value = ''
+      sessions.value = []
+      environment.value = { keys: [], variables: {} }
+      sharedFiles.value = []
+      return
+    }
+
     instructions.value = project.instructions || ''
     editName.value = project.name || ''
+    await Promise.all([loadSessions(project.id), loadEnvironment(project.id), loadSharedFiles(project.id)])
+  },
+  { immediate: true },
+)
+
+async function loadSessions(projectId: string) {
+  isLoadingSessions.value = true
+  try {
+    sessions.value = await projectApi.sessions(projectId, { roots: true })
+  } catch (error) {
+    console.error('Failed to load project sessions:', error)
+    sessions.value = []
+  } finally {
+    isLoadingSessions.value = false
   }
-}, { immediate: true })
+}
+
+async function loadEnvironment(projectId: string) {
+  try {
+    environment.value = await projectApi.getEnvironment(projectId)
+  } catch (error) {
+    console.error('Failed to load project environment:', error)
+    environment.value = { keys: [], variables: {} }
+  }
+}
+
+async function loadSharedFiles(projectId: string) {
+  isLoadingSharedFiles.value = true
+  try {
+    sharedFiles.value = await projectApi.listSharedFiles(projectId)
+  } catch (error) {
+    console.error('Failed to load shared files:', error)
+    sharedFiles.value = []
+  } finally {
+    isLoadingSharedFiles.value = false
+  }
+}
 
 function handleCreateProject() {
-  if (!newProjectName.value.trim()) return
-  emit('createProject', newProjectName.value.trim(), newProjectInstructions.value.trim(), newProjectDirectory.value || undefined)
+  if (!newProjectDirectory.value.trim()) return
+  emit('createProject', newProjectName.value.trim(), newProjectInstructions.value.trim(), newProjectDirectory.value)
   newProjectName.value = ''
   newProjectInstructions.value = ''
   newProjectDirectory.value = ''
@@ -117,12 +172,97 @@ async function saveInstructions() {
   }
 }
 
+async function saveEnvironmentVariable() {
+  if (!props.currentProject) return
+
+  const key = envKey.value.trim().toUpperCase()
+  const value = envValue.value
+  envError.value = ''
+
+  if (!ENV_KEY_REGEX.test(key)) {
+    envError.value = 'Key must match ^[A-Z_][A-Z0-9_]*$'
+    return
+  }
+
+  isSavingEnv.value = true
+  try {
+    await projectApi.setEnvironmentKey(props.currentProject.id, key, value)
+    envKey.value = ''
+    envValue.value = ''
+    await loadEnvironment(props.currentProject.id)
+  } catch (error) {
+    console.error('Failed to save environment variable:', error)
+    envError.value = 'Failed to save variable'
+  } finally {
+    isSavingEnv.value = false
+  }
+}
+
+async function deleteEnvironmentVariable(key: string) {
+  if (!props.currentProject) return
+  try {
+    await projectApi.deleteEnvironmentKey(props.currentProject.id, key)
+    await loadEnvironment(props.currentProject.id)
+  } catch (error) {
+    console.error('Failed to delete environment variable:', error)
+  }
+}
+
+function triggerSharedFileUpload() {
+  sharedFileInput.value?.click()
+}
+
+async function onSharedFilePicked(event: Event) {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file || !props.currentProject) return
+
+  const reader = new FileReader()
+  isUploadingSharedFile.value = true
+
+  reader.onload = async () => {
+    try {
+      const url = String(reader.result || '')
+      if (!url.startsWith('data:')) throw new Error('Invalid file payload')
+      await projectApi.uploadSharedFile(props.currentProject!.id, {
+        filename: file.name,
+        url,
+        mime: file.type || undefined,
+      })
+      await loadSharedFiles(props.currentProject!.id)
+    } catch (error) {
+      console.error('Failed to upload shared file:', error)
+    } finally {
+      isUploadingSharedFile.value = false
+      target.value = ''
+    }
+  }
+
+  reader.onerror = () => {
+    isUploadingSharedFile.value = false
+    target.value = ''
+  }
+
+  reader.readAsDataURL(file)
+}
+
+async function deleteSharedFile(relativePath: string) {
+  if (!props.currentProject) return
+  try {
+    await projectApi.deleteSharedFile(props.currentProject.id, relativePath)
+    await loadSharedFiles(props.currentProject.id)
+  } catch (error) {
+    console.error('Failed to delete shared file:', error)
+  }
+}
+
 function getProjectName(project: ProjectInfo): string {
-  return project.name || project.worktree?.split('/').pop() || project.id.slice(0, 8)
+  const normalized = (project.rootDirectory || project.worktree || '').replace(/\\/g, '/')
+  return project.name || normalized.split('/').pop() || project.id.slice(0, 8)
 }
 
 function getSessionTitle(session: Session): string {
-  return session.title || `会话 ${session.id.slice(0, 6)}`
+  return session.title || `浼氳瘽 ${session.id.slice(0, 6)}`
 }
 
 function formatTime(timestamp: number): string {
@@ -139,10 +279,6 @@ function formatTime(timestamp: number): string {
   return `Updated ${months} month${months > 1 ? 's' : ''} ago`
 }
 
-function isLocalProject(project: ProjectInfo): boolean {
-  return project.id.startsWith('local-')
-}
-
 function confirmDeleteProject() {
   if (props.currentProject) {
     emit('deleteProject', props.currentProject.id)
@@ -156,10 +292,36 @@ function getProjectDescription(project: ProjectInfo): string {
     : ''
 }
 
-// Effective prompt (stub — will be re-implemented with backend)
-const effectivePrompt = computed(() => '')
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
-// Session context menu handlers (stubs — no real data until backend)
+const effectivePrompt = computed(() => {
+  if (!props.currentProject) return ''
+  const lines: string[] = []
+
+  if (props.currentProject.instructions?.trim()) {
+    lines.push('Project instructions:')
+    lines.push(props.currentProject.instructions.trim())
+    lines.push('')
+  }
+
+  if (environment.value.keys.length > 0) {
+    lines.push('Environment variable keys:')
+    for (const key of environment.value.keys) lines.push(`- ${key}`)
+    lines.push('')
+  }
+
+  if (sharedFiles.value.length > 0) {
+    lines.push('Shared files:')
+    for (const file of sharedFiles.value) lines.push(`- ${file.relativePath}`)
+  }
+
+  return lines.join('\n').trim()
+})
+
 function openSessionContextMenu(e: MouseEvent, session: Session) {
   e.preventDefault()
   sessionContextMenu.value = { x: e.clientX, y: e.clientY, session }
@@ -187,11 +349,6 @@ function saveSessionRename(sessionId: string) {
 function cancelSessionRename() {
   isRenamingSession.value = null
   renameSessionTitle.value = ''
-}
-
-function contextMenuRemoveFromProject() {
-  // stub
-  closeSessionContextMenu()
 }
 
 function contextMenuDeleteSession() {
@@ -233,31 +390,11 @@ function contextMenuDeleteSession() {
             <div v-else class="project-name-display">
               <h2 class="project-name-text">{{ getProjectName(currentProject) }}</h2>
               <button class="icon-btn" @click="startEditName"><Pencil :size="14" /></button>
-              <button v-if="isLocalProject(currentProject)" class="icon-btn danger-icon" @click="showDeleteConfirm = true" title="删除项目">
+              <button class="icon-btn danger-icon" @click="showDeleteConfirm = true" title="Forget Project">
                 <Trash2 :size="14" />
               </button>
             </div>
-            <span class="project-path">{{ currentProject.worktree }}</span>
-          </div>
-        </div>
-
-        <!-- Instructions Section -->
-        <div class="project-section">
-          <div class="project-section-header">
-            <h3 class="project-section-title">Project Instructions</h3>
-          </div>
-          <p class="project-section-desc">These instructions will be shared across all sessions in this project.</p>
-          <textarea
-            v-model="instructions"
-            class="project-instructions-input"
-            placeholder="Enter instructions for this project... (e.g., 'You are a helpful assistant. Always respond in Chinese.')"
-            rows="6"
-          ></textarea>
-          <div class="project-section-actions">
-            <button class="btn btn-primary btn-sm" @click="saveInstructions" :disabled="isSaving">
-              <Save :size="14" />
-              <span>{{ isSaving ? 'Saving...' : 'Save' }}</span>
-            </button>
+            <span class="project-path">{{ currentProject.rootDirectory || currentProject.worktree }}</span>
           </div>
         </div>
 
@@ -284,7 +421,7 @@ function contextMenuDeleteSession() {
               v-for="session in sessions"
               :key="session.id"
               class="session-row"
-              @click="isRenamingSession !== session.id && emit('selectSession', session.id)"
+              @click="isRenamingSession !== session.id && emit('selectSession', session)"
               @contextmenu.prevent="openSessionContextMenu($event, session)"
             >
               <MessageSquare :size="14" class="session-row-icon" />
@@ -308,7 +445,7 @@ function contextMenuDeleteSession() {
                   {{ formatTime(session.time.updated) }}
                 </span>
                 <div class="session-row-actions" @click.stop>
-                  <button class="session-action-btn" @click="openSessionContextMenu($event, session)" title="更多操作">
+                  <button class="session-action-btn" @click="openSessionContextMenu($event, session)" title="More actions">
                     <EllipsisVertical :size="14" />
                   </button>
                 </div>
@@ -316,6 +453,80 @@ function contextMenuDeleteSession() {
             </div>
           </div>
         </div>
+
+        <!-- Instructions Section -->
+        <div class="project-section">
+          <div class="project-section-header">
+            <h3 class="project-section-title">Project Instructions</h3>
+          </div>
+          <p class="project-section-desc">These instructions will be shared across all sessions in this project.</p>
+          <textarea
+            v-model="instructions"
+            class="project-instructions-input"
+            placeholder="Enter instructions for this project... (e.g., 'You are a helpful assistant. Always respond in Chinese.')"
+            rows="6"
+          ></textarea>
+          <div class="project-section-actions">
+            <button class="btn btn-primary btn-sm" @click="saveInstructions" :disabled="isSaving">
+              <Save :size="14" />
+              <span>{{ isSaving ? 'Saving...' : 'Save' }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="project-section">
+          <div class="project-section-header">
+            <h3 class="project-section-title">Environment Variables</h3>
+          </div>
+          <p class="project-section-desc">Values are for execution only. Prompt only receives variable keys.</p>
+          <div class="env-form">
+            <input v-model="envKey" class="dialog-input" placeholder="KEY_NAME" />
+            <input v-model="envValue" class="dialog-input" placeholder="Value" />
+            <button class="btn btn-primary btn-sm" @click="saveEnvironmentVariable" :disabled="isSavingEnv">
+              <Plus :size="14" />
+              <span>{{ isSavingEnv ? 'Saving...' : 'Set' }}</span>
+            </button>
+          </div>
+          <p v-if="envError" class="env-error">{{ envError }}</p>
+
+          <div v-if="environment.keys.length === 0" class="sessions-empty">
+            No environment variables configured.
+          </div>
+          <div v-else class="shared-files-list">
+            <div v-for="key in environment.keys" :key="key" class="shared-file-row">
+              <span class="shared-file-name">{{ key }}</span>
+              <span class="shared-file-meta">configured</span>
+              <button class="session-action-btn danger" @click="deleteEnvironmentVariable(key)">
+                <Trash2 :size="14" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="project-section">
+          <div class="project-section-header">
+            <h3 class="project-section-title">Shared Files</h3>
+            <button class="btn btn-ghost btn-sm" @click="triggerSharedFileUpload" :disabled="isUploadingSharedFile">
+              <Upload :size="14" />
+              <span>{{ isUploadingSharedFile ? 'Uploading...' : 'Upload File' }}</span>
+            </button>
+          </div>
+          <p class="project-section-desc">Stored under <code>.nine1bot/projectfiles</code>.</p>
+          <input ref="sharedFileInput" type="file" style="display: none" @change="onSharedFilePicked" />
+
+          <div v-if="isLoadingSharedFiles" class="sessions-loading">Loading shared files...</div>
+          <div v-else-if="sharedFiles.length === 0" class="sessions-empty">No shared files yet.</div>
+          <div v-else class="shared-files-list">
+            <div v-for="file in sharedFiles" :key="file.relativePath" class="shared-file-row">
+              <span class="shared-file-name">{{ file.relativePath }}</span>
+              <span class="shared-file-meta">{{ formatBytes(file.size) }}</span>
+              <button class="session-action-btn danger" @click="deleteSharedFile(file.relativePath)">
+                <Trash2 :size="14" />
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- Effective Prompt Section -->
         <div v-if="effectivePrompt" class="project-section">
           <div class="project-section-header">
@@ -341,8 +552,8 @@ function contextMenuDeleteSession() {
         <div class="projects-list-header">
           <h1 class="projects-title">Projects</h1>
           <button class="btn btn-primary create-project-btn" @click="showCreateDialog = true">
-            <Plus :size="16" />
-            <span>New project</span>
+            <FolderOpen :size="16" />
+            <span>Open Directory</span>
           </button>
         </div>
 
@@ -380,10 +591,10 @@ function contextMenuDeleteSession() {
         <div v-else class="projects-empty">
           <FolderOpen :size="48" class="empty-icon" />
           <p class="empty-title">No projects yet</p>
-          <p class="empty-desc">Projects let you organize conversations with shared instructions and context.</p>
+          <p class="empty-desc">Open a directory to discover and manage its project settings.</p>
           <button class="btn btn-primary" @click="showCreateDialog = true">
-            <Plus :size="16" />
-            <span>Create your first project</span>
+            <FolderOpen :size="16" />
+            <span>Open your first directory</span>
           </button>
         </div>
       </div>
@@ -394,25 +605,14 @@ function contextMenuDeleteSession() {
       <div v-if="showCreateDialog" class="dialog-overlay" @click="showCreateDialog = false">
         <div class="create-project-dialog" @click.stop>
           <div class="dialog-header">
-            <span>Create new project</span>
+            <span>Open Directory</span>
             <button class="action-btn" @click="showCreateDialog = false">
               <X :size="16" />
             </button>
           </div>
           <div class="dialog-body">
             <div class="form-group">
-              <label class="form-label">Project name</label>
-              <input
-                v-model="newProjectName"
-                type="text"
-                class="dialog-input"
-                placeholder="My Project"
-                @keyup.enter="handleCreateProject"
-                autofocus
-              />
-            </div>
-            <div class="form-group">
-              <label class="form-label">Working directory (optional)</label>
+              <label class="form-label">Directory</label>
               <div class="directory-picker-row">
                 <button class="directory-pick-btn" @click="pickDirectory">
                   <Folder :size="14" />
@@ -422,6 +622,17 @@ function contextMenuDeleteSession() {
                   <X :size="14" />
                 </button>
               </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Project name (optional)</label>
+              <input
+                v-model="newProjectName"
+                type="text"
+                class="dialog-input"
+                placeholder="My Project"
+                @keyup.enter="handleCreateProject"
+                autofocus
+              />
             </div>
             <div class="form-group">
               <label class="form-label">Instructions (optional)</label>
@@ -435,8 +646,8 @@ function contextMenuDeleteSession() {
           </div>
           <div class="dialog-footer">
             <button class="btn btn-ghost btn-sm" @click="showCreateDialog = false">Cancel</button>
-            <button class="btn btn-primary btn-sm" @click="handleCreateProject" :disabled="!newProjectName.trim()">
-              Create project
+            <button class="btn btn-primary btn-sm" @click="handleCreateProject" :disabled="!newProjectDirectory.trim()">
+              Open Directory
             </button>
           </div>
         </div>
@@ -448,20 +659,20 @@ function contextMenuDeleteSession() {
       <div v-if="showDeleteConfirm" class="dialog-overlay" @click="showDeleteConfirm = false">
         <div class="dialog" @click.stop>
           <div class="dialog-header">
-            <span>删除项目</span>
+            <span>Forget Project</span>
             <button class="action-btn" @click="showDeleteConfirm = false">
               <X :size="16" />
             </button>
           </div>
           <div class="dialog-body">
-            <p class="dialog-message">确定要删除项目 "{{ currentProject ? getProjectName(currentProject) : '' }}" 吗？</p>
-            <p class="dialog-warning">项目下的会话不会被删除，但会解除与项目的关联。</p>
+            <p class="dialog-message">Forget project "{{ currentProject ? getProjectName(currentProject) : '' }}"?</p>
+            <p class="dialog-warning">This only hides it from the list. Directory and files are not deleted.</p>
           </div>
           <div class="dialog-footer">
-            <button class="btn btn-ghost btn-sm" @click="showDeleteConfirm = false">取消</button>
+            <button class="btn btn-ghost btn-sm" @click="showDeleteConfirm = false">Cancel</button>
             <button class="btn btn-danger btn-sm" @click="confirmDeleteProject">
               <Trash2 :size="14" />
-              删除
+              Forget
             </button>
           </div>
         </div>
@@ -483,16 +694,12 @@ function contextMenuDeleteSession() {
         >
           <button class="context-menu-item" @click="contextMenuRenameSession">
             <Pencil :size="14" />
-            <span>重命名</span>
-          </button>
-          <button class="context-menu-item" @click="contextMenuRemoveFromProject">
-            <FolderMinus :size="14" />
-            <span>移出项目</span>
+            <span>Rename</span>
           </button>
           <div class="context-menu-divider"></div>
           <button class="context-menu-item danger" @click="contextMenuDeleteSession">
             <Trash2 :size="14" />
-            <span>删除</span>
+            <span>Delete</span>
           </button>
         </div>
       </div>
@@ -779,12 +986,23 @@ function contextMenuDeleteSession() {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
+  padding: var(--space-md);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-composer);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.projects-detail-content .project-section:first-of-type {
+  border-color: var(--border-hover);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
 }
 
 .project-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-sm);
 }
 
 .project-section-title {
@@ -799,6 +1017,7 @@ function contextMenuDeleteSession() {
   font-size: 13px;
   color: var(--text-muted);
   margin: 0;
+  line-height: 1.5;
 }
 
 .project-instructions-input {
@@ -835,6 +1054,53 @@ function contextMenuDeleteSession() {
   gap: 6px;
 }
 
+.env-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--space-xs);
+}
+
+.env-error {
+  color: var(--error);
+  font-size: 12px;
+  margin: 0;
+}
+
+.shared-files-list {
+  display: flex;
+  flex-direction: column;
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.shared-file-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 0.5px solid var(--border-subtle);
+}
+
+.shared-file-row:last-child {
+  border-bottom: none;
+}
+
+.shared-file-name {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shared-file-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* Sessions */
 .sessions-loading,
 .sessions-empty {
@@ -850,6 +1116,7 @@ function contextMenuDeleteSession() {
   border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   overflow: hidden;
+  background: var(--bg-primary);
 }
 
 .session-row {
@@ -865,7 +1132,8 @@ function contextMenuDeleteSession() {
   font-size: 14px;
   text-align: left;
   cursor: pointer;
-  transition: background var(--transition-fast);
+  transition: background var(--transition-fast), transform var(--transition-fast);
+  position: relative;
 }
 
 .session-row:not(:last-child) {
@@ -875,6 +1143,7 @@ function contextMenuDeleteSession() {
 .session-row:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
+  transform: translateX(1px);
 }
 
 .session-row-icon {
@@ -903,12 +1172,14 @@ function contextMenuDeleteSession() {
   align-items: center;
   gap: 2px;
   opacity: 0;
-  transition: opacity var(--transition-fast);
+  transform: translateX(4px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
   flex-shrink: 0;
 }
 
 .session-row:hover .session-row-actions {
   opacity: 1;
+  transform: translateX(0);
 }
 
 .session-action-btn {
@@ -959,6 +1230,21 @@ function contextMenuDeleteSession() {
   font-weight: 500;
   color: var(--text-secondary);
   margin-bottom: var(--space-xs);
+}
+
+.dialog-input {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.dialog-input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .dialog-textarea {
@@ -1046,6 +1332,30 @@ function contextMenuDeleteSession() {
   padding: 14px 16px;
   max-height: 300px;
   overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+  .projects-detail-content {
+    padding: 20px var(--space-sm) 20px;
+    gap: var(--space-lg);
+  }
+
+  .project-section {
+    padding: var(--space-sm);
+  }
+
+  .env-form {
+    grid-template-columns: 1fr;
+  }
+
+  .shared-file-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .shared-file-row .session-action-btn {
+    grid-column: 2;
+    justify-self: end;
+  }
 }
 
 .effective-prompt-text {

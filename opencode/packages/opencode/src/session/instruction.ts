@@ -4,6 +4,8 @@ import { Global } from "../global"
 import { Filesystem } from "../util/filesystem"
 import { Config } from "../config/config"
 import { Instance } from "../project/instance"
+import { ProjectEnvironment } from "../project/environment"
+import { ProjectSharedFiles } from "../project/shared-files"
 import { Flag } from "@/flag/flag"
 import { Log } from "../util/log"
 import type { MessageV2 } from "./message-v2"
@@ -92,6 +94,50 @@ async function resolveRelative(instruction: string): Promise<string[]> {
   return Filesystem.globUp(instruction, Flag.OPENCODE_CONFIG_DIR, Flag.OPENCODE_CONFIG_DIR).catch(() => [])
 }
 
+async function projectContextPrompt() {
+  const project = Instance.project
+  const rootDirectory = project.rootDirectory || project.worktree
+  const fileDirectory = ProjectSharedFiles.dir(rootDirectory)
+  const envKeys = await ProjectEnvironment.listKeys(project.id).catch(() => [] as string[])
+  const sharedFiles = await ProjectSharedFiles.list(rootDirectory).catch(() => [] as Awaited<ReturnType<typeof ProjectSharedFiles.list>>)
+
+  const lines: string[] = []
+  lines.push("<project-context>")
+  lines.push(`Project root directory: ${rootDirectory}`)
+
+  if (project.instructions?.trim()) {
+    lines.push("")
+    lines.push("Project instructions:")
+    lines.push(project.instructions.trim())
+  }
+
+  if (envKeys.length > 0) {
+    lines.push("")
+    lines.push("Project environment variables available by key (values are hidden):")
+    for (const key of envKeys) {
+      lines.push(`- ${key}`)
+    }
+  }
+
+  lines.push("")
+  lines.push(`Project shared files directory: ${fileDirectory}`)
+  if (sharedFiles.length > 0) {
+    lines.push("Shared files:")
+    for (const item of sharedFiles.slice(0, 200)) {
+      lines.push(`- ${item.relativePath}`)
+    }
+    if (sharedFiles.length > 200) {
+      lines.push(`- ... and ${sharedFiles.length - 200} more`)
+    }
+  } else {
+    lines.push("Shared files: (none)")
+  }
+  lines.push("Use the Read tool with file paths to load file contents when needed.")
+  lines.push("</project-context>")
+
+  return lines.join("\n")
+}
+
 export namespace InstructionPrompt {
   export async function systemPaths() {
     const config = await Config.get()
@@ -168,6 +214,11 @@ export namespace InstructionPrompt {
     const preferencesPrompt = await loadNine1BotPreferences()
     if (preferencesPrompt) {
       result.push(preferencesPrompt)
+    }
+
+    const projectPrompt = await projectContextPrompt()
+    if (projectPrompt) {
+      result.push(projectPrompt)
     }
 
     return result

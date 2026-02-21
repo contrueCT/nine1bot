@@ -13,57 +13,25 @@ const emit = defineEmits<{
 }>()
 
 const query = ref('')
-const searchResults = ref<Session[]>([])
-const isSearching = ref(false)
 const selectedIndex = ref(0)
 const inputRef = ref<HTMLInputElement>()
 
-let searchTimeout: ReturnType<typeof setTimeout> | null = null
-
 // Display list: recent sessions when no query, search results when query exists
 const displayList = computed(() => {
-  if (query.value.trim()) {
-    return searchResults.value
+  const source = props.recentSessions || []
+  const term = query.value.trim().toLowerCase()
+  if (!term) {
+    return source
   }
-  return props.recentSessions || []
+  return source.filter((session) => getSessionTitle(session).toLowerCase().includes(term))
 })
 
 const displayLabel = computed(() => {
-  if (query.value.trim()) {
-    return isSearching.value ? 'Searching...' : `${searchResults.value.length} results`
-  }
-  return 'Recent'
+  return query.value.trim() ? `${displayList.value.length} results` : 'Recent'
 })
 
-// Debounced search
-watch(query, (newQuery) => {
-  if (searchTimeout) clearTimeout(searchTimeout)
-
-  if (!newQuery.trim()) {
-    searchResults.value = []
-    selectedIndex.value = 0
-    return
-  }
-
-  isSearching.value = true
-  searchTimeout = setTimeout(async () => {
-    try {
-      const params = new URLSearchParams({
-        search: newQuery.trim(),
-        roots: 'true',
-        limit: '20'
-      })
-      const res = await fetch(`/session?${params}`)
-      const data = await res.json()
-      searchResults.value = Array.isArray(data) ? data : (data.data || [])
-    } catch (e) {
-      console.error('Search failed:', e)
-      searchResults.value = []
-    } finally {
-      isSearching.value = false
-      selectedIndex.value = 0
-    }
-  }, 300)
+watch([query, () => props.recentSessions], () => {
+  selectedIndex.value = 0
 })
 
 function handleKeydown(e: KeyboardEvent) {
@@ -137,7 +105,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleKeydown)
-  if (searchTimeout) clearTimeout(searchTimeout)
 })
 </script>
 
@@ -183,7 +150,7 @@ onUnmounted(() => {
             </span>
           </button>
 
-          <div v-if="displayList.length === 0 && !isSearching" class="search-empty">
+          <div v-if="displayList.length === 0" class="search-empty">
             {{ query.trim() ? 'No sessions found' : 'No recent sessions' }}
           </div>
         </div>
@@ -211,7 +178,7 @@ onUnmounted(() => {
   justify-content: center;
   padding-top: 15vh;
   background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(5px);
   animation: overlayIn 0.15s ease-out;
 }
 
@@ -222,7 +189,7 @@ onUnmounted(() => {
 
 .search-modal {
   width: 100%;
-  max-width: 560px;
+  max-width: 600px;
   background: var(--bg-elevated);
   border: 0.5px solid var(--border-default);
   border-radius: var(--radius-xl);
@@ -294,15 +261,21 @@ onUnmounted(() => {
 .search-results {
   max-height: 400px;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .search-results-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   padding: 10px 16px 4px;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  background: var(--bg-elevated);
+  border-bottom: 0.5px solid var(--border-subtle);
 }
 
 .search-results-list {
@@ -323,13 +296,26 @@ onUnmounted(() => {
   text-align: left;
   cursor: pointer;
   border-radius: var(--radius-sm);
-  transition: background var(--transition-fast);
+  transition: background var(--transition-fast), transform var(--transition-fast);
+  position: relative;
 }
 
 .search-result-item:hover,
 .search-result-item.selected {
   background: var(--bg-tertiary);
   color: var(--text-primary);
+  transform: translateX(1px);
+}
+
+.search-result-item.selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--accent);
 }
 
 .result-icon {
@@ -373,6 +359,7 @@ onUnmounted(() => {
   border-top: 0.5px solid var(--border-subtle);
   display: flex;
   justify-content: center;
+  background: var(--bg-elevated);
 }
 
 .search-hint {
@@ -397,5 +384,24 @@ onUnmounted(() => {
   font-size: 10px;
   font-weight: 500;
   color: var(--text-secondary);
+}
+
+@media (max-width: 768px) {
+  .search-overlay {
+    padding: 9vh 10px 0;
+  }
+
+  .search-modal {
+    max-width: 100%;
+    border-radius: var(--radius-lg);
+  }
+
+  .search-results {
+    max-height: 62vh;
+  }
+
+  .result-time {
+    display: none;
+  }
 }
 </style>

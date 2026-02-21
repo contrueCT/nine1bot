@@ -159,6 +159,16 @@ export function getAuthPath(): string {
 }
 
 /**
+ * 获取项目环境变量目录路径
+ * 与 auth.json 同级目录，便于统一管理 Nine1Bot 私有数据
+ * - Windows: %LOCALAPPDATA%\nine1bot\project-env
+ * - Unix: ~/.local/share/nine1bot/project-env
+ */
+export function getProjectEnvDir(): string {
+  return join(getDataDir(), 'project-env')
+}
+
+/**
  * 检查文件是否存在
  */
 async function fileExists(filePath: string): Promise<boolean> {

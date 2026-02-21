@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, type TodoItem, questionApi, permissionApi, SessionBusyError } from '../api/client'
+import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, type TodoItem, questionApi, permissionApi, SessionBusyError, setApiDirectory } from '../api/client'
 import { useParallelSessions, MAX_PARALLEL_AGENTS } from './useParallelSessions'
 
 export function useSession() {
@@ -52,6 +52,11 @@ export function useSession() {
   // 事件源订阅
   let eventSource: EventSource | null = null
 
+  function reconnectEventsForDirectory() {
+    if (!eventSource) return
+    subscribeToEvents()
+  }
+
   // 通知定时器追踪（用于清理）
   const notificationTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
 
@@ -85,6 +90,8 @@ export function useSession() {
     isDraftSession.value = true
     currentSession.value = null
     currentDirectory.value = directory || '.'
+    setApiDirectory(currentDirectory.value)
+    reconnectEventsForDirectory()
     messages.value = []
     // 重置所有会话级状态，防止旧会话的状态残留
     streamingMessage.value = null
@@ -104,6 +111,8 @@ export function useSession() {
     // 如果是草稿模式，直接更新本地状态
     if (isDraftSession.value) {
       currentDirectory.value = directory
+      setApiDirectory(currentDirectory.value)
+      reconnectEventsForDirectory()
       return
     }
 
@@ -113,6 +122,8 @@ export function useSession() {
         const updated = await api.updateSession(currentSession.value.id, { directory })
         currentSession.value = updated
         currentDirectory.value = updated.directory
+        setApiDirectory(currentDirectory.value)
+        reconnectEventsForDirectory()
 
         // 更新本地会话列表
         const index = sessions.value.findIndex(s => s.id === updated.id)
@@ -141,10 +152,14 @@ export function useSession() {
   async function _createSessionInternal(directory: string): Promise<Session> {
     try {
       isLoading.value = true
+      setApiDirectory(directory)
+      reconnectEventsForDirectory()
       const session = await api.createSession(directory)
       currentSession.value = session
       // 使用服务器返回的实际目录，而不是传入的参数
       currentDirectory.value = session.directory
+      setApiDirectory(currentDirectory.value)
+      reconnectEventsForDirectory()
       isDraftSession.value = false
       // 重新加载所有会话，不过滤目录
       await loadSessions()
@@ -172,6 +187,8 @@ export function useSession() {
       seenUserMessageIds.clear()
       currentSession.value = session
       currentDirectory.value = session.directory
+      setApiDirectory(currentDirectory.value)
+      reconnectEventsForDirectory()
       messages.value = []  // Clear immediately to avoid flash of old content
       messages.value = await api.getMessages(session.id)
     } catch (error) {

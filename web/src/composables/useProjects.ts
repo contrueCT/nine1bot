@@ -1,59 +1,120 @@
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
+import { projectApi, type Project } from '../api/client'
 import type { ProjectInfo } from '../components/Sidebar.vue'
 
-// LocalProject stored in localStorage
-export interface LocalProject {
-  id: string
-  name: string
-  instructions: string
-  directory: string
-  sessionIds: string[]
-  createdAt: number
-  updatedAt: number
+function toProjectInfo(project: Project): ProjectInfo {
+  return {
+    id: project.id,
+    name: project.name,
+    worktree: project.worktree,
+    rootDirectory: project.rootDirectory,
+    projectType: project.projectType,
+    icon: project.icon,
+    instructions: project.instructions,
+    time: project.time,
+    sandboxes: project.sandboxes,
+  }
 }
 
 export function useProjects() {
+  const projectList = ref<ProjectInfo[]>([])
   const currentProject = ref<ProjectInfo | null>(null)
   const isLoading = ref(false)
 
-  // Stub: returns empty list (will be re-implemented with backend)
-  const projects = computed<ProjectInfo[]>(() => [])
+  const projects = computed(() => projectList.value)
 
   async function loadProjects() {
-    // stub
+    isLoading.value = true
+    try {
+      const items = await projectApi.list()
+      projectList.value = items.map(toProjectInfo).sort((a, b) => b.time.updated - a.time.updated)
+
+      if (currentProject.value) {
+        const matched = projectList.value.find((p) => p.id === currentProject.value!.id)
+        currentProject.value = matched || null
+      }
+    } finally {
+      isLoading.value = false
+    }
   }
 
-  async function selectProject(_projectId: string) {
-    // stub
+  async function selectProject(projectId: string) {
+    if (!projectId) {
+      currentProject.value = null
+      return null
+    }
+
+    let matched = projectList.value.find((p) => p.id === projectId)
+    if (!matched) {
+      await loadProjects()
+      matched = projectList.value.find((p) => p.id === projectId)
+    }
+
+    currentProject.value = matched || null
+    return currentProject.value
+  }
+
+  async function openDirectory(
+    directory: string,
+    input?: {
+      name?: string
+      instructions?: string
+    },
+  ) {
+    const discovered = await projectApi.current(directory)
+    let project = discovered
+
+    if (input?.name !== undefined || input?.instructions !== undefined) {
+      project = await projectApi.update(discovered.id, {
+        name: input.name,
+        instructions: input.instructions,
+      })
+    }
+
+    const mapped = toProjectInfo(project)
+    const index = projectList.value.findIndex((p) => p.id === mapped.id)
+    if (index >= 0) {
+      projectList.value[index] = mapped
+    } else {
+      projectList.value.unshift(mapped)
+    }
+
+    projectList.value = [...projectList.value].sort((a, b) => b.time.updated - a.time.updated)
+    currentProject.value = mapped
+    return mapped
+  }
+
+  async function updateProject(projectId: string, updates: { name?: string; instructions?: string }) {
+    const updated = toProjectInfo(await projectApi.update(projectId, updates))
+    const index = projectList.value.findIndex((p) => p.id === projectId)
+    if (index >= 0) {
+      projectList.value[index] = updated
+    } else {
+      projectList.value.unshift(updated)
+    }
+    projectList.value = [...projectList.value].sort((a, b) => b.time.updated - a.time.updated)
+
+    if (currentProject.value?.id === projectId) {
+      currentProject.value = updated
+    }
+
+    return updated
+  }
+
+  async function forgetProject(projectId: string) {
+    await projectApi.forget(projectId)
+    projectList.value = projectList.value.filter((p) => p.id !== projectId)
+    if (currentProject.value?.id === projectId) {
+      currentProject.value = null
+    }
   }
 
   function clearProject() {
     currentProject.value = null
   }
 
-  function createProject(_name: string, _instructions: string, _directory: string): LocalProject {
-    // stub — return placeholder
-    return {
-      id: '',
-      name: _name,
-      instructions: _instructions,
-      directory: _directory,
-      sessionIds: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    }
-  }
-
-  async function updateProject(_projectId: string, _updates: { name?: string; instructions?: string }) {
-    // stub
-  }
-
-  function deleteLocalProject(_projectId: string) {
-    // stub
-  }
-
-  function getProjectSessions(_projectId: string): string[] {
-    return []
+  function getProject(projectId: string) {
+    return projectList.value.find((project) => project.id === projectId) || null
   }
 
   return {
@@ -63,9 +124,9 @@ export function useProjects() {
     loadProjects,
     selectProject,
     clearProject,
-    createProject,
+    openDirectory,
     updateProject,
-    deleteLocalProject,
-    getProjectSessions,
+    forgetProject,
+    getProject,
   }
 }

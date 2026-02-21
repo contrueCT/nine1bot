@@ -3,6 +3,7 @@ import fs from "fs/promises"
 import { Filesystem } from "../util/filesystem"
 import path from "path"
 import { $ } from "bun"
+import { createHash } from "crypto"
 import { Storage } from "../storage/storage"
 import { Log } from "../util/log"
 import { Flag } from "@/flag/flag"
@@ -20,6 +21,8 @@ export namespace Project {
     .object({
       id: z.string(),
       worktree: z.string(),
+      rootDirectory: z.string(),
+      projectType: z.enum(["git", "directory"]),
       vcs: z.literal("git").optional(),
       name: z.string().optional(),
       icon: z
@@ -51,10 +54,38 @@ export namespace Project {
     Updated: BusEvent.define("project.updated", Info),
   }
 
+  interface Meta {
+    hidden?: boolean
+    hiddenAt?: number
+  }
+
+  function directoryProjectID(directory: string) {
+    const hash = createHash("sha1").update(directory).digest("hex")
+    return `dir_${hash}`
+  }
+
+  async function readMeta(projectID: string): Promise<Meta> {
+    return Storage.read<Meta>(["project_meta", projectID]).catch(() => ({}))
+  }
+
+  async function setHidden(projectID: string, hidden: boolean) {
+    if (hidden) {
+      await Storage.write<Meta>(["project_meta", projectID], {
+        hidden: true,
+        hiddenAt: Date.now(),
+      })
+      return
+    }
+    await Storage.remove(["project_meta", projectID]).catch(() => undefined)
+  }
+
   export async function fromDirectory(directory: string) {
     log.info("fromDirectory", { directory })
 
-    const { id, sandbox, worktree, vcs } = await iife(async () => {
+    const absoluteDirectory = path.resolve(directory)
+    const resolvedDirectory = await fs.realpath(absoluteDirectory).catch(() => absoluteDirectory)
+
+    const { id, sandbox, worktree, vcs, projectType, rootDirectory } = await iife(async () => {
       const matches = Filesystem.up({ targets: [".git"], start: directory })
       const git = await matches.next().then((x) => x.value)
       await matches.return()
@@ -70,11 +101,14 @@ export namespace Project {
           .catch(() => undefined)
 
         if (!gitBinary) {
+          const normalized = path.resolve(sandbox)
           return {
-            id: id ?? "global",
-            worktree: sandbox,
+            id: id ?? directoryProjectID(normalized),
+            worktree: normalized,
             sandbox: sandbox,
             vcs: Info.shape.vcs.parse(Flag.OPENCODE_FAKE_VCS),
+            projectType: "git" as const,
+            rootDirectory: normalized,
           }
         }
 
@@ -94,12 +128,15 @@ export namespace Project {
             )
             .catch(() => undefined)
 
-          if (!roots) {
+          if (!roots || roots.length === 0) {
+            const normalized = path.resolve(sandbox)
             return {
-              id: "global",
-              worktree: sandbox,
+              id: directoryProjectID(normalized),
+              worktree: normalized,
               sandbox: sandbox,
               vcs: Info.shape.vcs.parse(Flag.OPENCODE_FAKE_VCS),
+              projectType: "git" as const,
+              rootDirectory: normalized,
             }
           }
 
@@ -112,11 +149,14 @@ export namespace Project {
         }
 
         if (!id) {
+          const normalized = path.resolve(sandbox)
           return {
-            id: "global",
-            worktree: sandbox,
+            id: directoryProjectID(normalized),
+            worktree: normalized,
             sandbox: sandbox,
             vcs: "git",
+            projectType: "git" as const,
+            rootDirectory: normalized,
           }
         }
 
@@ -129,11 +169,14 @@ export namespace Project {
           .catch(() => undefined)
 
         if (!top) {
+          const normalized = path.resolve(sandbox)
           return {
             id,
             sandbox,
-            worktree: sandbox,
+            worktree: normalized,
             vcs: Info.shape.vcs.parse(Flag.OPENCODE_FAKE_VCS),
+            projectType: "git" as const,
+            rootDirectory: normalized,
           }
         }
 
@@ -152,11 +195,14 @@ export namespace Project {
           .catch(() => undefined)
 
         if (!worktree) {
+          const normalized = path.resolve(sandbox)
           return {
             id,
             sandbox,
-            worktree: sandbox,
+            worktree: normalized,
             vcs: Info.shape.vcs.parse(Flag.OPENCODE_FAKE_VCS),
+            projectType: "git" as const,
+            rootDirectory: normalized,
           }
         }
 
@@ -165,14 +211,18 @@ export namespace Project {
           sandbox,
           worktree,
           vcs: "git",
+          projectType: "git" as const,
+          rootDirectory: path.resolve(sandbox),
         }
       }
 
       return {
-        id: "global",
-        worktree: "/",
-        sandbox: "/",
+        id: directoryProjectID(resolvedDirectory),
+        worktree: resolvedDirectory,
+        sandbox: resolvedDirectory,
         vcs: Info.shape.vcs.parse(Flag.OPENCODE_FAKE_VCS),
+        projectType: "directory" as const,
+        rootDirectory: resolvedDirectory,
       }
     })
 
@@ -181,6 +231,8 @@ export namespace Project {
       existing = {
         id,
         worktree,
+        rootDirectory,
+        projectType,
         vcs: vcs as Info["vcs"],
         sandboxes: [],
         time: {
@@ -195,28 +247,36 @@ export namespace Project {
 
     // migrate old projects before sandboxes
     if (!existing.sandboxes) existing.sandboxes = []
+    if (!existing.rootDirectory) existing.rootDirectory = existing.worktree
+    if (!existing.projectType) existing.projectType = existing.vcs === "git" ? "git" : "directory"
 
     if (Flag.OPENCODE_EXPERIMENTAL_ICON_DISCOVERY) discover(existing)
 
     const result: Info = {
       ...existing,
       worktree,
+      rootDirectory,
+      projectType,
       vcs: vcs as Info["vcs"],
       time: {
         ...existing.time,
         updated: Date.now(),
       },
     }
-    if (sandbox !== result.worktree && !result.sandboxes.includes(sandbox)) result.sandboxes.push(sandbox)
+    const normalizedSandbox = path.resolve(sandbox)
+    if (normalizedSandbox !== result.worktree && !result.sandboxes.includes(normalizedSandbox)) {
+      result.sandboxes.push(normalizedSandbox)
+    }
     result.sandboxes = result.sandboxes.filter((x) => existsSync(x))
     await Storage.write<Info>(["project", id], result)
+    await setHidden(id, false)
     GlobalBus.emit("event", {
       payload: {
         type: Event.Updated.type,
         properties: result,
       },
     })
-    return { project: result, sandbox }
+    return { project: result, sandbox: normalizedSandbox }
   }
 
   export async function discover(input: Info) {
@@ -281,11 +341,35 @@ export namespace Project {
 
   export async function list() {
     const keys = await Storage.list(["project"])
-    const projects = await Promise.all(keys.map((x) => Storage.read<Info>(x)))
-    return projects.map((project) => ({
+    const projects = await Promise.all(keys.map((x) => Storage.read<Info>(x).catch(() => undefined)))
+    const result: Info[] = []
+    for (const project of projects) {
+      if (!project) continue
+      const hidden = await readMeta(project.id).then((x) => x.hidden === true)
+      if (hidden) continue
+      result.push({
+        ...project,
+        rootDirectory: project.rootDirectory || project.worktree,
+        projectType: project.projectType || (project.vcs === "git" ? "git" : "directory"),
+        sandboxes: project.sandboxes?.filter((x) => existsSync(x)),
+      })
+    }
+    return result
+  }
+
+  export async function get(projectID: string) {
+    const project = await Storage.read<Info>(["project", projectID])
+    return {
       ...project,
+      rootDirectory: project.rootDirectory || project.worktree,
+      projectType: project.projectType || (project.vcs === "git" ? "git" : "directory"),
       sandboxes: project.sandboxes?.filter((x) => existsSync(x)),
-    }))
+    } satisfies Info
+  }
+
+  export async function forget(projectID: string) {
+    await setHidden(projectID, true)
+    return true
   }
 
   export const update = fn(

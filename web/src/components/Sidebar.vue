@@ -14,15 +14,22 @@ export interface ProjectInfo {
   id: string
   name?: string
   worktree: string
+  rootDirectory?: string
+  projectType?: 'git' | 'directory'
   icon?: { url?: string; override?: string; color?: string }
   instructions?: string
   time: { created: number; updated: number }
   sandboxes: string[]
 }
 
+type SidebarSession = Session & {
+  projectDisplayName?: string
+  projectDisplayPath?: string
+}
+
 const props = defineProps<{
   collapsed: boolean
-  sessions: Session[]
+  sessions: SidebarSession[]
   currentSession: Session | null
   isDraftSession: boolean
   files: FileItem[]
@@ -67,14 +74,14 @@ const { profile, brandLogo } = useUserProfile()
 const showRecents = ref(true)
 
 // 重命名状态
-const renamingSession = ref<Session | null>(null)
+const renamingSession = ref<SidebarSession | null>(null)
 const newTitle = ref('')
 
 // 删除确认状态
-const deletingSession = ref<Session | null>(null)
+const deletingSession = ref<SidebarSession | null>(null)
 
 // Right-click context menu
-const contextMenu = ref<{ x: number; y: number; session: Session } | null>(null)
+const contextMenu = ref<{ x: number; y: number; session: SidebarSession } | null>(null)
 // Toast notification for errors
 const toastMessage = ref('')
 
@@ -114,8 +121,21 @@ function getSessionTitle(session: Session): string {
   return session.title || `会话 ${session.id.slice(0, 6)}`
 }
 
+function getDirectoryTail(directory: string): string {
+  const normalized = (directory || '').replace(/\\/g, '/')
+  return normalized.split('/').filter(Boolean).pop() || '.'
+}
+
+function getSessionProjectLabel(session: SidebarSession): string {
+  return session.projectDisplayName || getDirectoryTail(session.directory)
+}
+
+function getSessionProjectTitle(session: SidebarSession): string {
+  return session.projectDisplayPath || session.directory || ''
+}
+
 // Context menu handlers
-function openContextMenu(event: MouseEvent, session: Session) {
+function openContextMenu(event: MouseEvent, session: SidebarSession) {
   event.preventDefault()
   event.stopPropagation()
   contextMenu.value = {
@@ -221,6 +241,9 @@ function contextMenuDelete() {
           <Loader2 v-if="isSessionRunning(session.id)" :size="14" class="session-icon spin" />
           <MessageSquare v-else :size="14" class="session-icon" />
           <span class="session-title">{{ getSessionTitle(session) }}</span>
+          <span v-if="mode === 'agent'" class="session-project-label" :title="getSessionProjectTitle(session)">
+            {{ getSessionProjectLabel(session) }}
+          </span>
 
           <!-- Session Actions (on hover) -->
           <div class="session-actions" @click.stop>
@@ -551,18 +574,21 @@ function contextMenuDelete() {
   align-items: center;
   gap: var(--space-sm);
   padding: 6px var(--space-sm);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background-color var(--transition-fast);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
   position: relative;
 }
 
 .session-item:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(0, 0, 0, 0.035);
+  border-color: var(--border-subtle);
 }
 
 .session-item.active {
   background: var(--accent-subtle);
+  border-color: rgba(0, 0, 0, 0.05);
 }
 
 .session-icon {
@@ -581,6 +607,33 @@ function contextMenuDelete() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.session-project-label {
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 0.5px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  padding: 0 8px;
+  line-height: 18px;
+  opacity: 0;
+  transform: translateX(6px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast), filter var(--transition-fast);
+  margin-left: 6px;
+  filter: saturate(80%);
+  pointer-events: none;
+}
+
+.session-item:hover .session-project-label {
+  opacity: 1;
+  transform: translateX(0);
+  filter: saturate(100%);
 }
 
 .session-item.active .session-title {
@@ -597,11 +650,13 @@ function contextMenuDelete() {
   display: flex;
   gap: 2px;
   opacity: 0;
-  transition: opacity var(--transition-fast);
+  transform: translateX(4px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
 }
 
 .session-item:hover .session-actions {
   opacity: 1;
+  transform: translateX(0);
 }
 
 .mini-btn {

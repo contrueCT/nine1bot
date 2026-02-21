@@ -5,8 +5,9 @@ import { useFiles } from './composables/useFiles'
 import { useSettings } from './composables/useSettings'
 import { useAppMode } from './composables/useAppMode'
 import { useSessionMode } from './composables/useSessionMode'
-// useProjects: logic cleared, stubs only (will be re-implemented with backend)
 import { useProjects } from './composables/useProjects'
+import { useGlobalRecentSessions } from './composables/useGlobalRecentSessions'
+import type { Session } from './api/client'
 import Header from './components/Header.vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
@@ -105,7 +106,22 @@ const { setMode: setSessionMode } = useSessionMode()
 const {
   projects,
   currentProject,
+  loadProjects,
+  selectProject,
+  clearProject,
+  openDirectory,
+  updateProject,
+  forgetProject,
+  getProject,
 } = useProjects()
+
+const {
+  recentSessions: globalRecentSessions,
+  loadGlobalRecentSessions,
+  refreshGlobalRecentSessions,
+  startGlobalRecentPolling,
+  stopGlobalRecentPolling,
+} = useGlobalRecentSessions()
 
 // 文件查看器状态
 const showFileViewer = ref(false)
@@ -127,6 +143,33 @@ const showProjectsPage = ref(false)
 
 const sidebarCollapsed = ref(false)
 
+const sidebarSessions = computed(() => {
+  if (appMode.value !== 'agent') {
+    return sessions.value
+  }
+
+  const merged = new Map<string, Session>()
+  for (const session of globalRecentSessions.value) {
+    merged.set(session.id, session)
+  }
+  for (const session of sessions.value) {
+    if (!merged.has(session.id)) {
+      merged.set(session.id, session)
+    }
+  }
+  if (currentSession.value && !merged.has(currentSession.value.id)) {
+    merged.set(currentSession.value.id, currentSession.value)
+  }
+  return Array.from(merged.values()).sort((a, b) => b.time.updated - a.time.updated)
+})
+
+const searchRecentSessions = computed(() => {
+  if (appMode.value === 'agent') {
+    return sidebarSessions.value.slice(0, 300)
+  }
+  return sessions.value.slice(0, 300)
+})
+
 // Empty state detection for centered layout
 const isEmptyState = computed(() =>
   messages.value.length === 0 && !isLoading.value && !showProjectsPage.value
@@ -141,6 +184,13 @@ async function handleSelectModel(providerId: string, modelId: string) {
 let stopSessionWatch: (() => void) | null = null
 let unregisterTerminalHandler: (() => void) | null = null
 let unregisterPreviewHandler: (() => void) | null = null
+
+async function refreshGlobalRecentsIfAgent() {
+  if (appMode.value !== 'agent') return
+  await refreshGlobalRecentSessions().catch((error) => {
+    console.error('Failed to refresh global recent sessions:', error)
+  })
+}
 
 onMounted(async () => {
   // 先注册事件处理器，确保在 SSE 连接建立时能接收到 server.connected 事件
@@ -163,6 +213,13 @@ onMounted(async () => {
   // 不传 directory 参数以加载所有会话
   await loadSessions()
   await loadFiles('.')
+  await loadProjects()
+  if (appMode.value === 'agent') {
+    await loadGlobalRecentSessions().catch((error) => {
+      console.error('Failed to load global recent sessions:', error)
+    })
+    startGlobalRecentPolling()
+  }
 
   // 加载模型 providers 和配置（确保模型选择器立即可用）
   await loadProviders()
@@ -185,6 +242,7 @@ onMounted(async () => {
 onUnmounted(() => {
   unsubscribe()
   document.removeEventListener('keydown', handleGlobalKeydown)
+  stopGlobalRecentPolling()
   // 清理 watch
   if (stopSessionWatch) {
     stopSessionWatch()
@@ -223,6 +281,17 @@ watch(currentDirectory, async (newDir) => {
   await loadFiles('.')
 })
 
+watch(appMode, (newMode) => {
+  if (newMode === 'agent') {
+    void refreshGlobalRecentSessions().catch((error) => {
+      console.error('Failed to refresh global recent sessions:', error)
+    })
+    startGlobalRecentPolling()
+    return
+  }
+  stopGlobalRecentPolling()
+})
+
 async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean) {
   // If viewing projects page, close it
   if (showProjectsPage.value) {
@@ -259,49 +328,98 @@ function handleSwitchMode(newMode: 'chat' | 'agent') {
   createSession(currentDirectory.value || '.')
 }
 
-// Project handlers (stubs — will be re-implemented with backend)
-function handleSelectProject(_projectId: string) {
-  // stub
+async function handleSelectProject(projectId: string) {
+  if (!projectId) {
+    clearProject()
+    return
+  }
+
+  const project = await selectProject(projectId)
+  if (!project) return
+
+  const directory = project.rootDirectory || project.worktree
+  if (canChangeDirectory()) {
+    await changeDirectory(directory).catch(() => {
+      createSession(directory)
+    })
+  } else {
+    createSession(directory)
+  }
+  await loadSessions()
+  await refreshGlobalRecentsIfAgent()
 }
 
 function handleOpenProjects() {
   showProjectsPage.value = true
+  loadProjects().catch((error) => {
+    console.error('Failed to load projects:', error)
+  })
 }
 
-function handleCreateProject(_name: string, _instructions: string, _directory?: string) {
-  // stub
+async function handleCreateProject(name: string, instructions: string, directory?: string) {
+  if (!directory) return
+
+  const project = await openDirectory(directory, {
+    name: name || undefined,
+    instructions: instructions || undefined,
+  })
+
+  const targetDirectory = project.rootDirectory || project.worktree
+  if (canChangeDirectory()) {
+    await changeDirectory(targetDirectory).catch(() => {
+      createSession(targetDirectory)
+    })
+  } else {
+    createSession(targetDirectory)
+  }
+  await loadSessions()
+  await refreshGlobalRecentsIfAgent()
 }
 
-async function handleUpdateProject(_projectId: string, _updates: { name?: string; instructions?: string }) {
-  // stub
+async function handleUpdateProject(projectId: string, updates: { name?: string; instructions?: string }) {
+  await updateProject(projectId, updates)
 }
 
 // Handle search result selection
 function handleSearchSelect(sessionId: string) {
   showSearch.value = false
   showProjectsPage.value = false
-  const session = sessions.value.find(s => s.id === sessionId)
+  const session = searchRecentSessions.value.find(s => s.id === sessionId) || sessions.value.find(s => s.id === sessionId)
   if (session) {
     selectSession(session)
   }
 }
 
-function handleProjectNewSession(_projectId: string) {
-  // stub
+function handleProjectNewSession(projectId: string) {
+  const project = getProject(projectId)
+  if (!project) return
   showProjectsPage.value = false
-  createSession(currentDirectory.value || '.')
+  createSession(project.rootDirectory || project.worktree)
 }
 
-function handleDeleteProject(_projectId: string) {
-  // stub
+async function handleDeleteProject(projectId: string) {
+  await forgetProject(projectId)
+  await refreshGlobalRecentsIfAgent()
 }
 
-function handleProjectSelectSession(sessionId: string) {
-  const session = sessions.value.find(s => s.id === sessionId)
-  if (session) {
-    showProjectsPage.value = false
-    selectSession(session)
-  }
+async function handleProjectSelectSession(session: Session) {
+  showProjectsPage.value = false
+  await selectSession(session)
+}
+
+async function handleSidebarSelectSession(session: Session) {
+  showProjectsPage.value = false
+  await selectSession(session)
+}
+
+async function handleDeleteSession(sessionId: string) {
+  await deleteSession(sessionId)
+  await refreshGlobalRecentsIfAgent()
+}
+
+async function handleRenameSession(sessionId: string, title: string) {
+  await renameSession(sessionId, title)
+  await refreshGlobalRecentsIfAgent()
 }
 
 // 处理消息部分删除
@@ -383,7 +501,7 @@ function handlePromptSelect(prompt: string) {
     <!-- Sidebar -->
     <Sidebar
       :collapsed="sidebarCollapsed"
-      :sessions="sessions"
+      :sessions="sidebarSessions"
       :currentSession="currentSession"
       :isDraftSession="isDraftSession"
       :files="files"
@@ -397,11 +515,11 @@ function handlePromptSelect(prompt: string) {
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
       @toggle-collapse="toggleSidebar"
-      @select-session="(session) => { showProjectsPage = false; selectSession(session) }"
+      @select-session="handleSidebarSelectSession"
       @new-session="handleNewSession"
       @toggle-directory="toggleDirectory"
-      @delete-session="deleteSession"
-      @rename-session="renameSession"
+      @delete-session="handleDeleteSession"
+      @rename-session="handleRenameSession"
       @file-click="handleFileClick"
       @abort-session="abortSession"
       @open-settings="openSettings"
@@ -438,8 +556,8 @@ function handlePromptSelect(prompt: string) {
           @new-session="handleProjectNewSession"
           @create-project="handleCreateProject"
           @delete-project="handleDeleteProject"
-          @rename-session="renameSession"
-          @delete-session="deleteSession"
+          @rename-session="handleRenameSession"
+          @delete-session="handleDeleteSession"
           @close="showProjectsPage = false"
         />
 
@@ -572,7 +690,7 @@ function handlePromptSelect(prompt: string) {
     <!-- Search Overlay -->
     <SearchOverlay
       v-if="showSearch"
-      :recentSessions="sessions.slice(0, 10)"
+      :recentSessions="searchRecentSessions"
       @close="showSearch = false"
       @select="handleSearchSelect"
     />

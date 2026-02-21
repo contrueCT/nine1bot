@@ -5,6 +5,7 @@ import z from "zod"
 import { Identifier } from "../id/id"
 import { Log } from "../util/log"
 import { Instance } from "../project/instance"
+import { ProjectEnvironment } from "../project/environment"
 import { lazy } from "@opencode-ai/util/lazy"
 import { Shell } from "@/shell/shell"
 import { ScreenBuffer } from "./screen-buffer"
@@ -160,8 +161,10 @@ export namespace AgentTerminal {
     }
 
     const cwd = input.cwd || Instance.directory
+    const projectEnv = await ProjectEnvironment.getAll(Instance.project.id)
     const env = {
       ...process.env,
+      ...projectEnv,
       ...input.env,
       TERM: "xterm-256color",
       OPENCODE_TERMINAL: "1",

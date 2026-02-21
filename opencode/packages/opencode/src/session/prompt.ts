@@ -46,6 +46,7 @@ import { LLM } from "./llm"
 import { iife } from "@/util/iife"
 import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncation"
+import { ProjectEnvironment } from "@/project/environment"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1598,6 +1599,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
+        ...(await ProjectEnvironment.getAll(Instance.project.id)),
         TERM: "dumb",
       },
     })

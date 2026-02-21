@@ -2,6 +2,43 @@ const BASE_URL = ''  // 使用相对路径，由 vite proxy 或同源处理
 
 // 默认请求超时时间 (30秒)
 const DEFAULT_TIMEOUT = 30000
+let activeDirectory = ''
+
+export function setApiDirectory(directory?: string) {
+  activeDirectory = (directory || '').trim()
+}
+
+function applyDirectoryToUrl(url: string): string {
+  if (!activeDirectory) return url
+  try {
+    const parsed = new URL(url, window.location.origin)
+    if (!parsed.searchParams.has('directory')) {
+      parsed.searchParams.set('directory', activeDirectory)
+    }
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return parsed.toString()
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`
+  } catch {
+    return url
+  }
+}
+
+function applyDirectoryHeaders(options: RequestInit): RequestInit {
+  if (!activeDirectory) return options
+  const headers = new Headers(options.headers || {})
+  if (!headers.has('x-opencode-directory')) {
+    headers.set('x-opencode-directory', activeDirectory)
+  }
+  return {
+    ...options,
+    headers,
+  }
+}
+
+function fetchWithDirectory(url: string, options: RequestInit = {}) {
+  return fetch(applyDirectoryToUrl(url), applyDirectoryHeaders(options))
+}
 
 // 带超时的 fetch 封装
 async function fetchWithTimeout(
@@ -11,10 +48,12 @@ async function fetchWithTimeout(
 ): Promise<Response> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeout)
+  const preparedUrl = applyDirectoryToUrl(url)
+  const preparedOptions = applyDirectoryHeaders(options)
 
   try {
-    const response = await fetch(url, {
-      ...options,
+    const response = await fetch(preparedUrl, {
+      ...preparedOptions,
       signal: controller.signal
     })
     return response
@@ -45,6 +84,32 @@ export interface Session {
   }
   // Computed field for display
   createdAt?: string
+}
+
+export interface Project {
+  id: string
+  worktree: string
+  rootDirectory: string
+  projectType: 'git' | 'directory'
+  vcs?: 'git'
+  name?: string
+  icon?: { url?: string; override?: string; color?: string }
+  instructions?: string
+  time: { created: number; updated: number; initialized?: number }
+  sandboxes: string[]
+}
+
+export interface ProjectEnvironmentResponse {
+  keys: string[]
+  variables: Record<string, string>
+}
+
+export interface ProjectSharedFile {
+  name: string
+  relativePath: string
+  size: number
+  modified: number
+  mime?: string
 }
 
 // 后端返回格式: { info: MessageInfo, parts: Part[] }
@@ -178,7 +243,7 @@ export const api = {
 
   // 创建会话
   async createSession(directory?: string): Promise<Session> {
-    const res = await fetch(`${BASE_URL}/session`, {
+    const res = await fetchWithDirectory(`${BASE_URL}/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(directory ? { directory } : {})
@@ -194,7 +259,7 @@ export const api = {
   // 获取消息历史
   // 后端返回 { info: MessageInfo, parts: Part[] }[]
   async getMessages(sessionId: string): Promise<Message[]> {
-    const res = await fetch(`${BASE_URL}/session/${sessionId}/message`)
+    const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}/message`)
     if (!res.ok) {
       console.error(`Failed to load messages: HTTP ${res.status}`)
       return []
@@ -231,7 +296,7 @@ export const api = {
       if (model) {
         body.model = model
       }
-      const res = await fetch(`${BASE_URL}/session/${sessionId}/message`, {
+      const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -292,21 +357,21 @@ export const api = {
 
   // 中止会话
   async abortSession(sessionId: string): Promise<void> {
-    await fetch(`${BASE_URL}/session/${sessionId}/abort`, {
+    await fetchWithDirectory(`${BASE_URL}/session/${sessionId}/abort`, {
       method: 'POST'
     })
   },
 
   // 获取所有会话状态
   async getSessionStatus(): Promise<Record<string, { type: string }>> {
-    const res = await fetch(`${BASE_URL}/session/status`)
+    const res = await fetchWithDirectory(`${BASE_URL}/session/status`)
     const data = await res.json()
     return data
   },
 
   // 删除会话
   async deleteSession(sessionId: string): Promise<boolean> {
-    const res = await fetch(`${BASE_URL}/session/${sessionId}`, {
+    const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}`, {
       method: 'DELETE'
     })
     if (!res.ok) {
@@ -317,7 +382,7 @@ export const api = {
 
   // 更新会话（重命名、修改工作目录等）
   async updateSession(sessionId: string, updates: { title?: string; directory?: string }): Promise<Session> {
-    const res = await fetch(`${BASE_URL}/session/${sessionId}`, {
+    const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates)
@@ -336,7 +401,7 @@ export const api = {
 
   // 删除消息部分
   async deleteMessagePart(sessionId: string, messageId: string, partId: string): Promise<boolean> {
-    const res = await fetch(`${BASE_URL}/session/${sessionId}/message/${messageId}/part/${partId}`, {
+    const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}/message/${messageId}/part/${partId}`, {
       method: 'DELETE'
     })
     if (!res.ok) {
@@ -347,7 +412,7 @@ export const api = {
 
   // 更新消息部分
   async updateMessagePart(sessionId: string, messageId: string, partId: string, updates: { text?: string }): Promise<MessagePart> {
-    const res = await fetch(`${BASE_URL}/session/${sessionId}/message/${messageId}/part/${partId}`, {
+    const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}/message/${messageId}/part/${partId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates)
@@ -361,7 +426,7 @@ export const api = {
 
   // 压缩会话
   async summarizeSession(sessionId: string, model: { providerID: string; modelID: string }): Promise<void> {
-    const res = await fetch(`${BASE_URL}/session/${sessionId}/summarize`, {
+    const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}/summarize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(model)
@@ -374,7 +439,7 @@ export const api = {
 
   // 获取会话待办事项
   async getSessionTodo(sessionId: string): Promise<TodoItem[]> {
-    const res = await fetch(`${BASE_URL}/session/${sessionId}/todo`)
+    const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}/todo`)
     if (!res.ok) {
       throw new Error(`Failed to get session todo: ${res.status}`)
     }
@@ -461,7 +526,7 @@ export const api = {
     const baseReconnectDelay = 1000 // 1秒
 
     function connect(): EventSource {
-      eventSource = new EventSource(`${BASE_URL}/event`)
+      eventSource = new EventSource(applyDirectoryToUrl(`${BASE_URL}/event`))
 
       eventSource.onopen = () => {
         // 连接成功，重置重连计数
@@ -511,6 +576,150 @@ export const api = {
 export interface SSEEvent {
   type: string
   properties: Record<string, any>
+}
+
+export const projectApi = {
+  async list(): Promise<Project[]> {
+    const res = await fetchWithTimeout(`${BASE_URL}/project`)
+    if (!res.ok) {
+      throw new Error(`Failed to list projects: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async current(directory?: string): Promise<Project> {
+    const params = new URLSearchParams()
+    if (directory) params.set('directory', directory)
+    const suffix = params.toString() ? `?${params}` : ''
+    const res = await fetchWithTimeout(`${BASE_URL}/project/current${suffix}`)
+    if (!res.ok) {
+      throw new Error(`Failed to discover project: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async update(projectID: string, updates: { name?: string; instructions?: string }): Promise<Project> {
+    const res = await fetchWithTimeout(`${BASE_URL}/project/${encodeURIComponent(projectID)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to update project: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async forget(projectID: string): Promise<boolean> {
+    const res = await fetchWithTimeout(`${BASE_URL}/project/${encodeURIComponent(projectID)}/forget`, {
+      method: 'POST',
+    })
+    if (!res.ok) {
+      throw new Error(`Failed to forget project: ${res.status}`)
+    }
+    return true
+  },
+
+  async sessions(projectID: string, opts: { roots?: boolean; search?: string; limit?: number } = {}): Promise<Session[]> {
+    const params = new URLSearchParams()
+    if (opts.roots !== undefined) params.set('roots', String(opts.roots))
+    if (opts.search) params.set('search', opts.search)
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+    const suffix = params.toString() ? `?${params}` : ''
+    const res = await fetchWithTimeout(`${BASE_URL}/project/${encodeURIComponent(projectID)}/session${suffix}`)
+    if (!res.ok) {
+      throw new Error(`Failed to list project sessions: ${res.status}`)
+    }
+    const sessions = await res.json()
+    return (sessions || []).map((s: Session) => ({
+      ...s,
+      createdAt: s.time ? new Date(s.time.created).toISOString() : undefined
+    }))
+  },
+
+  async getEnvironment(projectID: string): Promise<ProjectEnvironmentResponse> {
+    const res = await fetchWithTimeout(`${BASE_URL}/project/${encodeURIComponent(projectID)}/environment`)
+    if (!res.ok) {
+      throw new Error(`Failed to get project environment: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async replaceEnvironment(projectID: string, variables: Record<string, string>): Promise<Record<string, string>> {
+    const res = await fetchWithTimeout(`${BASE_URL}/project/${encodeURIComponent(projectID)}/environment`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ variables }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to update project environment: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async setEnvironmentKey(projectID: string, key: string, value: string): Promise<Record<string, string>> {
+    const res = await fetchWithTimeout(
+      `${BASE_URL}/project/${encodeURIComponent(projectID)}/environment/${encodeURIComponent(key)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value }),
+      },
+    )
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to set project environment variable: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async deleteEnvironmentKey(projectID: string, key: string): Promise<Record<string, string>> {
+    const res = await fetchWithTimeout(
+      `${BASE_URL}/project/${encodeURIComponent(projectID)}/environment/${encodeURIComponent(key)}`,
+      { method: 'DELETE' },
+    )
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to delete project environment variable: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async listSharedFiles(projectID: string): Promise<ProjectSharedFile[]> {
+    const res = await fetchWithTimeout(`${BASE_URL}/project/${encodeURIComponent(projectID)}/shared-files`)
+    if (!res.ok) {
+      throw new Error(`Failed to list project shared files: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async uploadSharedFile(projectID: string, payload: { filename: string; url: string; mime?: string }): Promise<ProjectSharedFile> {
+    const res = await fetchWithTimeout(`${BASE_URL}/project/${encodeURIComponent(projectID)}/shared-files`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to upload project shared file: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async deleteSharedFile(projectID: string, relativePath: string): Promise<boolean> {
+    const res = await fetchWithTimeout(`${BASE_URL}/project/${encodeURIComponent(projectID)}/shared-files`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ relativePath }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to delete project shared file: ${res.status}`)
+    }
+    return true
+  },
 }
 
 // === Question Types ===
