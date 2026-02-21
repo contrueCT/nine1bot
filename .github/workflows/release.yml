@@ -82,6 +82,9 @@ jobs:
       - name: Compile and package
         shell: bash
         run: |
+          # 从 tag 获取版本号（去掉 v 前缀）
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          export NINE1BOT_VERSION="${TAG#v}"
           chmod +x scripts/*.sh scripts/*.ts 2>/dev/null || true
           # 编译二进制
           bun run scripts/build.ts --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}

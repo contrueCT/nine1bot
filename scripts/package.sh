@@ -18,8 +18,12 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# 获取版本号
-VERSION=$(grep '"version"' "$PROJECT_ROOT/packages/nine1bot/package.json" | head -1 | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+# 获取版本号（优先使用环境变量，否则从 package.json 读取）
+if [ -n "$NINE1BOT_VERSION" ]; then
+    VERSION="$NINE1BOT_VERSION"
+else
+    VERSION=$(grep '"version"' "$PROJECT_ROOT/packages/nine1bot/package.json" | head -1 | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+fi
 BUILD_NAME="nine1bot-${PLATFORM}-${ARCH}"
 BUILD_DIR="$PROJECT_ROOT/dist/$BUILD_NAME"
 
