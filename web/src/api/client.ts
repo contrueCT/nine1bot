@@ -195,6 +195,10 @@ export const api = {
   // 后端返回 { info: MessageInfo, parts: Part[] }[]
   async getMessages(sessionId: string): Promise<Message[]> {
     const res = await fetch(`${BASE_URL}/session/${sessionId}/message`)
+    if (!res.ok) {
+      console.error(`Failed to load messages: HTTP ${res.status}`)
+      return []
+    }
     const data = await res.json()
     return Array.isArray(data) ? data : (data.data || [])
   },

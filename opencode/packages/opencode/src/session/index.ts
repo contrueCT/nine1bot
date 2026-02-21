@@ -325,7 +325,12 @@ export namespace Session {
   export async function* list() {
     const project = Instance.project
     for (const item of await Storage.list(["session", project.id])) {
-      yield Storage.read<Info>(item)
+      try {
+        yield await Storage.read<Info>(item)
+      } catch (e) {
+        if (Storage.NotFoundError.isInstance(e) || Storage.CorruptedError.isInstance(e)) continue
+        throw e
+      }
     }
   }
 

@@ -33,6 +33,11 @@ const emit = defineEmits<{
 const scrollContainer = ref<HTMLDivElement>()
 const showDirectoryBrowser = ref(false)
 
+// Filter out invalid messages (e.g. corrupted data from backend)
+const validMessages = computed(() =>
+  props.messages.filter(m => m?.info?.id)
+)
+
 // Time-based greeting
 const greeting = computed(() => {
   const hour = new Date().getHours()
@@ -79,7 +84,7 @@ function scrollToBottom() {
     // Check if user is already near bottom to avoid annoying auto-scroll if they are reading history
     const isNearBottom = scrollContainer.value.scrollHeight - scrollContainer.value.scrollTop - scrollContainer.value.clientHeight < 100
 
-    if (isNearBottom || props.messages.length <= 1) {
+    if (isNearBottom || validMessages.value.length <= 1) {
        // Always scroll on simple cases
        scrollContainer.value.scrollTo({
         top: scrollContainer.value.scrollHeight,
@@ -109,7 +114,7 @@ function scrollToBottom() {
     </div>
 
     <!-- Empty State -->
-    <div v-if="messages.length === 0 && !isLoading && !sessionError" class="chat-empty">
+    <div v-if="validMessages.length === 0 && !isLoading && !sessionError" class="chat-empty">
       <div class="welcome-section">
         <div class="greeting-row">
           <!-- Decorative star icon -->
@@ -134,7 +139,7 @@ function scrollToBottom() {
     <!-- Messages -->
     <div class="messages-container" v-else>
       <MessageItem
-        v-for="message in messages"
+        v-for="message in validMessages"
         :key="message.info.id"
         :message="message"
         @delete-part="(msgId, partId) => emit('deletePart', msgId, partId)"
