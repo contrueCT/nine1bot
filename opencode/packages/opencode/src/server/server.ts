@@ -55,6 +55,7 @@ export namespace Server {
 
   let _url: URL | undefined
   let _corsWhitelist: string[] = []
+  let _basicAuthFallbackLogged = false
 
   export function url(): URL {
     return _url ?? new URL("http://localhost:4096")
@@ -91,11 +92,42 @@ export namespace Server {
             status: 500,
           })
         })
-        .use((c, next) => {
+        .use(async (c, next) => {
           const password = Flag.OPENCODE_SERVER_PASSWORD
           if (!password) return next()
           const username = Flag.OPENCODE_SERVER_USERNAME ?? "opencode"
-          return basicAuth({ username, password })(c, next)
+          try {
+            return await basicAuth({ username, password })(c, next)
+          } catch (e) {
+            // Re-throw normal 401 HTTPException (Hono basicAuth's expected behavior)
+            if (e instanceof HTTPException) throw e
+            // crypto.subtle may fail on some platforms (e.g. compiled Bun on Windows)
+            // Fallback to simple string comparison
+            if (!_basicAuthFallbackLogged) {
+              _basicAuthFallbackLogged = true
+              log.warn("basicAuth crypto failed, using fallback", { error: String(e) })
+            }
+            const authHeader = c.req.header("Authorization")
+            if (authHeader) {
+              try {
+                const match = authHeader.match(/^Basic\s+(.+)$/i)
+                if (match) {
+                  const decoded = atob(match[1])
+                  const sep = decoded.indexOf(":")
+                  if (sep !== -1) {
+                    const u = decoded.slice(0, sep)
+                    const p = decoded.slice(sep + 1)
+                    if (u === username && p === password) {
+                      return next()
+                    }
+                  }
+                }
+              } catch {}
+            }
+            return c.text("Unauthorized", 401, {
+              "WWW-Authenticate": 'Basic realm="Secure Area"',
+            })
+          }
         })
         .use(async (c, next) => {
           const skipLogging = c.req.path === "/log"
