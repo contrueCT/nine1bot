@@ -4,6 +4,7 @@ import { Global } from "../global"
 import { Filesystem } from "../util/filesystem"
 import { Config } from "../config/config"
 import { Instance } from "../project/instance"
+import { Project } from "../project/project"
 import { ProjectEnvironment } from "../project/environment"
 import { ProjectSharedFiles } from "../project/shared-files"
 import { Flag } from "@/flag/flag"
@@ -95,20 +96,20 @@ async function resolveRelative(instruction: string): Promise<string[]> {
 }
 
 async function projectContextPrompt() {
-  const project = Instance.project
-  const rootDirectory = project.rootDirectory || project.worktree
+  const liveProject = await Project.get(Instance.project.id).catch(() => Instance.project)
+  const rootDirectory = liveProject.rootDirectory || liveProject.worktree
   const fileDirectory = ProjectSharedFiles.dir(rootDirectory)
-  const envKeys = await ProjectEnvironment.listKeys(project.id).catch(() => [] as string[])
+  const envKeys = await ProjectEnvironment.listKeys(liveProject.id).catch(() => [] as string[])
   const sharedFiles = await ProjectSharedFiles.list(rootDirectory).catch(() => [] as Awaited<ReturnType<typeof ProjectSharedFiles.list>>)
 
   const lines: string[] = []
   lines.push("<project-context>")
   lines.push(`Project root directory: ${rootDirectory}`)
 
-  if (project.instructions?.trim()) {
+  if (liveProject.instructions?.trim()) {
     lines.push("")
     lines.push("Project instructions:")
-    lines.push(project.instructions.trim())
+    lines.push(liveProject.instructions.trim())
   }
 
   if (envKeys.length > 0) {

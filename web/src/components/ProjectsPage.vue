@@ -8,6 +8,7 @@ import DirectoryBrowser from './DirectoryBrowser.vue'
 const props = defineProps<{
   projects: ProjectInfo[]
   currentProject: ProjectInfo | null
+  projectContextRevision?: number
 }>()
 
 const emit = defineEmits<{
@@ -87,6 +88,17 @@ watch(
     await Promise.all([loadSessions(project.id), loadEnvironment(project.id), loadSharedFiles(project.id)])
   },
   { immediate: true },
+)
+
+watch(
+  () => props.projectContextRevision,
+  async () => {
+    const project = props.currentProject
+    if (!project) return
+    instructions.value = project.instructions || ''
+    editName.value = project.name || ''
+    await Promise.all([loadEnvironment(project.id), loadSharedFiles(project.id)])
+  },
 )
 
 async function loadSessions(projectId: string) {

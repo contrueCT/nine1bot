@@ -14,6 +14,7 @@ import { BusEvent } from "@/bus/bus-event"
 import { iife } from "@/util/iife"
 import { GlobalBus } from "@/bus/global"
 import { existsSync } from "fs"
+import { Bus } from "@/bus"
 
 export namespace Project {
   const log = Log.create({ service: "project" })
@@ -42,6 +43,7 @@ export namespace Project {
         created: z.number(),
         updated: z.number(),
         initialized: z.number().optional(),
+        configUpdated: z.number().optional(),
       }),
       sandboxes: z.array(z.string()),
     })
@@ -50,8 +52,26 @@ export namespace Project {
     })
   export type Info = z.infer<typeof Info>
 
+  const ContextChanged = z.enum(["instructions", "environment", "shared_files"])
+  type ContextChanged = z.infer<typeof ContextChanged>
+
+  const ContextRevision = z.object({
+    revision: z.number().nonnegative(),
+    updatedAt: z.number(),
+  })
+  type ContextRevision = z.infer<typeof ContextRevision>
+
   export const Event = {
     Updated: BusEvent.define("project.updated", Info),
+    ContextUpdated: BusEvent.define(
+      "project.context.updated",
+      z.object({
+        projectID: z.string(),
+        revision: z.number().nonnegative(),
+        changed: z.array(ContextChanged),
+        updatedAt: z.number(),
+      }),
+    ),
   }
 
   interface Meta {
@@ -77,6 +97,24 @@ export namespace Project {
       return
     }
     await Storage.remove(["project_meta", projectID]).catch(() => undefined)
+  }
+
+  function normalizeProject(project: Info): Info {
+    return {
+      ...project,
+      rootDirectory: project.rootDirectory || project.worktree,
+      projectType: project.projectType || (project.vcs === "git" ? "git" : "directory"),
+      sandboxes: project.sandboxes?.filter((x) => existsSync(x)),
+    } satisfies Info
+  }
+
+  function emitProjectUpdated(project: Info) {
+    GlobalBus.emit("event", {
+      payload: {
+        type: Event.Updated.type,
+        properties: normalizeProject(project),
+      },
+    })
   }
 
   export async function fromDirectory(directory: string) {
@@ -270,12 +308,7 @@ export namespace Project {
     result.sandboxes = result.sandboxes.filter((x) => existsSync(x))
     await Storage.write<Info>(["project", id], result)
     await setHidden(id, false)
-    GlobalBus.emit("event", {
-      payload: {
-        type: Event.Updated.type,
-        properties: result,
-      },
-    })
+    emitProjectUpdated(result)
     return { project: result, sandbox: normalizedSandbox }
   }
 
@@ -347,29 +380,59 @@ export namespace Project {
       if (!project) continue
       const hidden = await readMeta(project.id).then((x) => x.hidden === true)
       if (hidden) continue
-      result.push({
-        ...project,
-        rootDirectory: project.rootDirectory || project.worktree,
-        projectType: project.projectType || (project.vcs === "git" ? "git" : "directory"),
-        sandboxes: project.sandboxes?.filter((x) => existsSync(x)),
-      })
+      result.push(normalizeProject(project))
     }
     return result
   }
 
   export async function get(projectID: string) {
     const project = await Storage.read<Info>(["project", projectID])
-    return {
-      ...project,
-      rootDirectory: project.rootDirectory || project.worktree,
-      projectType: project.projectType || (project.vcs === "git" ? "git" : "directory"),
-      sandboxes: project.sandboxes?.filter((x) => existsSync(x)),
-    } satisfies Info
+    return normalizeProject(project)
   }
 
   export async function forget(projectID: string) {
     await setHidden(projectID, true)
     return true
+  }
+
+  async function readContextRevision(projectID: string): Promise<ContextRevision> {
+    return Storage.read<ContextRevision>(["project_config", projectID]).catch(() => ({
+      revision: 0,
+      updatedAt: 0,
+    }))
+  }
+
+  async function writeContextRevision(projectID: string, value: ContextRevision) {
+    await Storage.write<ContextRevision>(["project_config", projectID], value)
+  }
+
+  export async function markContextChanged(projectID: string, changed: ContextChanged[]) {
+    const uniqueChanged = [...new Set(changed)]
+    if (uniqueChanged.length === 0) {
+      return readContextRevision(projectID)
+    }
+
+    const previous = await readContextRevision(projectID)
+    const updatedAt = Date.now()
+    const next: ContextRevision = {
+      revision: previous.revision + 1,
+      updatedAt,
+    }
+    await writeContextRevision(projectID, next)
+
+    const project = await Storage.update<Info>(["project", projectID], (draft) => {
+      draft.time.updated = updatedAt
+      draft.time.configUpdated = updatedAt
+    })
+    emitProjectUpdated(project)
+
+    await Bus.publish(Event.ContextUpdated, {
+      projectID,
+      revision: next.revision,
+      changed: uniqueChanged,
+      updatedAt,
+    })
+    return next
   }
 
   export const update = fn(
@@ -381,9 +444,13 @@ export namespace Project {
       commands: Info.shape.commands.optional(),
     }),
     async (input) => {
+      let instructionsChanged = false
       const result = await Storage.update<Info>(["project", input.projectID], (draft) => {
         if (input.name !== undefined) draft.name = input.name
-        if (input.instructions !== undefined) draft.instructions = input.instructions
+        if (input.instructions !== undefined) {
+          instructionsChanged = draft.instructions !== input.instructions
+          draft.instructions = input.instructions
+        }
         if (input.icon !== undefined) {
           draft.icon = {
             ...draft.icon,
@@ -404,13 +471,13 @@ export namespace Project {
 
         draft.time.updated = Date.now()
       })
-      GlobalBus.emit("event", {
-        payload: {
-          type: Event.Updated.type,
-          properties: result,
-        },
-      })
-      return result
+      if (instructionsChanged) {
+        await markContextChanged(input.projectID, ["instructions"])
+        return get(input.projectID)
+      }
+
+      emitProjectUpdated(result)
+      return normalizeProject(result)
     },
   )
 
@@ -432,13 +499,8 @@ export namespace Project {
       draft.sandboxes = sandboxes
       draft.time.updated = Date.now()
     })
-    GlobalBus.emit("event", {
-      payload: {
-        type: Event.Updated.type,
-        properties: result,
-      },
-    })
-    return result
+    emitProjectUpdated(result)
+    return normalizeProject(result)
   }
 
   export async function removeSandbox(projectID: string, directory: string) {
@@ -447,12 +509,7 @@ export namespace Project {
       draft.sandboxes = sandboxes.filter((sandbox) => sandbox !== directory)
       draft.time.updated = Date.now()
     })
-    GlobalBus.emit("event", {
-      payload: {
-        type: Event.Updated.type,
-        properties: result,
-      },
-    })
-    return result
+    emitProjectUpdated(result)
+    return normalizeProject(result)
   }
 }

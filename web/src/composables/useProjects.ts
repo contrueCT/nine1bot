@@ -23,6 +23,21 @@ export function useProjects() {
 
   const projects = computed(() => projectList.value)
 
+  function upsertProject(project: Project) {
+    const mapped = toProjectInfo(project)
+    const index = projectList.value.findIndex((p) => p.id === mapped.id)
+    if (index >= 0) {
+      projectList.value[index] = mapped
+    } else {
+      projectList.value.unshift(mapped)
+    }
+    projectList.value = [...projectList.value].sort((a, b) => b.time.updated - a.time.updated)
+    if (currentProject.value?.id === mapped.id) {
+      currentProject.value = mapped
+    }
+    return mapped
+  }
+
   async function loadProjects() {
     isLoading.value = true
     try {
@@ -71,34 +86,19 @@ export function useProjects() {
       })
     }
 
-    const mapped = toProjectInfo(project)
-    const index = projectList.value.findIndex((p) => p.id === mapped.id)
-    if (index >= 0) {
-      projectList.value[index] = mapped
-    } else {
-      projectList.value.unshift(mapped)
-    }
-
-    projectList.value = [...projectList.value].sort((a, b) => b.time.updated - a.time.updated)
+    const mapped = upsertProject(project)
     currentProject.value = mapped
     return mapped
   }
 
   async function updateProject(projectId: string, updates: { name?: string; instructions?: string }) {
-    const updated = toProjectInfo(await projectApi.update(projectId, updates))
-    const index = projectList.value.findIndex((p) => p.id === projectId)
-    if (index >= 0) {
-      projectList.value[index] = updated
-    } else {
-      projectList.value.unshift(updated)
-    }
-    projectList.value = [...projectList.value].sort((a, b) => b.time.updated - a.time.updated)
-
-    if (currentProject.value?.id === projectId) {
-      currentProject.value = updated
-    }
-
+    const updated = upsertProject(await projectApi.update(projectId, updates))
     return updated
+  }
+
+  async function refreshProject(projectId: string) {
+    const refreshed = await projectApi.get(projectId)
+    return upsertProject(refreshed)
   }
 
   async function forgetProject(projectId: string) {
@@ -127,6 +127,7 @@ export function useProjects() {
     openDirectory,
     updateProject,
     forgetProject,
+    refreshProject,
     getProject,
   }
 }

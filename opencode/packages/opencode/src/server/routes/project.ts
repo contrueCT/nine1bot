@@ -68,6 +68,31 @@ export const ProjectRoutes = lazy(() =>
       },
     )
     .get(
+      "/:projectID",
+      describeRoute({
+        summary: "Get project",
+        description: "Get one project by ID.",
+        operationId: "project.get",
+        responses: {
+          200: {
+            description: "Project information",
+            content: {
+              "application/json": {
+                schema: resolver(Project.Info),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ projectID: z.string() })),
+      async (c) => {
+        const { projectID } = c.req.valid("param")
+        const project = await Project.get(projectID)
+        return c.json(project)
+      },
+    )
+    .get(
       "/:projectID/session",
       describeRoute({
         summary: "List project sessions",
@@ -205,6 +230,7 @@ export const ProjectRoutes = lazy(() =>
         const body = c.req.valid("json")
         await Project.get(projectID)
         const variables = await ProjectEnvironment.setAll(projectID, body.variables)
+        await Project.markContextChanged(projectID, ["environment"])
         return c.json(variables)
       },
     )
@@ -233,6 +259,7 @@ export const ProjectRoutes = lazy(() =>
         const body = c.req.valid("json")
         await Project.get(projectID)
         const variables = await ProjectEnvironment.set(projectID, key, body.value)
+        await Project.markContextChanged(projectID, ["environment"])
         return c.json(variables)
       },
     )
@@ -259,6 +286,7 @@ export const ProjectRoutes = lazy(() =>
         const { projectID, key } = c.req.valid("param")
         await Project.get(projectID)
         const variables = await ProjectEnvironment.remove(projectID, key)
+        await Project.markContextChanged(projectID, ["environment"])
         return c.json(variables)
       },
     )
@@ -338,6 +366,7 @@ export const ProjectRoutes = lazy(() =>
         const body = c.req.valid("json")
         const project = await Project.get(projectID)
         const file = await ProjectSharedFiles.save(project.rootDirectory, body)
+        await Project.markContextChanged(projectID, ["shared_files"])
         return c.json(file)
       },
     )
@@ -371,6 +400,7 @@ export const ProjectRoutes = lazy(() =>
         const body = c.req.valid("json")
         const project = await Project.get(projectID)
         await ProjectSharedFiles.remove(project.rootDirectory, body.relativePath)
+        await Project.markContextChanged(projectID, ["shared_files"])
         return c.json(true)
       },
     )

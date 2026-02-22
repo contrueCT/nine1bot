@@ -7,7 +7,7 @@ import { useAppMode } from './composables/useAppMode'
 import { useSessionMode } from './composables/useSessionMode'
 import { useProjects } from './composables/useProjects'
 import { useGlobalRecentSessions } from './composables/useGlobalRecentSessions'
-import type { Session } from './api/client'
+import { api, type GlobalSSEEventEnvelope, type Session } from './api/client'
 import Header from './components/Header.vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
@@ -112,6 +112,7 @@ const {
   openDirectory,
   updateProject,
   forgetProject,
+  refreshProject,
   getProject,
 } = useProjects()
 
@@ -142,6 +143,7 @@ const showSearch = ref(false)
 const showProjectsPage = ref(false)
 
 const sidebarCollapsed = ref(false)
+const projectContextRevision = ref(0)
 
 const sidebarSessions = computed(() => {
   if (appMode.value !== 'agent') {
@@ -184,11 +186,56 @@ async function handleSelectModel(providerId: string, modelId: string) {
 let stopSessionWatch: (() => void) | null = null
 let unregisterTerminalHandler: (() => void) | null = null
 let unregisterPreviewHandler: (() => void) | null = null
+let globalEventSource: EventSource | null = null
+let projectsRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
 async function refreshGlobalRecentsIfAgent() {
   if (appMode.value !== 'agent') return
   await refreshGlobalRecentSessions().catch((error) => {
     console.error('Failed to refresh global recent sessions:', error)
+  })
+}
+
+function scheduleProjectsRefresh() {
+  if (projectsRefreshTimer) return
+  projectsRefreshTimer = setTimeout(() => {
+    projectsRefreshTimer = null
+    loadProjects().catch((error) => {
+      console.error('Failed to refresh projects:', error)
+    })
+  }, 250)
+}
+
+async function handleProjectContextUpdated(projectID: string) {
+  if (currentProject.value?.id === projectID) {
+    projectContextRevision.value++
+    await refreshProject(projectID).catch((error) => {
+      console.error('Failed to refresh current project:', error)
+    })
+  } else {
+    scheduleProjectsRefresh()
+  }
+}
+
+function subscribeGlobalEvents() {
+  if (globalEventSource) {
+    globalEventSource.close()
+    globalEventSource = null
+  }
+
+  globalEventSource = api.subscribeGlobalEvents((event: GlobalSSEEventEnvelope) => {
+    const payload = event.payload
+    if (payload?.type === 'project.context.updated') {
+      const projectID = payload.properties?.projectID
+      if (typeof projectID === 'string' && projectID.length > 0) {
+        void handleProjectContextUpdated(projectID)
+      }
+      return
+    }
+
+    if (payload?.type === 'project.updated') {
+      scheduleProjectsRefresh()
+    }
   })
 }
 
@@ -199,6 +246,7 @@ onMounted(async () => {
 
   // 然后建立 SSE 连接
   subscribeToEvents()
+  subscribeGlobalEvents()
 
   // 设置会话切换的 watch
   stopSessionWatch = watch(currentSession, async () => {
@@ -241,6 +289,14 @@ onMounted(async () => {
 
 onUnmounted(() => {
   unsubscribe()
+  if (globalEventSource) {
+    globalEventSource.close()
+    globalEventSource = null
+  }
+  if (projectsRefreshTimer) {
+    clearTimeout(projectsRefreshTimer)
+    projectsRefreshTimer = null
+  }
   document.removeEventListener('keydown', handleGlobalKeydown)
   stopGlobalRecentPolling()
   // 清理 watch
@@ -550,6 +606,7 @@ function handlePromptSelect(prompt: string) {
           v-if="showProjectsPage"
           :projects="projects"
           :currentProject="currentProject"
+          :projectContextRevision="projectContextRevision"
           @select-project="handleSelectProject"
           @update-project="handleUpdateProject"
           @select-session="handleProjectSelectSession"

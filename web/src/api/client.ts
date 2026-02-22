@@ -95,7 +95,7 @@ export interface Project {
   name?: string
   icon?: { url?: string; override?: string; color?: string }
   instructions?: string
-  time: { created: number; updated: number; initialized?: number }
+  time: { created: number; updated: number; initialized?: number; configUpdated?: number }
   sandboxes: string[]
 }
 
@@ -570,12 +570,60 @@ export const api = {
     }
 
     return connect()
-  }
+  },
+
+  // Subscribe global events (cross-directory / cross-instance updates)
+  subscribeGlobalEvents(onEvent: (event: GlobalSSEEventEnvelope) => void): EventSource {
+    let eventSource: EventSource
+    let reconnectAttempts = 0
+    const maxReconnectAttempts = 5
+    const baseReconnectDelay = 1000
+
+    function connect(): EventSource {
+      eventSource = new EventSource(`${BASE_URL}/global/event`)
+
+      eventSource.onopen = () => {
+        reconnectAttempts = 0
+      }
+
+      eventSource.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data)
+          if (data?.payload?.type) {
+            onEvent(data as GlobalSSEEventEnvelope)
+          }
+        } catch {
+          // ignore malformed event payload
+        }
+      }
+
+      eventSource.onerror = () => {
+        if (eventSource.readyState === EventSource.CLOSED && reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++
+          const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts - 1)
+          setTimeout(() => {
+            if (eventSource.readyState === EventSource.CLOSED) {
+              connect()
+            }
+          }, delay)
+        }
+      }
+
+      return eventSource
+    }
+
+    return connect()
+  },
 }
 
 export interface SSEEvent {
   type: string
   properties: Record<string, any>
+}
+
+export interface GlobalSSEEventEnvelope {
+  directory?: string
+  payload: SSEEvent
 }
 
 export const projectApi = {
@@ -594,6 +642,14 @@ export const projectApi = {
     const res = await fetchWithTimeout(`${BASE_URL}/project/current${suffix}`)
     if (!res.ok) {
       throw new Error(`Failed to discover project: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async get(projectID: string): Promise<Project> {
+    const res = await fetchWithTimeout(`${BASE_URL}/project/${encodeURIComponent(projectID)}`)
+    if (!res.ok) {
+      throw new Error(`Failed to get project: ${res.status}`)
     }
     return res.json()
   },
