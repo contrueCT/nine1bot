@@ -468,6 +468,28 @@ export namespace Server {
             return c.json(await Format.status())
           },
         )
+        .get(
+          "/auth",
+          describeRoute({
+            summary: "List auth credentials",
+            description: "Get provider IDs that currently have saved authentication credentials",
+            operationId: "auth.list",
+            responses: {
+              200: {
+                description: "List of authenticated provider IDs",
+                content: {
+                  "application/json": {
+                    schema: resolver(z.array(z.string())),
+                  },
+                },
+              },
+            },
+          }),
+          async (c) => {
+            const auth = await Auth.all()
+            return c.json(Object.keys(auth))
+          },
+        )
         .put(
           "/auth/:providerID",
           describeRoute({

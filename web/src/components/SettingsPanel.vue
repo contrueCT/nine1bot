@@ -16,7 +16,7 @@ const emit = defineEmits<{
 
 const {
   activeTab,
-  filteredProviders,
+  modelProviders,
   currentProvider,
   currentModel,
   defaultProvider,
@@ -155,7 +155,7 @@ function handleOverlayClick(e: MouseEvent) {
         <!-- Models Tab -->
         <ModelSelector
           v-if="activeTab === 'models'"
-          :providers="filteredProviders"
+          :providers="modelProviders"
           :currentProvider="currentProvider"
           :currentModel="currentModel"
           :defaultProvider="defaultProvider"

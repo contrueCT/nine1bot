@@ -106,6 +106,38 @@ Nine1Bot 支持集成以下配置：
 }
 ```
 
+### 自定义 LLM 来源（OpenAI / Anthropic 协议）
+
+你可以在设置页的“认证管理 → 自定义来源”中直接添加，也可以手动编辑 `nine1bot.config.jsonc`：
+
+```jsonc
+{
+  "customProviders": {
+    "my-openai": {
+      "name": "My OpenAI",
+      "protocol": "openai",
+      "baseURL": "https://example.com/v1",
+      "models": [
+        { "id": "gpt-4o-mini", "name": "GPT-4o mini" }
+      ]
+    },
+    "my-anthropic": {
+      "name": "My Anthropic",
+      "protocol": "anthropic",
+      "baseURL": "https://anthropic-proxy.example.com",
+      "models": [
+        { "id": "claude-3-5-sonnet-latest" }
+      ]
+    }
+  }
+}
+```
+
+说明：
+- `customProviders` 仅定义来源结构（协议、地址、模型）
+- API Key 仍通过认证页保存到本地 `auth.json`
+- `protocol` 目前仅支持 `openai` 与 `anthropic`
+
 ## 安装
 
 ### 方式一：下载 Release（推荐）

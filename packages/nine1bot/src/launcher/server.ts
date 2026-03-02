@@ -1,7 +1,7 @@
 import { resolve, dirname, basename } from 'path'
 import { writeFile, mkdir } from 'fs/promises'
 import { tmpdir } from 'os'
-import type { ServerConfig, AuthConfig, Nine1BotConfig } from '../config/schema'
+import type { ServerConfig, AuthConfig, Nine1BotConfig, CustomProvider } from '../config/schema'
 import { getInstallDir, getGlobalSkillsDir, getAuthPath, getGlobalConfigDir, getProjectEnvDir } from '../config/loader'
 import { getGlobalPreferencesPath } from '../preferences'
 // 静态导入 OpenCode 服务器（编译时打包）
@@ -54,7 +54,39 @@ export interface StartServerOptions {
 /**
  * Nine1Bot 特有的配置字段（需要从 opencode 配置中过滤掉）
  */
-const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills', 'sandbox', 'browser']
+const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills', 'sandbox', 'browser', 'customProviders']
+
+function protocolToNpm(protocol: CustomProvider['protocol']): string {
+  return protocol === 'anthropic' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible'
+}
+
+function mapCustomProvidersToOpencode(customProviders: Nine1BotConfig['customProviders']) {
+  const mapped: Record<string, any> = {}
+  for (const [providerId, provider] of Object.entries(customProviders || {})) {
+    mapped[providerId] = {
+      name: provider.name,
+      npm: protocolToNpm(provider.protocol),
+      api: provider.baseURL,
+      options: {
+        baseURL: provider.baseURL,
+        ...(provider.options || {}),
+      },
+      models: Object.fromEntries(
+        provider.models.map((model) => [
+          model.id,
+          {
+            id: model.id,
+            name: model.name || model.id,
+            provider: {
+              npm: protocolToNpm(provider.protocol),
+            },
+          },
+        ]),
+      ),
+    }
+  }
+  return mapped
+}
 
 /**
  * 生成 opencode 兼容的配置文件
@@ -62,6 +94,7 @@ const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills',
  */
 async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
   const opencodeConfig: Record<string, any> = {}
+  const customProviders = mapCustomProvidersToOpencode(config.customProviders || {})
 
   for (const [key, value] of Object.entries(config)) {
     if (!NINE1BOT_ONLY_FIELDS.includes(key)) {
@@ -82,14 +115,16 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
       // 特殊处理 provider 字段：过滤掉 nine1bot 特有的继承控制字段
       else if (key === 'provider' && typeof value === 'object' && value !== null) {
         const { inheritOpencode, ...providers } = value as any
-        if (Object.keys(providers).length > 0) {
-          opencodeConfig[key] = providers
-        }
+        opencodeConfig[key] = { ...providers, ...customProviders }
       }
       else {
         opencodeConfig[key] = value
       }
     }
+  }
+
+  if (!opencodeConfig.provider && Object.keys(customProviders).length > 0) {
+    opencodeConfig.provider = customProviders
   }
 
   // 写入临时文件（设置安全权限，仅当前用户可读写）

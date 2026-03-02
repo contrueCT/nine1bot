@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
-import { providerApi, configApi, mcpApi, skillApi, authApi, nine1botConfigApi } from '../api/client'
-import type { Provider, McpServer, Skill, Config, McpConfig } from '../api/client'
+import { providerApi, configApi, mcpApi, skillApi, authApi, nine1botConfigApi, customProviderApi } from '../api/client'
+import type { Provider, McpServer, Skill, Config, McpConfig, CustomProvider } from '../api/client'
 
 const showSettings = ref(false)
 const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth' | 'preferences' | 'profile'>('models')
@@ -13,6 +13,7 @@ const currentProvider = ref<string>('')
 const currentModel = ref<string>('')
 const loadingProviders = ref(false)
 const providerSearchQuery = ref('')
+const customProviders = ref<Record<string, CustomProvider>>({})
 
 // 供应商优先级（热门供应商排在前面）
 const PROVIDER_PRIORITY: Record<string, number> = {
@@ -41,7 +42,7 @@ const defaultModel = ref<string>('')
 export function useSettings() {
   function openSettings() {
     showSettings.value = true
-    loadProviders()
+    loadCustomProviders().then(() => loadProviders())
     loadMcpServers()
     loadSkills()
     loadConfig()
@@ -56,10 +57,12 @@ export function useSettings() {
     loadingProviders.value = true
     try {
       // 并行获取 providers 和 auth methods
-      const [providerData, authMethods] = await Promise.all([
+      const [providerData, authMethods, authedProviderIds] = await Promise.all([
         providerApi.list(),
-        providerApi.getAuthMethods().catch(() => ({} as Record<string, any[]>))
+        providerApi.getAuthMethods().catch(() => ({} as Record<string, any[]>)),
+        authApi.list().catch(() => [])
       ])
+      const authSet = new Set(authedProviderIds)
 
       // 保存 defaults 和 connected
       providerDefaults.value = providerData.defaults
@@ -68,16 +71,21 @@ export function useSettings() {
       // 合并 authMethods 到 providers，为没有 authMethods 的供应商添加默认的 API Key 方法
       providers.value = providerData.providers.map(p => {
         const methods = authMethods[p.id]?.map((m: any) => ({
-          type: m.type,
+          type: m.type === 'apiKey' ? 'api' : m.type,
           name: m.name
         })) || []
 
         // 如果没有认证方法，默认添加 API Key（几乎所有供应商都支持）
         if (methods.length === 0) {
-          methods.push({ type: 'apiKey', name: 'API Key' })
+          methods.push({ type: 'api', name: 'API Key' })
         }
 
-        return { ...p, authMethods: methods }
+        return {
+          ...p,
+          authenticated: authSet.has(p.id),
+          authMethods: methods,
+          isCustom: p.id in customProviders.value,
+        }
       })
     } catch (e) {
       console.error('Failed to load providers:', e)
@@ -213,6 +221,29 @@ export function useSettings() {
     }
   }
 
+  async function loadCustomProviders() {
+    try {
+      const list = await customProviderApi.list()
+      customProviders.value = list
+      await nine1botConfigApi.update({ customProviders: list })
+    } catch (e) {
+      console.error('Failed to load custom providers:', e)
+      customProviders.value = {}
+    }
+  }
+
+  async function upsertCustomProvider(providerId: string, provider: CustomProvider) {
+    await customProviderApi.upsert(providerId, provider)
+    await loadCustomProviders()
+    await loadProviders()
+  }
+
+  async function removeCustomProvider(providerId: string) {
+    await customProviderApi.remove(providerId)
+    await loadCustomProviders()
+    await loadProviders()
+  }
+
   async function healthMcp(name: string) {
     try {
       await mcpApi.health(name)
@@ -275,12 +306,27 @@ export function useSettings() {
     })
   })
 
+  // 模型页面使用：不受搜索词影响，但保持“已认证优先 + 优先级排序”
+  const modelProviders = computed(() => {
+    return [...providers.value].sort((a, b) => {
+      if (a.authenticated !== b.authenticated) {
+        return a.authenticated ? -1 : 1
+      }
+      const pa = PROVIDER_PRIORITY[a.id] ?? 99
+      const pb = PROVIDER_PRIORITY[b.id] ?? 99
+      if (pa !== pb) return pa - pb
+      return a.name.localeCompare(b.name)
+    })
+  })
+
   return {
     showSettings,
     activeTab,
     providers,
+    modelProviders,
     filteredProviders,
     providerSearchQuery,
+    customProviders,
     currentProvider,
     currentModel,
     defaultProvider,
@@ -294,6 +340,7 @@ export function useSettings() {
     openSettings,
     closeSettings,
     loadProviders,
+    loadCustomProviders,
     loadConfig,
     loadNine1botConfig,
     loadMcpServers,
@@ -307,6 +354,8 @@ export function useSettings() {
     healthMcp,
     startOAuth,
     setApiKey,
-    removeAuth
+    removeAuth,
+    upsertCustomProvider,
+    removeCustomProvider
   }
 }

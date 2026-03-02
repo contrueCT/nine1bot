@@ -870,6 +870,7 @@ export interface Provider {
   models: Model[]
   authenticated: boolean
   authMethods?: AuthMethod[]
+  isCustom?: boolean
 }
 
 export interface Model {
@@ -880,8 +881,25 @@ export interface Model {
 }
 
 export interface AuthMethod {
-  type: 'oauth' | 'apiKey'
+  type: 'oauth' | 'api'
   name?: string
+}
+
+export interface CustomProviderModel {
+  id: string
+  name?: string
+}
+
+export interface CustomProvider {
+  name: string
+  protocol: 'openai' | 'anthropic'
+  baseURL: string
+  models: CustomProviderModel[]
+  options?: {
+    timeout?: number | false
+    headers?: Record<string, string>
+    [key: string]: any
+  }
 }
 
 // === Skill Types ===
@@ -1019,7 +1037,17 @@ export const providerApi = {
   async getAuthMethods(): Promise<Record<string, AuthMethod[]>> {
     const res = await fetch(`${BASE_URL}/provider/auth`)
     const data = await res.json()
-    return data
+    const normalized: Record<string, AuthMethod[]> = {}
+    for (const [providerId, methods] of Object.entries(data || {})) {
+      const list = Array.isArray(methods) ? methods : []
+      normalized[providerId] = list
+        .map((method: any) => ({
+          type: method?.type === 'apiKey' ? 'api' : method?.type,
+          name: method?.name
+        }))
+        .filter((method: any) => method.type === 'api' || method.type === 'oauth')
+    }
+    return normalized
   },
 
   // 启动 OAuth - 需要 method index
@@ -1045,17 +1073,49 @@ export const providerApi = {
 
 export const nine1botConfigApi = {
   // 获取 Nine1Bot 默认配置（nine1bot.config.jsonc）
-  async get(): Promise<{ model?: string; small_model?: string; configPath: string }> {
+  async get(): Promise<{ model?: string; small_model?: string; customProviders?: Record<string, CustomProvider>; configPath: string }> {
     const res = await fetchWithTimeout(`${BASE_URL}/config/nine1bot`)
     return res.json()
   },
   // 更新 Nine1Bot 默认配置
-  async update(config: { model?: string; small_model?: string }): Promise<void> {
+  async update(config: { model?: string; small_model?: string; customProviders?: Record<string, CustomProvider> }): Promise<void> {
     await fetchWithTimeout(`${BASE_URL}/config/nine1bot`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config)
     })
+  }
+}
+
+export const customProviderApi = {
+  async list(): Promise<Record<string, CustomProvider>> {
+    const res = await fetchWithTimeout(`${BASE_URL}/config/nine1bot/custom-providers`)
+    if (!res.ok) {
+      throw new Error(`Failed to load custom providers: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async upsert(providerId: string, provider: CustomProvider): Promise<void> {
+    const res = await fetchWithTimeout(`${BASE_URL}/config/nine1bot/custom-providers/${encodeURIComponent(providerId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(provider)
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to save custom provider: ${res.status}`)
+    }
+  },
+
+  async remove(providerId: string): Promise<void> {
+    const res = await fetchWithTimeout(`${BASE_URL}/config/nine1bot/custom-providers/${encodeURIComponent(providerId)}`, {
+      method: 'DELETE'
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to remove custom provider: ${res.status}`)
+    }
   }
 }
 
@@ -1080,6 +1140,13 @@ export const configApi = {
 }
 
 export const authApi = {
+  async list(): Promise<string[]> {
+    const res = await fetch(`${BASE_URL}/auth`)
+    if (!res.ok) return []
+    const data = await res.json().catch(() => [])
+    return Array.isArray(data) ? data : []
+  },
+
   // 设置 API Key
   // 后端期望 Auth.Info 格式: { type: 'api', key: string }
   async setApiKey(providerId: string, apiKey: string): Promise<void> {

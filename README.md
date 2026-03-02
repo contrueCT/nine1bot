@@ -106,6 +106,34 @@ Control inheritance through config:
 }
 ```
 
+### Custom LLM Providers (OpenAI / Anthropic Protocol)
+
+You can add providers in the Settings page (`Auth Manager -> Custom Providers`) or edit `nine1bot.config.jsonc` directly:
+
+```jsonc
+{
+  "customProviders": {
+    "my-openai": {
+      "name": "My OpenAI",
+      "protocol": "openai",
+      "baseURL": "https://example.com/v1",
+      "models": [{ "id": "gpt-4o-mini", "name": "GPT-4o mini" }]
+    },
+    "my-anthropic": {
+      "name": "My Anthropic",
+      "protocol": "anthropic",
+      "baseURL": "https://anthropic-proxy.example.com",
+      "models": [{ "id": "claude-3-5-sonnet-latest" }]
+    }
+  }
+}
+```
+
+Notes:
+- `customProviders` defines provider structure only (protocol, endpoint, models)
+- API keys are still stored locally via the auth page in `auth.json`
+- Supported `protocol` values are currently `openai` and `anthropic`
+
 ## Installation
 
 ### Option 1: Download Release (Recommended)

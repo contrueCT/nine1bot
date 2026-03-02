@@ -128,10 +128,42 @@ const ProviderItemConfigSchema = z.object({
   blacklist: z.array(z.string()).optional(),
 }).passthrough()
 
+const CustomProviderModelSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().optional(),
+})
+
+const CustomProviderOptionsSchema = z.object({
+  timeout: z.union([z.number(), z.literal(false)]).optional(),
+  headers: z.record(z.string()).optional(),
+}).passthrough()
+
+const CustomProviderSchema = z.object({
+  name: z.string().min(1),
+  protocol: z.enum(['openai', 'anthropic']),
+  baseURL: z.string().url(),
+  models: z.array(CustomProviderModelSchema).min(1),
+  options: CustomProviderOptionsSchema.optional(),
+})
+
 // Provider 配置（支持继承控制）
 const ProviderConfigSchema = z.object({
   inheritOpencode: z.boolean().default(true),
 }).catchall(ProviderItemConfigSchema)
+
+const CUSTOM_PROVIDER_ID_REGEX = /^[a-z0-9][a-z0-9-_]{1,63}$/
+
+const CustomProvidersConfigSchema = z.record(CustomProviderSchema).superRefine((providers, ctx) => {
+  for (const providerId of Object.keys(providers)) {
+    if (!CUSTOM_PROVIDER_ID_REGEX.test(providerId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [providerId],
+        message: 'Provider ID must match ^[a-z0-9][a-z0-9-_]{1,63}$',
+      })
+    }
+  }
+})
 
 // ===== 完整配置模式 =====
 
@@ -156,6 +188,7 @@ export const Nine1BotConfigSchema = z.object({
   agent: z.record(AgentConfigSchema).optional(),
   mcp: McpConfigSchema.optional(),
   provider: ProviderConfigSchema.optional(),
+  customProviders: CustomProvidersConfigSchema.default({}),
 
   permission: z.object({
     read: PermissionRuleSchema.optional(),
@@ -214,3 +247,5 @@ export type NatappConfig = z.infer<typeof NatappConfigSchema>
 export type IsolationConfig = z.infer<typeof IsolationConfigSchema>
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>
 export type BrowserConfig = z.infer<typeof BrowserConfigSchema>
+export type CustomProvider = z.infer<typeof CustomProviderSchema>
+export type CustomProviderModel = z.infer<typeof CustomProviderModelSchema>
