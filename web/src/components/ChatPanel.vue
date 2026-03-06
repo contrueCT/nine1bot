@@ -206,8 +206,9 @@ function scrollToBottom() {
   align-items: center;
   justify-content: center;
   text-align: center;
-  animation: fade-in 0.6s ease-out;
   padding: 0 var(--space-md);
+  width: 100%;
+  overflow: hidden;
 }
 
 .welcome-section {
@@ -217,6 +218,8 @@ function scrollToBottom() {
   gap: var(--space-xl);
   max-width: var(--input-max-width);
   width: 100%;
+  animation: welcome-rise-in 0.6s ease-out;
+  will-change: transform, opacity;
 }
 
 .greeting-row {
@@ -331,7 +334,7 @@ function scrollToBottom() {
   font-size: 0.75rem;
 }
 
-@keyframes fade-in {
+@keyframes welcome-rise-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
