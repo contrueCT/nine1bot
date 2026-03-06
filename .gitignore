@@ -25,5 +25,6 @@ runtime/
 web/tsconfig.tsbuildinfo
 packages/nine1bot/config.json
 CLAUDE.md
+AGENTS.md
 config.json
 nine1bot.config.jsonc
