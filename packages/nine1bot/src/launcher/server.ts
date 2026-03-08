@@ -115,7 +115,18 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
       // 特殊处理 provider 字段：过滤掉 nine1bot 特有的继承控制字段
       else if (key === 'provider' && typeof value === 'object' && value !== null) {
         const { inheritOpencode, ...providers } = value as any
-        opencodeConfig[key] = { ...providers, ...customProviders }
+        const sanitizedProviders = Object.fromEntries(
+          Object.entries(providers).map(([providerId, providerConfig]) => {
+            if (!providerConfig || typeof providerConfig !== 'object') {
+              return [providerId, providerConfig]
+            }
+
+            const { inheritOpencode: _ignored, ...rest } = providerConfig as Record<string, any>
+            return [providerId, rest]
+          }),
+        )
+
+        opencodeConfig[key] = { ...sanitizedProviders, ...customProviders }
       }
       else {
         opencodeConfig[key] = value

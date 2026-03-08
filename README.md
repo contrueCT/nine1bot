@@ -100,9 +100,19 @@ Control inheritance through config:
 ```jsonc
 {
   "isolation": {
-    "inheritOpencode": true, // Inherit OpenCode config
-    "inheritClaudeCode": true, // Inherit Claude Code config
+    "inheritOpencode": true // Inherit OpenCode global/project config
   },
+  "skills": {
+    "inheritOpencode": true, // Inherit OpenCode skills
+    "inheritClaudeCode": true // Inherit Claude Code skills
+  },
+  "mcp": {
+    "inheritOpencode": true, // Inherit OpenCode MCP servers
+    "inheritClaudeCode": true // Inherit Claude Code MCP servers
+  },
+  "provider": {
+    "inheritOpencode": true // Inherit OpenCode provider auth
+  }
 }
 ```
 

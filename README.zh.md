@@ -100,8 +100,18 @@ Nine1Bot 支持集成以下配置：
 ```jsonc
 {
   "isolation": {
-    "inheritOpencode": true,      // 是否继承 OpenCode 配置
-    "inheritClaudeCode": true     // 是否继承 Claude Code 配置
+    "inheritOpencode": true       // 是否继承 OpenCode 的全局/项目配置
+  },
+  "skills": {
+    "inheritOpencode": true,      // 是否继承 OpenCode Skills
+    "inheritClaudeCode": true     // 是否继承 Claude Code Skills
+  },
+  "mcp": {
+    "inheritOpencode": true,      // 是否继承 OpenCode MCP 配置
+    "inheritClaudeCode": true     // 是否继承 Claude Code MCP 配置
+  },
+  "provider": {
+    "inheritOpencode": true       // 是否继承 OpenCode Provider 认证
   }
 }
 ```

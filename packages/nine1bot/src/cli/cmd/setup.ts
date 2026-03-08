@@ -218,13 +218,13 @@ export async function runSetup(): Promise<void> {
 
       if (!prompts.isCancel(apiKey) && apiKey) {
         config.provider = {
+          inheritOpencode: false,
           [provider]: {
-            inheritOpencode: false,
             options: {
               apiKey: apiKey,
             },
           },
-        }
+        } as NonNullable<Nine1BotConfig['provider']>
 
         // 设置默认模型
         const defaultModels: Record<string, string> = {
