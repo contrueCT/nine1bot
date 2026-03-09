@@ -1,16 +1,32 @@
 /**
  * Relay Client - 连接到 Nine1Bot Bridge Server 的 Extension Relay
  *
- * 这个模块负责：
+ * 负责：
  * 1. 建立与 Bridge Server 的 WebSocket 连接
  * 2. 接收并执行 CDP 命令
  * 3. 将 CDP 事件转发回 Bridge Server
+ * 4. 维护命令生命周期（超时、取消、状态心跳）
  */
 
 import { toolExecutors } from '../tools'
+import { isAbortError } from '../tools/execution-context'
+import { setupDiagnosticsListeners } from './diagnostics-buffer'
+import {
+  addTabToNine1Group,
+  getTabsInGroupByTab,
+  setNine1GroupActive,
+  setNine1GroupIdle,
+  setupTabGroupCleanup,
+} from './tab-group-manager'
 
 // 配置 - relay URL 可通过 chrome.storage.sync 修改
 const DEFAULT_RELAY_URL = 'ws://127.0.0.1:4096/browser/extension'
+
+const RECONNECT_BASE_INTERVAL = 5000
+const RECONNECT_MAX_INTERVAL = 60000
+const HEALTH_REPORT_INTERVAL = 60000
+const AGENT_HEARTBEAT_INTERVAL = 1500
+const DEFAULT_TOOL_TIMEOUT_MS = 30000
 
 /**
  * 从 chrome.storage.sync 获取 relay URL（支持用户自定义）
@@ -23,24 +39,43 @@ async function getConfiguredRelayUrl(): Promise<string> {
     return DEFAULT_RELAY_URL
   }
 }
-const RECONNECT_INTERVAL = 5000
-const PING_INTERVAL = 5000
+
+interface RunningCommand {
+  id: number
+  tabId?: number
+  method: string
+  toolName?: string
+  sessionId?: string
+  startedAt: number
+  controller: AbortController
+  cancelReason?: string
+  taskLabel?: string
+}
 
 // WebSocket 连接状态
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let pingTimer: ReturnType<typeof setInterval> | null = null
+let healthTimer: ReturnType<typeof setInterval> | null = null
+let agentHeartbeatTimer: ReturnType<typeof setInterval> | null = null
 let isConnecting = false
+let intentionalDisconnect = false
+let reconnectAttempt = 0
+let lastPongAt = 0
 
 // 当前活动的标签页 session
 const activeSessions = new Map<number, string>() // tabId -> sessionId
+
+// 命令状态
+const runningCommands = new Map<number, RunningCommand>()
+const tabActiveCommandCount = new Map<number, number>()
+const tabStopRequestedAt = new Map<number, number>()
 
 /**
  * 生成唯一的 session ID
  */
 function generateSessionId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16))
-  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
   return `session_${Date.now()}_${hex}`
 }
 
@@ -63,6 +98,238 @@ function forwardCdpEvent(method: string, params?: unknown, sessionId?: string): 
   })
 }
 
+function sendExtensionHello(): void {
+  sendToRelay({
+    method: 'extension.hello',
+    params: {
+      version: chrome.runtime.getManifest().version,
+      tools: Object.keys(toolExecutors),
+      capabilities: {
+        cancelCDPCommand: true,
+        agentState: true,
+        diagnostics: true,
+      },
+    },
+  })
+}
+
+function sendExtensionHealth(): void {
+  sendToRelay({
+    method: 'extension.health',
+    params: {
+      timestamp: Date.now(),
+      lastPongAt,
+      activeCommands: runningCommands.size,
+      reconnectAttempt,
+    },
+  })
+}
+
+async function sendAgentStateToTabs(tabId: number, taskLabel?: string): Promise<void> {
+  const activeForTab = (tabActiveCommandCount.get(tabId) ?? 0) > 0
+  const stopRequestedAt = tabStopRequestedAt.get(tabId) ?? 0
+  const isStopping = !activeForTab && stopRequestedAt > 0 && Date.now() - stopRequestedAt < 5000
+  const state: 'active' | 'idle' | 'stopping' = activeForTab ? 'active' : isStopping ? 'stopping' : 'idle'
+  let groupTabs: number[] = [tabId]
+
+  try {
+    groupTabs = await getTabsInGroupByTab(tabId)
+  } catch {
+    groupTabs = [tabId]
+  }
+
+  const now = Date.now()
+  const sendPromises = groupTabs.map(async (targetTabId) => {
+    try {
+      await chrome.tabs.sendMessage(targetTabId, {
+        type: 'nine1bot-agent-state',
+        state,
+        heartbeatAt: now,
+        activeInThisTab: (activeForTab || isStopping) && targetTabId === tabId,
+        sameGroupActive: activeForTab && targetTabId !== tabId,
+        taskLabel,
+      })
+    } catch {
+      // ignore tabs where content script is unavailable
+    }
+  })
+
+  await Promise.all(sendPromises)
+
+  sendToRelay({
+    method: 'extension.agentState',
+    params: {
+      tabId,
+      state,
+      heartbeatAt: now,
+      taskLabel,
+    },
+  })
+
+  if (!isStopping && stopRequestedAt > 0) {
+    tabStopRequestedAt.delete(tabId)
+  }
+}
+
+function bumpTabActiveCount(tabId: number, delta: number): number {
+  const next = Math.max(0, (tabActiveCommandCount.get(tabId) ?? 0) + delta)
+  if (next === 0) {
+    tabActiveCommandCount.delete(tabId)
+  } else {
+    tabActiveCommandCount.set(tabId, next)
+  }
+  return next
+}
+
+async function markCommandStart(command: RunningCommand): Promise<void> {
+  if (command.tabId === undefined) return
+  tabStopRequestedAt.delete(command.tabId)
+  bumpTabActiveCount(command.tabId, 1)
+  await addTabToNine1Group(command.tabId, command.taskLabel)
+  await setNine1GroupActive(command.tabId, command.taskLabel)
+  await sendAgentStateToTabs(command.tabId, command.taskLabel)
+}
+
+async function markCommandFinish(command: RunningCommand): Promise<void> {
+  if (command.tabId === undefined) return
+  const remaining = bumpTabActiveCount(command.tabId, -1)
+  if (remaining === 0) {
+    await setNine1GroupIdle(command.tabId)
+  }
+  await sendAgentStateToTabs(command.tabId, command.taskLabel)
+}
+
+function startHealthReporting(): void {
+  if (healthTimer) return
+  healthTimer = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      sendExtensionHealth()
+    }
+  }, HEALTH_REPORT_INTERVAL)
+}
+
+function startAgentHeartbeat(): void {
+  if (agentHeartbeatTimer) return
+  agentHeartbeatTimer = setInterval(() => {
+    const activeTabs = Array.from(tabActiveCommandCount.keys())
+    for (const tabId of activeTabs) {
+      sendAgentStateToTabs(tabId).catch(() => {
+        // ignore heartbeat send errors
+      })
+    }
+  }, AGENT_HEARTBEAT_INTERVAL)
+}
+
+function stopTimers(): void {
+  if (healthTimer) {
+    clearInterval(healthTimer)
+    healthTimer = null
+  }
+  if (agentHeartbeatTimer) {
+    clearInterval(agentHeartbeatTimer)
+    agentHeartbeatTimer = null
+  }
+}
+
+function cancelRunningCommands(options: {
+  commandId?: number
+  tabId?: number
+  reason: string
+}): number {
+  const { commandId, tabId, reason } = options
+  let cancelled = 0
+
+  for (const [id, command] of runningCommands) {
+    if (commandId !== undefined && id !== commandId) continue
+    if (tabId !== undefined && command.tabId !== tabId) continue
+    if (command.controller.signal.aborted) continue
+
+    command.cancelReason = reason
+    command.controller.abort(reason)
+    cancelled += 1
+  }
+
+  return cancelled
+}
+
+async function executeExtensionToolCommand(options: {
+  commandId: number
+  tabId?: number
+  sessionId?: string
+  toolName: string
+  args: Record<string, unknown>
+  timeoutMs?: number
+  taskLabel?: string
+}): Promise<unknown> {
+  const { commandId, tabId, sessionId, toolName, args, timeoutMs, taskLabel } = options
+
+  const ALLOWED_TOOLS: ReadonlySet<string> = new Set(Object.keys(toolExecutors))
+  if (!ALLOWED_TOOLS.has(toolName)) {
+    throw new Error(`Unknown extension tool: ${toolName}. Available: ${[...ALLOWED_TOOLS].join(', ')}`)
+  }
+
+  const executor = toolExecutors[toolName as keyof typeof toolExecutors]
+  const toolArgs: Record<string, unknown> = { ...(args || {}) }
+  if (tabId && toolArgs.tabId === undefined) {
+    toolArgs.tabId = tabId
+  }
+
+  const controller = new AbortController()
+  const command: RunningCommand = {
+    id: commandId,
+    method: 'Extension.callTool',
+    toolName,
+    tabId,
+    sessionId,
+    startedAt: Date.now(),
+    controller,
+    taskLabel,
+  }
+
+  runningCommands.set(commandId, command)
+  await markCommandStart(command)
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null
+  if ((timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS) > 0) {
+    timeoutHandle = setTimeout(() => {
+      command.cancelReason = 'timeout'
+      controller.abort('timeout')
+    }, timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS)
+  }
+
+  try {
+    const result = await executor(toolArgs, {
+      signal: controller.signal,
+      commandId,
+      tabId,
+    })
+
+    if (controller.signal.aborted) {
+      const reason = command.cancelReason ?? 'cancelled'
+      throw new Error(reason === 'timeout' ? 'Command timeout' : `Command cancelled (${reason})`)
+    }
+
+    if (result.isError && result.content[0]?.text === 'Cancelled') {
+      throw new Error('Command cancelled (tool cooperative stop)')
+    }
+
+    return result
+  } catch (error) {
+    if (isAbortError(error) || controller.signal.aborted) {
+      const reason = command.cancelReason ?? 'cancelled'
+      throw new Error(reason === 'timeout' ? 'Command timeout' : `Command cancelled (${reason})`)
+    }
+    throw error
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle)
+      timeoutHandle = null
+    }
+    runningCommands.delete(commandId)
+    await markCommandFinish(command)
+  }
+}
+
 /**
  * 处理来自 Relay Server 的消息
  */
@@ -77,7 +344,18 @@ async function handleRelayMessage(data: string): Promise<void> {
 
   // 处理 ping
   if (message.method === 'ping') {
+    lastPongAt = Date.now()
     sendToRelay({ method: 'pong' })
+    return
+  }
+
+  if (message.method === 'cancelCDPCommand') {
+    const cancelled = cancelRunningCommands({
+      commandId: typeof message.params?.commandId === 'number' ? message.params.commandId : undefined,
+      tabId: typeof message.params?.tabId === 'number' ? message.params.tabId : undefined,
+      reason: message.params?.reason || 'server_cancel',
+    })
+    sendToRelay({ id: message.id, result: { cancelled } })
     return
   }
 
@@ -87,7 +365,7 @@ async function handleRelayMessage(data: string): Promise<void> {
     const { method, params, sessionId } = message.params || {}
 
     try {
-      const result = await handleCdpCommand(method, params, sessionId)
+      const result = await handleCdpCommand(id, method, params, sessionId)
       sendToRelay({ id, result })
     } catch (error) {
       sendToRelay({
@@ -102,9 +380,8 @@ async function handleRelayMessage(data: string): Promise<void> {
 /**
  * 处理 CDP 命令
  */
-async function handleCdpCommand(method: string, params: any, sessionId?: string): Promise<unknown> {
+async function handleCdpCommand(commandId: number, method: string, params: any, sessionId?: string): Promise<unknown> {
   console.log('[Relay Client] Handling CDP command:', method, 'sessionId:', sessionId)
-  console.log('[Relay Client] activeSessions:', Array.from(activeSessions.entries()))
 
   // 获取 tabId（从 sessionId 或使用当前活动标签）
   let tabId: number | undefined
@@ -114,52 +391,57 @@ async function handleCdpCommand(method: string, params: any, sessionId?: string)
     for (const [tid, sid] of activeSessions) {
       if (sid === sessionId) {
         tabId = tid
-        console.log('[Relay Client] Found tabId from sessionId:', tabId)
         break
       }
     }
   }
 
   if (!tabId) {
-    // 使用当前活动标签
-    console.log('[Relay Client] sessionId not found in activeSessions, using active tab')
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
     tabId = activeTab?.id
-    console.log('[Relay Client] Active tab:', tabId)
   }
 
   // 根据 CDP method 调用相应的工具
   switch (method) {
+    case 'cancelCDPCommand': {
+      const cancelled = cancelRunningCommands({
+        commandId: typeof params?.commandId === 'number' ? params.commandId : undefined,
+        tabId: typeof params?.tabId === 'number' ? params.tabId : tabId,
+        reason: params?.reason || 'cancelCDPCommand',
+      })
+      return { cancelled }
+    }
+
     // 扩展工具直接转发（不受 CSP 限制）
     case 'Extension.callTool': {
-      const { toolName, args } = params || {}
-      // 白名单校验：仅允许已注册的工具名
-      const ALLOWED_TOOLS: ReadonlySet<string> = new Set(Object.keys(toolExecutors))
-      if (typeof toolName !== 'string' || !ALLOWED_TOOLS.has(toolName)) {
-        throw new Error(`Unknown extension tool: ${toolName}. Available: ${[...ALLOWED_TOOLS].join(', ')}`)
+      const { toolName, args, timeoutMs, taskLabel } = params || {}
+
+      if (typeof toolName !== 'string') {
+        throw new Error('toolName is required for Extension.callTool')
       }
-      const executor = toolExecutors[toolName as keyof typeof toolExecutors]
-      const toolArgs: Record<string, unknown> = { ...(args || {}) }
-      if (tabId && toolArgs.tabId === undefined) {
-        toolArgs.tabId = tabId
-      }
-      return await executor(toolArgs)
+
+      return await executeExtensionToolCommand({
+        commandId,
+        tabId,
+        sessionId,
+        toolName,
+        args: (args ?? {}) as Record<string, unknown>,
+        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+        taskLabel: typeof taskLabel === 'string' ? taskLabel : undefined,
+      })
     }
 
     case 'Page.captureScreenshot': {
-      console.log('[Relay Client] Taking screenshot for tabId:', tabId)
-      const result = await toolExecutors.screenshot({ tabId })
-      console.log('[Relay Client] Screenshot result:', result.content[0]?.type, result.isError)
+      const result = await toolExecutors.screenshot({ tabId }, { commandId, signal: undefined, tabId })
       if (result.content[0]?.type === 'image' && result.content[0].data) {
         return { data: result.content[0].data }
       }
-      // Return error details if available
       const errorText = result.content[0]?.text || 'Screenshot failed'
       throw new Error(errorText)
     }
 
     case 'Page.navigate': {
-      const result = await toolExecutors.navigate({ tabId, url: params?.url })
+      await toolExecutors.navigate({ tabId, url: params?.url }, { commandId, signal: undefined, tabId })
       return { frameId: 'main' }
     }
 
@@ -187,7 +469,6 @@ async function handleCdpCommand(method: string, params: any, sessionId?: string)
 
       const { type, x, y, button, clickCount } = params || {}
 
-      // 使用 chrome.debugger API
       await ensureDebuggerAttached(tabId)
       await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
         type,
@@ -277,7 +558,6 @@ async function handleCdpCommand(method: string, params: any, sessionId?: string)
     case 'Target.getTargetInfo':
     case 'Target.setAutoAttach':
     case 'Target.setDiscoverTargets':
-      // 这些命令由 Relay Server 处理
       return {}
 
     default:
@@ -355,6 +635,8 @@ function setupTabListeners(): void {
       })
       activeSessions.delete(tabId)
       attachedTabs.delete(tabId)
+      cancelRunningCommands({ tabId, reason: 'tab_removed' })
+      tabActiveCommandCount.delete(tabId)
     }
   })
 
@@ -408,6 +690,29 @@ async function sendInitialTargets(): Promise<void> {
   }
 }
 
+function setupRuntimeListeners(): void {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type !== 'nine1bot-agent-stop-request') return false
+
+    const senderTabId = sender.tab?.id
+    const requestedTabId = typeof message.tabId === 'number' ? message.tabId : senderTabId
+    const cancelled = cancelRunningCommands({
+      tabId: requestedTabId,
+      reason: 'user_stop',
+    })
+
+    if (requestedTabId !== undefined) {
+      tabStopRequestedAt.set(requestedTabId, Date.now())
+      sendAgentStateToTabs(requestedTabId).catch(() => {
+        // ignore state send errors
+      })
+    }
+
+    sendResponse({ ok: true, cancelled, tabId: requestedTabId })
+    return true
+  })
+}
+
 /**
  * 连接到 Relay Server
  */
@@ -417,6 +722,7 @@ export function connectToRelay(url: string = DEFAULT_RELAY_URL): void {
   }
 
   isConnecting = true
+  intentionalDisconnect = false
   console.log('[Relay Client] Connecting to:', url)
 
   try {
@@ -425,21 +731,18 @@ export function connectToRelay(url: string = DEFAULT_RELAY_URL): void {
     ws.onopen = () => {
       console.log('[Relay Client] Connected to Relay Server')
       isConnecting = false
+      reconnectAttempt = 0
+      lastPongAt = Date.now()
 
-      // 清除重连定时器
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
         reconnectTimer = null
       }
 
-      // 设置 ping 定时器
-      pingTimer = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          // Relay Server 会发 ping，我们这里保持连接活跃
-        }
-      }, PING_INTERVAL)
-
-      // 发送当前所有标签页
+      sendExtensionHello()
+      sendExtensionHealth()
+      startHealthReporting()
+      startAgentHeartbeat()
       sendInitialTargets()
     }
 
@@ -450,7 +753,9 @@ export function connectToRelay(url: string = DEFAULT_RELAY_URL): void {
     ws.onclose = () => {
       console.log('[Relay Client] Disconnected from Relay Server')
       cleanup()
-      scheduleReconnect(url)
+      if (!intentionalDisconnect) {
+        scheduleReconnect(url)
+      }
     }
 
     ws.onerror = (error) => {
@@ -469,36 +774,47 @@ export function connectToRelay(url: string = DEFAULT_RELAY_URL): void {
  */
 function cleanup(): void {
   isConnecting = false
-
-  if (pingTimer) {
-    clearInterval(pingTimer)
-    pingTimer = null
-  }
+  stopTimers()
 
   if (ws) {
     ws = null
   }
 
   activeSessions.clear()
+
+  for (const [commandId, command] of runningCommands) {
+    command.cancelReason = 'relay_disconnected'
+    command.controller.abort('relay_disconnected')
+    runningCommands.delete(commandId)
+  }
+  tabActiveCommandCount.clear()
 }
 
 /**
- * 安排重连
+ * 安排重连（指数退避 + 抖动）
  */
 function scheduleReconnect(url: string): void {
   if (reconnectTimer) return
 
-  console.log(`[Relay Client] Reconnecting in ${RECONNECT_INTERVAL / 1000}s...`)
+  reconnectAttempt += 1
+  const base = Math.min(RECONNECT_BASE_INTERVAL * 2 ** Math.max(0, reconnectAttempt - 1), RECONNECT_MAX_INTERVAL)
+  const jitter = Math.floor(Math.random() * 1000)
+  const delay = base + jitter
+
+  console.log(`[Relay Client] Reconnecting in ${Math.round(delay / 1000)}s... (attempt ${reconnectAttempt})`)
+
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     connectToRelay(url)
-  }, RECONNECT_INTERVAL)
+  }, delay)
 }
 
 /**
  * 断开连接
  */
 export function disconnectFromRelay(): void {
+  intentionalDisconnect = true
+
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
@@ -526,7 +842,10 @@ export function initRelayClient(): void {
   console.log('[Relay Client] Initializing...')
 
   setupTabListeners()
-  console.log('[Relay Client] Tab listeners set up')
+  setupRuntimeListeners()
+  setupDiagnosticsListeners()
+  setupTabGroupCleanup()
+  console.log('[Relay Client] Tab/runtime listeners set up')
 
   // 监听 debugger 断开
   chrome.debugger.onDetach.addListener((source) => {
@@ -536,7 +855,6 @@ export function initRelayClient(): void {
   })
 
   // 尝试连接（使用 chrome.storage 中配置的 URL）
-  console.log('[Relay Client] About to connect...')
   getConfiguredRelayUrl().then((url) => {
     try {
       connectToRelay(url)

@@ -206,6 +206,7 @@ async function handlePortMessage(message: unknown, port: chrome.runtime.Port): P
 // Set up message listener for Chrome runtime
 export function setupMcpServer(): void {
   console.log('[MCP Server] Setting up server...')
+  console.warn('[MCP Server] Deprecated: legacy in-extension MCP server is kept for backward compatibility.')
 
   // Handle external connections (from web pages or other extensions)
   chrome.runtime.onConnectExternal.addListener((port) => {

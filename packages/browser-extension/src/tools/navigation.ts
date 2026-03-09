@@ -1,4 +1,6 @@
 import type { ToolDefinition, ToolResult } from './index'
+import type { ToolExecutionContext } from './execution-context'
+import { abortableDelay, isAbortError, throwIfAborted } from './execution-context'
 
 interface NavigateArgs {
   tabId?: number
@@ -31,10 +33,11 @@ export const navigateTool = {
     },
   } satisfies ToolDefinition,
 
-  async execute(args: unknown): Promise<ToolResult> {
+  async execute(args: unknown, context?: ToolExecutionContext): Promise<ToolResult> {
     const { tabId, url, action = url ? 'goto' : undefined } = (args as NavigateArgs) || {}
 
     try {
+      throwIfAborted(context?.signal)
       // Get the target tab
       let targetTabId: number
 
@@ -53,6 +56,7 @@ export const navigateTool = {
 
       switch (action) {
         case 'goto':
+          throwIfAborted(context?.signal)
           if (!url) {
             return {
               content: [{ type: 'text', text: 'Error: URL is required for "goto" action' }],
@@ -61,28 +65,31 @@ export const navigateTool = {
           }
           await chrome.tabs.update(targetTabId, { url })
           // Wait for navigation to start
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          await abortableDelay(500, context?.signal)
           return {
             content: [{ type: 'text', text: `Navigated to ${url}` }],
           }
 
         case 'back':
+          throwIfAborted(context?.signal)
           await chrome.tabs.goBack(targetTabId)
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          await abortableDelay(500, context?.signal)
           return {
             content: [{ type: 'text', text: 'Navigated back in history' }],
           }
 
         case 'forward':
+          throwIfAborted(context?.signal)
           await chrome.tabs.goForward(targetTabId)
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          await abortableDelay(500, context?.signal)
           return {
             content: [{ type: 'text', text: 'Navigated forward in history' }],
           }
 
         case 'reload':
+          throwIfAborted(context?.signal)
           await chrome.tabs.reload(targetTabId)
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          await abortableDelay(500, context?.signal)
           return {
             content: [{ type: 'text', text: 'Page reloaded' }],
           }
@@ -94,6 +101,12 @@ export const navigateTool = {
           }
       }
     } catch (error) {
+      if (isAbortError(error)) {
+        return {
+          content: [{ type: 'text', text: 'Cancelled' }],
+          isError: true,
+        }
+      }
       const errorMessage = error instanceof Error ? error.message : String(error)
       return {
         content: [{ type: 'text', text: `Error during navigation: ${errorMessage}` }],

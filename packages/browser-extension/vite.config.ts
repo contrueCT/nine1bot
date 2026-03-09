@@ -15,6 +15,21 @@ function copyStaticFiles() {
         resolve(distDir, 'manifest.json')
       )
 
+      // Copy HTML entry files (side panel + offscreen)
+      const htmlTargets = [
+        { from: resolve(__dirname, 'src/sidepanel/index.html'), to: resolve(distDir, 'sidepanel/index.html') },
+        { from: resolve(__dirname, 'src/offscreen/index.html'), to: resolve(distDir, 'offscreen/index.html') },
+      ]
+      for (const target of htmlTargets) {
+        const dir = resolve(target.to, '..')
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true })
+        }
+        if (existsSync(target.from)) {
+          copyFileSync(target.from, target.to)
+        }
+      }
+
       // Create icons directory and copy icons
       const iconsDir = resolve(distDir, 'icons')
       if (!existsSync(iconsDir)) {
@@ -46,6 +61,8 @@ export default defineConfig({
       input: {
         background: resolve(__dirname, 'src/background/index.ts'),
         content: resolve(__dirname, 'src/content/index.ts'),
+        sidepanel: resolve(__dirname, 'src/sidepanel/index.ts'),
+        offscreen: resolve(__dirname, 'src/offscreen/index.ts'),
       },
       output: {
         entryFileNames: '[name]/index.js',

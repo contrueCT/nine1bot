@@ -1,4 +1,6 @@
 import type { ToolDefinition, ToolResult } from './index'
+import type { ToolExecutionContext } from './execution-context'
+import { abortableDelay, isAbortError, throwIfAborted } from './execution-context'
 
 interface ComputerArgs {
   tabId?: number
@@ -145,7 +147,7 @@ export const computerTool = {
     },
   } satisfies ToolDefinition,
 
-  async execute(args: unknown): Promise<ToolResult> {
+  async execute(args: unknown, context?: ToolExecutionContext): Promise<ToolResult> {
     const {
       tabId,
       action,
@@ -160,6 +162,7 @@ export const computerTool = {
     } = args as ComputerArgs
 
     try {
+      throwIfAborted(context?.signal)
       let targetTabId: number
 
       if (tabId !== undefined) {
@@ -197,6 +200,7 @@ export const computerTool = {
         }
 
         case 'left_click': {
+          throwIfAborted(context?.signal)
           if (!coords) {
             return {
               content: [{ type: 'text', text: 'Error: coordinate or ref is required for click action' }],
@@ -213,6 +217,7 @@ export const computerTool = {
         }
 
         case 'right_click': {
+          throwIfAborted(context?.signal)
           if (!coords) {
             return {
               content: [{ type: 'text', text: 'Error: coordinate or ref is required for click action' }],
@@ -229,6 +234,7 @@ export const computerTool = {
         }
 
         case 'double_click': {
+          throwIfAborted(context?.signal)
           if (!coords) {
             return {
               content: [{ type: 'text', text: 'Error: coordinate or ref is required for click action' }],
@@ -247,6 +253,7 @@ export const computerTool = {
         }
 
         case 'middle_click': {
+          throwIfAborted(context?.signal)
           if (!coords) {
             return {
               content: [{ type: 'text', text: 'Error: coordinate or ref is required for click action' }],
@@ -263,6 +270,7 @@ export const computerTool = {
         }
 
         case 'hover': {
+          throwIfAborted(context?.signal)
           if (!coords) {
             return {
               content: [{ type: 'text', text: 'Error: coordinate or ref is required for hover action' }],
@@ -277,6 +285,7 @@ export const computerTool = {
         }
 
         case 'scroll': {
+          throwIfAborted(context?.signal)
           const [x, y] = coords || [0, 0]
           const deltaX = scroll_direction === 'left' ? -scroll_amount : scroll_direction === 'right' ? scroll_amount : 0
           const deltaY = scroll_direction === 'up' ? -scroll_amount : scroll_direction === 'down' ? scroll_amount : 0
@@ -294,6 +303,7 @@ export const computerTool = {
         }
 
         case 'type': {
+          throwIfAborted(context?.signal)
           if (!text) {
             return {
               content: [{ type: 'text', text: 'Error: text is required for type action' }],
@@ -303,6 +313,7 @@ export const computerTool = {
 
           // Type each character
           for (const char of text) {
+            throwIfAborted(context?.signal)
             await sendDebuggerCommand(targetTabId, 'Input.dispatchKeyEvent', {
               type: 'keyDown',
               text: char,
@@ -312,7 +323,7 @@ export const computerTool = {
               text: char,
             })
             // Small delay between keystrokes
-            await new Promise((resolve) => setTimeout(resolve, 12))
+            await abortableDelay(12, context?.signal)
           }
           return {
             content: [{ type: 'text', text: `Typed "${text}"` }],
@@ -320,6 +331,7 @@ export const computerTool = {
         }
 
         case 'key': {
+          throwIfAborted(context?.signal)
           if (!text) {
             return {
               content: [{ type: 'text', text: 'Error: text (key combination) is required for key action' }],
@@ -332,6 +344,7 @@ export const computerTool = {
           const modifierFlags: number[] = []
 
           for (const key of keys) {
+            throwIfAborted(context?.signal)
             const keyLower = key.toLowerCase()
             let keyCode: string
             let modifiers = 0
@@ -382,6 +395,7 @@ export const computerTool = {
         }
 
         case 'drag': {
+          throwIfAborted(context?.signal)
           if (!start_coordinate || !coords) {
             return {
               content: [{ type: 'text', text: 'Error: start_coordinate and coordinate are required for drag action' }],
@@ -404,8 +418,9 @@ export const computerTool = {
         }
 
         case 'wait': {
+          throwIfAborted(context?.signal)
           const waitTime = duration || 1000
-          await new Promise((resolve) => setTimeout(resolve, waitTime))
+          await abortableDelay(waitTime, context?.signal)
           return {
             content: [{ type: 'text', text: `Waited ${waitTime}ms` }],
           }
@@ -418,6 +433,12 @@ export const computerTool = {
           }
       }
     } catch (error) {
+      if (isAbortError(error)) {
+        return {
+          content: [{ type: 'text', text: 'Cancelled' }],
+          isError: true,
+        }
+      }
       const errorMessage = error instanceof Error ? error.message : String(error)
       return {
         content: [{ type: 'text', text: `Error performing action: ${errorMessage}` }],

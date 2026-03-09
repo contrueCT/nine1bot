@@ -1,13 +1,10 @@
 /**
  * Extension Relay - Bun/Hono Native WebSocket Implementation
  *
- * Rewrite of core/extension-relay.ts using Hono's upgradeWebSocket()
- * instead of Node.js 'ws' library, for integration with Bun.serve().
- *
  * Architecture:
  * - Chrome Extension connects to /extension WebSocket endpoint
- * - External CDP clients (Playwright, etc.) connect to /cdp endpoint
- * - Relay forwards CDP commands to extension, extension executes and returns results
+ * - External CDP clients connect to /cdp endpoint
+ * - Relay forwards CDP commands to extension and routes events back to CDP clients
  */
 
 import { Hono } from 'hono'
@@ -28,9 +25,34 @@ export interface ConnectedTarget {
   targetInfo: TargetInfo
 }
 
+export interface ExtensionHelloPayload {
+  version?: string
+  tools: string[]
+  capabilities?: Record<string, unknown>
+}
+
+export interface ExtensionHealthPayload {
+  timestamp: number
+  lastPongAt?: number
+  activeCommands?: number
+  reconnectAttempt?: number
+}
+
+export interface ExtensionAgentStatePayload {
+  tabId: number
+  state: 'active' | 'idle' | 'stopping'
+  heartbeatAt: number
+  taskLabel?: string
+}
+
 export interface ExtensionRelay {
   extensionConnected: () => boolean
   getTargets: () => ConnectedTarget[]
+  getTools: () => string[]
+  getCapabilities: () => Record<string, unknown>
+  getHealth: () => ExtensionHealthPayload | null
+  getHelloAt: () => number | null
+  getAgentStates: () => ExtensionAgentStatePayload[]
   sendCommand: (method: string, params?: unknown, targetId?: string) => Promise<unknown>
   stop: () => Promise<void>
 }
@@ -40,13 +62,22 @@ export interface ExtensionRelay {
 let extensionWs: WSContext | null = null
 const cdpClients = new Set<WSContext>()
 const connectedTargets = new Map<string, ConnectedTarget>()
-const pendingExtension = new Map<number, {
-  resolve: (result: unknown) => void
-  reject: (error: Error) => void
-  timer: ReturnType<typeof setTimeout>
-}>()
+const pendingExtension = new Map<
+  number,
+  {
+    resolve: (result: unknown) => void
+    reject: (error: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }
+>()
 let nextExtensionId = 1
 let pingInterval: ReturnType<typeof setInterval> | null = null
+
+let extensionTools: string[] = []
+let extensionCapabilities: Record<string, unknown> = {}
+let extensionHealth: ExtensionHealthPayload | null = null
+let extensionHelloAt: number | null = null
+const extensionAgentStates = new Map<number, ExtensionAgentStatePayload>()
 
 // ==================== Internal Helpers ====================
 
@@ -81,6 +112,20 @@ function sendResponseToCdp(ws: WSContext, res: unknown): void {
   ws.send(JSON.stringify(res))
 }
 
+function validateExtensionToolIfPossible(cmd: { method: string; params?: unknown }): void {
+  if (cmd.method !== 'Extension.callTool') return
+  if (extensionTools.length === 0) return
+
+  const params = (cmd.params ?? {}) as { toolName?: string }
+  const toolName = params.toolName
+  if (!toolName || typeof toolName !== 'string') {
+    throw new Error('Extension.callTool requires string toolName')
+  }
+  if (!extensionTools.includes(toolName)) {
+    throw new Error(`Unknown extension tool: ${toolName}. Available: ${extensionTools.join(', ')}`)
+  }
+}
+
 async function routeCdpCommand(cmd: { id: number; method: string; params?: unknown; sessionId?: string }): Promise<unknown> {
   switch (cmd.method) {
     case 'Browser.getVersion':
@@ -101,7 +146,7 @@ async function routeCdpCommand(cmd: { id: number; method: string; params?: unkno
 
     case 'Target.getTargets':
       return {
-        targetInfos: Array.from(connectedTargets.values()).map(t => ({
+        targetInfos: Array.from(connectedTargets.values()).map((t) => ({
           ...t.targetInfo,
           attached: true,
         })),
@@ -144,6 +189,8 @@ async function routeCdpCommand(cmd: { id: number; method: string; params?: unkno
     }
 
     default: {
+      validateExtensionToolIfPossible(cmd)
+
       const id = nextExtensionId++
       return await sendToExtension({
         id,
@@ -182,81 +229,120 @@ function handleExtensionMessage(data: string): void {
     return
   }
 
-  // Handle event from extension
-  if (parsed && typeof parsed === 'object' && 'method' in parsed) {
-    if (parsed.method === 'pong') return
-    if (parsed.method !== 'forwardCDPEvent') return
+  // Handle event/notification from extension
+  if (!parsed || typeof parsed !== 'object' || typeof parsed.method !== 'string') {
+    return
+  }
 
-    const evt = parsed as { params: { method: string; params?: unknown; sessionId?: string } }
-    const method = evt.params?.method
-    const params = evt.params?.params
-    const sessionId = evt.params?.sessionId
-
-    if (!method || typeof method !== 'string') return
-
-    // Handle Target.attachedToTarget - track connected tabs
-    if (method === 'Target.attachedToTarget') {
-      const attached = (params ?? {}) as { sessionId?: string; targetInfo?: TargetInfo }
-      const targetType = attached?.targetInfo?.type ?? 'page'
-      if (targetType !== 'page') return
-
-      if (attached?.sessionId && attached?.targetInfo?.targetId) {
-        const prev = connectedTargets.get(attached.sessionId)
-        const nextTargetId = attached.targetInfo.targetId
-        const prevTargetId = prev?.targetId
-        const changedTarget = Boolean(prev && prevTargetId && prevTargetId !== nextTargetId)
-
-        connectedTargets.set(attached.sessionId, {
-          sessionId: attached.sessionId,
-          targetId: nextTargetId,
-          targetInfo: attached.targetInfo,
-        })
-
-        if (changedTarget && prevTargetId) {
-          broadcastToCdpClients({
-            method: 'Target.detachedFromTarget',
-            params: { sessionId: attached.sessionId, targetId: prevTargetId },
-            sessionId: attached.sessionId,
-          })
-        }
-
-        if (!prev || changedTarget) {
-          broadcastToCdpClients({ method, params, sessionId })
-        }
-        return
-      }
+  if (parsed.method === 'pong') {
+    if (extensionHealth) {
+      extensionHealth.lastPongAt = Date.now()
     }
+    return
+  }
 
-    // Handle Target.detachedFromTarget
-    if (method === 'Target.detachedFromTarget') {
-      const detached = (params ?? {}) as { sessionId?: string }
-      if (detached?.sessionId) {
-        connectedTargets.delete(detached.sessionId)
+  if (parsed.method === 'extension.hello') {
+    const params = (parsed.params ?? {}) as ExtensionHelloPayload
+    extensionTools = Array.isArray(params.tools) ? params.tools.filter((x) => typeof x === 'string') : []
+    extensionCapabilities = params.capabilities ?? {}
+    extensionHelloAt = Date.now()
+    console.log('[Extension Relay] Extension hello:', {
+      version: params.version,
+      tools: extensionTools.length,
+      capabilities: Object.keys(extensionCapabilities),
+    })
+    return
+  }
+
+  if (parsed.method === 'extension.health') {
+    const params = parsed.params as ExtensionHealthPayload
+    extensionHealth = {
+      timestamp: params?.timestamp ?? Date.now(),
+      lastPongAt: params?.lastPongAt,
+      activeCommands: params?.activeCommands,
+      reconnectAttempt: params?.reconnectAttempt,
+    }
+    return
+  }
+
+  if (parsed.method === 'extension.agentState') {
+    const params = parsed.params as ExtensionAgentStatePayload
+    if (typeof params?.tabId === 'number') {
+      extensionAgentStates.set(params.tabId, params)
+    }
+    return
+  }
+
+  if (parsed.method !== 'forwardCDPEvent') return
+
+  const evt = parsed as { params: { method: string; params?: unknown; sessionId?: string } }
+  const method = evt.params?.method
+  const params = evt.params?.params
+  const sessionId = evt.params?.sessionId
+
+  if (!method || typeof method !== 'string') return
+
+  // Handle Target.attachedToTarget - track connected tabs
+  if (method === 'Target.attachedToTarget') {
+    const attached = (params ?? {}) as { sessionId?: string; targetInfo?: TargetInfo }
+    const targetType = attached?.targetInfo?.type ?? 'page'
+    if (targetType !== 'page') return
+
+    if (attached?.sessionId && attached?.targetInfo?.targetId) {
+      const prev = connectedTargets.get(attached.sessionId)
+      const nextTargetId = attached.targetInfo.targetId
+      const prevTargetId = prev?.targetId
+      const changedTarget = Boolean(prev && prevTargetId && prevTargetId !== nextTargetId)
+
+      connectedTargets.set(attached.sessionId, {
+        sessionId: attached.sessionId,
+        targetId: nextTargetId,
+        targetInfo: attached.targetInfo,
+      })
+
+      if (changedTarget && prevTargetId) {
+        broadcastToCdpClients({
+          method: 'Target.detachedFromTarget',
+          params: { sessionId: attached.sessionId, targetId: prevTargetId },
+          sessionId: attached.sessionId,
+        })
       }
-      broadcastToCdpClients({ method, params, sessionId })
+
+      if (!prev || changedTarget) {
+        broadcastToCdpClients({ method, params, sessionId })
+      }
       return
     }
+  }
 
-    // Handle Target.targetInfoChanged - update cached metadata
-    if (method === 'Target.targetInfoChanged') {
-      const changed = (params ?? {}) as { targetInfo?: TargetInfo }
-      const targetInfo = changed?.targetInfo
-      const targetId = targetInfo?.targetId
+  // Handle Target.detachedFromTarget
+  if (method === 'Target.detachedFromTarget') {
+    const detached = (params ?? {}) as { sessionId?: string }
+    if (detached?.sessionId) {
+      connectedTargets.delete(detached.sessionId)
+    }
+    broadcastToCdpClients({ method, params, sessionId })
+    return
+  }
 
-      if (targetId && (targetInfo?.type ?? 'page') === 'page') {
-        for (const [sid, target] of connectedTargets) {
-          if (target.targetId !== targetId) continue
-          connectedTargets.set(sid, {
-            ...target,
-            targetInfo: { ...target.targetInfo, ...targetInfo },
-          })
-        }
+  // Handle Target.targetInfoChanged - update cached metadata
+  if (method === 'Target.targetInfoChanged') {
+    const changed = (params ?? {}) as { targetInfo?: TargetInfo }
+    const targetInfo = changed?.targetInfo
+    const targetId = targetInfo?.targetId
+
+    if (targetId && (targetInfo?.type ?? 'page') === 'page') {
+      for (const [sid, target] of connectedTargets) {
+        if (target.targetId !== targetId) continue
+        connectedTargets.set(sid, {
+          ...target,
+          targetInfo: { ...target.targetInfo, ...targetInfo },
+        })
       }
     }
-
-    // Broadcast to CDP clients
-    broadcastToCdpClients({ method, params, sessionId })
   }
+
+  broadcastToCdpClients({ method, params, sessionId })
 }
 
 function cleanupExtension(): void {
@@ -276,6 +362,13 @@ function cleanupExtension(): void {
   }
   pendingExtension.clear()
 
+  // Clear extension metadata caches
+  extensionTools = []
+  extensionCapabilities = {}
+  extensionHealth = null
+  extensionHelloAt = null
+  extensionAgentStates.clear()
+
   // Clear targets
   connectedTargets.clear()
 
@@ -294,93 +387,100 @@ function cleanupExtension(): void {
 
 export function createRelayRoutes(): Hono {
   return new Hono()
-    .get('/extension', async (c, next) => {
-      // Reject if extension already connected
-      if (extensionWs && extensionWs.readyState === 1) {
-        return c.text('Extension already connected', 409)
-      }
-      return next()
-    }, upgradeWebSocket(() => ({
-      onOpen(_event, ws) {
-        console.log('[Extension Relay] Extension connected')
-        extensionWs = ws
-
-        // Ping to keep connection alive
-        pingInterval = setInterval(() => {
-          if (!extensionWs || extensionWs.readyState !== 1) return
-          extensionWs.send(JSON.stringify({ method: 'ping' }))
-        }, 5000)
+    .get(
+      '/extension',
+      async (c, next) => {
+        if (extensionWs && extensionWs.readyState === 1) {
+          return c.text('Extension already connected', 409)
+        }
+        return next()
       },
-      onMessage(event) {
-        handleExtensionMessage(String(event.data))
-      },
-      onClose() {
-        cleanupExtension()
-      },
-    })))
-    .get('/cdp', async (c, next) => {
-      // Reject if extension not connected
-      if (!extensionWs || extensionWs.readyState !== 1) {
-        return c.text('Extension not connected', 503)
-      }
-      return next()
-    }, upgradeWebSocket(() => {
-      let thisWs: WSContext
-      return {
+      upgradeWebSocket(() => ({
         onOpen(_event, ws) {
-          console.log('[Extension Relay] CDP client connected')
-          thisWs = ws
-          cdpClients.add(ws)
+          console.log('[Extension Relay] Extension connected')
+          extensionWs = ws
 
-          // Send current targets to new client
-          for (const target of connectedTargets.values()) {
-            ws.send(JSON.stringify({
-              method: 'Target.attachedToTarget',
-              params: {
-                sessionId: target.sessionId,
-                targetInfo: { ...target.targetInfo, attached: true },
-                waitingForDebugger: false,
-              },
-            }))
-          }
+          // Ping to keep connection alive
+          pingInterval = setInterval(() => {
+            if (!extensionWs || extensionWs.readyState !== 1) return
+            extensionWs.send(JSON.stringify({ method: 'ping' }))
+          }, 5000)
         },
-        async onMessage(event) {
-          let cmd: any = null
-          try {
-            cmd = JSON.parse(String(event.data))
-          } catch {
-            return
-          }
-
-          if (!cmd || typeof cmd !== 'object') return
-          if (typeof cmd.id !== 'number' || typeof cmd.method !== 'string') return
-
-          if (!extensionWs) {
-            sendResponseToCdp(thisWs, {
-              id: cmd.id,
-              sessionId: cmd.sessionId,
-              error: { message: 'Extension not connected' },
-            })
-            return
-          }
-
-          try {
-            const result = await routeCdpCommand(cmd)
-            sendResponseToCdp(thisWs, { id: cmd.id, sessionId: cmd.sessionId, result })
-          } catch (err) {
-            sendResponseToCdp(thisWs, {
-              id: cmd.id,
-              sessionId: cmd.sessionId,
-              error: { message: err instanceof Error ? err.message : String(err) },
-            })
-          }
+        onMessage(event) {
+          handleExtensionMessage(String(event.data))
         },
         onClose() {
-          console.log('[Extension Relay] CDP client disconnected')
-          cdpClients.delete(thisWs)
+          cleanupExtension()
         },
-      }
-    }))
+      })),
+    )
+    .get(
+      '/cdp',
+      async (c, next) => {
+        if (!extensionWs || extensionWs.readyState !== 1) {
+          return c.text('Extension not connected', 503)
+        }
+        return next()
+      },
+      upgradeWebSocket(() => {
+        let thisWs: WSContext
+        return {
+          onOpen(_event, ws) {
+            console.log('[Extension Relay] CDP client connected')
+            thisWs = ws
+            cdpClients.add(ws)
+
+            for (const target of connectedTargets.values()) {
+              ws.send(
+                JSON.stringify({
+                  method: 'Target.attachedToTarget',
+                  params: {
+                    sessionId: target.sessionId,
+                    targetInfo: { ...target.targetInfo, attached: true },
+                    waitingForDebugger: false,
+                  },
+                }),
+              )
+            }
+          },
+          async onMessage(event) {
+            let cmd: any = null
+            try {
+              cmd = JSON.parse(String(event.data))
+            } catch {
+              return
+            }
+
+            if (!cmd || typeof cmd !== 'object') return
+            if (typeof cmd.id !== 'number' || typeof cmd.method !== 'string') return
+
+            if (!extensionWs) {
+              sendResponseToCdp(thisWs, {
+                id: cmd.id,
+                sessionId: cmd.sessionId,
+                error: { message: 'Extension not connected' },
+              })
+              return
+            }
+
+            try {
+              const result = await routeCdpCommand(cmd)
+              sendResponseToCdp(thisWs, { id: cmd.id, sessionId: cmd.sessionId, result })
+            } catch (err) {
+              sendResponseToCdp(thisWs, {
+                id: cmd.id,
+                sessionId: cmd.sessionId,
+                error: { message: err instanceof Error ? err.message : String(err) },
+              })
+            }
+          },
+          onClose() {
+            console.log('[Extension Relay] CDP client disconnected')
+            cdpClients.delete(thisWs)
+          },
+        }
+      }),
+    )
 }
 
 // ==================== Public API (for BridgeServer direct calls) ====================
@@ -389,12 +489,16 @@ export function getExtensionRelay(): ExtensionRelay {
   return {
     extensionConnected: () => Boolean(extensionWs && extensionWs.readyState === 1),
     getTargets: () => Array.from(connectedTargets.values()),
+    getTools: () => [...extensionTools],
+    getCapabilities: () => ({ ...extensionCapabilities }),
+    getHealth: () => (extensionHealth ? { ...extensionHealth } : null),
+    getHelloAt: () => extensionHelloAt,
+    getAgentStates: () => Array.from(extensionAgentStates.values()).map((state) => ({ ...state })),
     sendCommand: async (method: string, params?: unknown, targetId?: string) => {
       if (!extensionWs || extensionWs.readyState !== 1) {
         throw new Error('Chrome extension not connected')
       }
 
-      // Find sessionId for targetId
       let sessionId: string | undefined
       if (targetId) {
         for (const target of connectedTargets.values()) {
