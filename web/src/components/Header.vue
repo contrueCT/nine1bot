@@ -103,6 +103,7 @@ const emit = defineEmits<{
   border-radius: var(--radius-full);
   font-size: 12px;
   font-weight: 500;
+  font-weight: 500;
   color: var(--accent);
 }
 
@@ -129,6 +130,7 @@ const emit = defineEmits<{
 
 @keyframes pulse {
   0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; }
   50% { transform: scale(1.05); opacity: 1; }
   100% { transform: scale(0.95); opacity: 0.8; }
 }

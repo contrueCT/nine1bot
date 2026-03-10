@@ -305,6 +305,7 @@ function scrollToBottom() {
   font-weight: 400;
   cursor: pointer;
   transition: all var(--transition-normal);
+  transition: all var(--transition-normal);
 }
 
 .directory-btn:hover {
@@ -352,6 +353,8 @@ function scrollToBottom() {
   padding: var(--space-md);
   background: var(--error-subtle);
   border: 0.5px solid var(--error);
+  background: var(--error-subtle);
+  border: 0.5px solid var(--error);
   border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
@@ -363,6 +366,7 @@ function scrollToBottom() {
   display: flex;
   align-items: flex-start;
   gap: var(--space-sm);
+  color: var(--error);
   color: var(--error);
 }
 

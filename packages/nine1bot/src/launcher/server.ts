@@ -107,7 +107,16 @@ async function generateOpencodeConfig(config: Nine1BotConfig): Promise<string> {
       }
       // 特殊处理 mcp 字段：过滤掉 nine1bot 特有的继承控制字段
       else if (key === 'mcp' && typeof value === 'object' && value !== null) {
+      }
+      // 特殊处理 mcp 字段：过滤掉 nine1bot 特有的继承控制字段
+      else if (key === 'mcp' && typeof value === 'object' && value !== null) {
         const { inheritOpencode, inheritClaudeCode, ...mcpServers } = value as any
+        if (Object.keys(mcpServers).length > 0) {
+          opencodeConfig[key] = mcpServers
+        }
+      }
+      // 特殊处理 provider 字段：过滤掉 nine1bot 特有的继承控制字段
+      else if (key === 'provider' && typeof value === 'object' && value !== null) {
         if (Object.keys(mcpServers).length > 0) {
           opencodeConfig[key] = mcpServers
         }

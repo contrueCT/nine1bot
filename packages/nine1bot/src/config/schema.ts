@@ -177,6 +177,7 @@ export const Nine1BotConfigSchema = z.object({
   isolation: IsolationConfigSchema.default({}),
   skills: SkillsConfigSchema.default({}),
   browser: BrowserConfigSchema.default({}),
+  browser: BrowserConfigSchema.default({}),
 
   // OpenCode 兼容配置
   model: z.string().optional(),
