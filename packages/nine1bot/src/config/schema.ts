@@ -178,6 +178,7 @@ export const Nine1BotConfigSchema = z.object({
   skills: SkillsConfigSchema.default({}),
   browser: BrowserConfigSchema.default({}),
 
+
   // OpenCode 兼容配置
   model: z.string().optional(),
   small_model: z.string().optional(),

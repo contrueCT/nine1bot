@@ -36,6 +36,7 @@
   --transition-normal: 150ms var(--ease-smooth);
   --transition-slow: 300ms var(--ease-smooth);
 
+
   /* Layout */
   --sidebar-width: 260px;
   --sidebar-collapsed-width: 0px;
@@ -102,6 +103,14 @@
   --error-subtle: rgba(196, 69, 54, 0.1);
   --info: #4A76A8;
   --info-subtle: rgba(74, 118, 168, 0.1);
+  --success: #2D8A5F;
+  --success-subtle: rgba(45, 138, 95, 0.1);
+  --warning: #C68A28;
+  --warning-subtle: rgba(198, 138, 40, 0.1);
+  --error: #C44536;
+  --error-subtle: rgba(196, 69, 54, 0.1);
+  --info: #4A76A8;
+  --info-subtle: rgba(74, 118, 168, 0.1);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -109,6 +118,7 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.10);
   --shadow-glow: 0 0 20px var(--accent-glow);
   --scrollbar-track: transparent;
+  --scrollbar-thumb: #D8D4CF;
   --scrollbar-thumb: #D8D4CF;
 }
 
@@ -163,8 +173,19 @@
   --error-subtle: rgba(239, 68, 68, 0.12);
   --info: #3b82f6;
   --info-subtle: rgba(59, 130, 246, 0.12);
+  --success: #10b981;
+  --success-subtle: rgba(16, 185, 129, 0.12);
+  --warning: #f59e0b;
+  --warning-subtle: rgba(245, 158, 11, 0.12);
+  --error: #ef4444;
+  --error-subtle: rgba(239, 68, 68, 0.12);
+  --info: #3b82f6;
+  --info-subtle: rgba(59, 130, 246, 0.12);
 
   /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
@@ -219,6 +240,7 @@ a:hover {
 }
 
 ::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
   background: var(--scrollbar-thumb);
   border-radius: var(--radius-full);
 }
@@ -276,6 +298,9 @@ a:hover {
   font-size: 1.125rem;
   font-weight: 600;
   color: var(--text-primary);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .sidebar-content {
@@ -328,6 +353,7 @@ a:hover {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
+  gap: var(--space-xs);
 }
 
 /* === Session List === */
@@ -335,9 +361,12 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  gap: 2px;
 }
 
 .session-item {
+  padding: 6px var(--space-md);
+  border-radius: var(--radius-sm);
   padding: 6px var(--space-md);
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -348,6 +377,7 @@ a:hover {
 }
 
 .session-item:hover {
+  background: rgba(0, 0, 0, 0.04);
   background: rgba(0, 0, 0, 0.04);
 }
 
@@ -365,6 +395,8 @@ a:hover {
 }
 
 .session-item.active .session-item-title {
+  color: var(--accent);
+  font-weight: 500;
   color: var(--accent);
   font-weight: 500;
 }
@@ -411,6 +443,7 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
+  gap: var(--space-md);
 }
 
 .chat-empty {
@@ -426,10 +459,13 @@ a:hover {
 .chat-empty-icon {
   font-size: 3rem;
   opacity: 0.4;
+  opacity: 0.4;
 }
 
 /* === Message Item === */
 .message {
+  max-width: 720px;
+  animation: messageIn 0.3s var(--ease-smooth);
   max-width: 720px;
   animation: messageIn 0.3s var(--ease-smooth);
 }
@@ -437,6 +473,7 @@ a:hover {
 @keyframes messageIn {
   from {
     opacity: 0;
+    transform: translateY(8px);
     transform: translateY(8px);
   }
   to {
@@ -470,6 +507,8 @@ a:hover {
 .tool-call {
   background: var(--bg-secondary);
   border: 0.5px solid var(--border-default);
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   margin: var(--space-sm) 0;
   overflow: hidden;
@@ -485,6 +524,7 @@ a:hover {
 }
 
 .tool-call-header:hover {
+  background: var(--bg-tertiary);
   background: var(--bg-tertiary);
 }
 
@@ -545,6 +585,8 @@ a:hover {
   padding: var(--space-md);
   border-top: 0.5px solid var(--border-subtle);
   background: var(--bg-primary);
+  border-top: 0.5px solid var(--border-subtle);
+  background: var(--bg-primary);
 }
 
 .tool-call-body pre {
@@ -558,6 +600,7 @@ a:hover {
 
 /* === Thinking Block === */
 .thinking-block {
+  background: var(--bg-secondary);
   background: var(--bg-secondary);
   border-left: 2px solid var(--text-muted);
   padding: var(--space-sm) var(--space-md);
@@ -594,8 +637,10 @@ a:hover {
   gap: var(--space-sm);
   background: var(--bg-secondary);
   border: 0.5px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: var(--space-sm);
+  transition: border-color var(--transition-fast);
   transition: border-color var(--transition-fast);
 }
 
@@ -611,6 +656,7 @@ a:hover {
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 0.9375rem;
+  font-weight: var(--font-weight-normal);
   font-weight: var(--font-weight-normal);
   resize: none;
   min-height: 24px;
@@ -636,12 +682,20 @@ a:hover {
   justify-content: center;
   gap: var(--space-sm);
   padding: 6px var(--space-md);
+  padding: 6px var(--space-md);
   border: none;
+  border-radius: var(--radius-sm);
   border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   font-size: 0.875rem;
   font-weight: var(--font-weight-normal);
+  font-weight: var(--font-weight-normal);
   cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background-color var(--transition-fast),
+    transform var(--transition-fast),
+    opacity var(--transition-fast);
   transition:
     color var(--transition-fast),
     background-color var(--transition-fast),
@@ -653,6 +707,10 @@ a:hover {
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .btn:active:not(:disabled) {
@@ -671,6 +729,7 @@ a:hover {
 .btn-secondary {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
+  border: 0.5px solid var(--border-default);
   border: 0.5px solid var(--border-default);
 }
 
@@ -695,6 +754,7 @@ a:hover {
   height: 36px;
   padding: 0;
   border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm);
 }
 
 .btn-icon.sm {
@@ -713,6 +773,12 @@ a:hover {
   height: 28px;
 }
 
+.btn-sm {
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 0.8125rem;
+  height: 28px;
+}
+
 /* === Dropdown === */
 .dropdown {
   position: relative;
@@ -723,7 +789,9 @@ a:hover {
   align-items: center;
   gap: var(--space-sm);
   padding: 6px var(--space-md);
+  padding: 6px var(--space-md);
   background: var(--bg-tertiary);
+  border: 0.5px solid var(--border-default);
   border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   cursor: pointer;
@@ -744,16 +812,19 @@ a:hover {
   min-width: 200px;
   background: var(--bg-elevated);
   border: 0.5px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
   z-index: 100;
   overflow: hidden;
+  animation: dropdownIn 0.15s var(--ease-smooth);
   animation: dropdownIn 0.15s var(--ease-smooth);
 }
 
 @keyframes dropdownIn {
   from {
     opacity: 0;
+    transform: translateY(-4px);
     transform: translateY(-4px);
   }
   to {
@@ -763,6 +834,7 @@ a:hover {
 }
 
 .dropdown-item {
+  padding: 6px var(--space-md);
   padding: 6px var(--space-md);
   display: flex;
   align-items: center;
@@ -784,6 +856,7 @@ a:hover {
 
 .dropdown-divider {
   height: 0.5px;
+  height: 0.5px;
   background: var(--border-subtle);
   margin: var(--space-xs) 0;
 }
@@ -794,10 +867,13 @@ a:hover {
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 200;
+  animation: fadeIn 0.2s var(--ease-smooth);
   animation: fadeIn 0.2s var(--ease-smooth);
 }
 
@@ -809,7 +885,10 @@ a:hover {
 .modal {
   background: var(--bg-elevated);
   border: 0.5px solid var(--border-default);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
   box-shadow: var(--shadow-lg);
   width: 90%;
   max-width: 600px;
@@ -817,11 +896,13 @@ a:hover {
   display: flex;
   flex-direction: column;
   animation: modalIn 0.2s var(--ease-smooth);
+  animation: modalIn 0.2s var(--ease-smooth);
 }
 
 @keyframes modalIn {
   from {
     opacity: 0;
+    transform: scale(0.97) translateY(8px);
     transform: scale(0.97) translateY(8px);
   }
   to {
@@ -832,6 +913,7 @@ a:hover {
 
 .modal-header {
   padding: var(--space-lg);
+  border-bottom: 0.5px solid var(--border-subtle);
   border-bottom: 0.5px solid var(--border-subtle);
   display: flex;
   align-items: center;
@@ -852,6 +934,7 @@ a:hover {
 .modal-footer {
   padding: var(--space-md) var(--space-lg);
   border-top: 0.5px solid var(--border-subtle);
+  border-top: 0.5px solid var(--border-subtle);
   display: flex;
   justify-content: flex-end;
   gap: var(--space-sm);
@@ -865,18 +948,22 @@ a:hover {
   background: transparent;
   border-radius: 0;
   border-bottom: 0.5px solid var(--border-subtle);
+  border-bottom: 0.5px solid var(--border-subtle);
   margin-bottom: var(--space-md);
 }
 
 .tab {
   padding: var(--space-sm) var(--space-md);
   border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm);
   font-size: 0.875rem;
+  font-weight: var(--font-weight-normal);
   font-weight: var(--font-weight-normal);
   color: var(--text-secondary);
   cursor: pointer;
   transition: all var(--transition-fast);
   background: transparent;
+  border: none;
   border: none;
   margin-bottom: var(--space-xs);
 }
@@ -889,6 +976,7 @@ a:hover {
 .tab.active {
   background: var(--bg-tertiary);
   color: var(--text-primary);
+  font-weight: 500;
   font-weight: 500;
 }
 
@@ -936,16 +1024,24 @@ a:hover {
   color: var(--error);
 }
 
+.error-text {
+  color: var(--error);
+}
+
 /* === Input === */
 .input {
   width: 100%;
   padding: var(--space-sm) var(--space-md);
   background: var(--bg-primary);
   border: 0.5px solid var(--border-default);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 0.875rem;
+  font-weight: var(--font-weight-normal);
+  transition: border-color var(--transition-fast);
   font-weight: var(--font-weight-normal);
   transition: border-color var(--transition-fast);
 }
@@ -975,12 +1071,15 @@ a:hover {
 .card {
   background: var(--bg-primary);
   border: 0.5px solid var(--border-default);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
 .card-header {
   padding: var(--space-md) var(--space-lg);
+  border-bottom: 0.5px solid var(--border-subtle);
   border-bottom: 0.5px solid var(--border-subtle);
 }
 
@@ -990,6 +1089,8 @@ a:hover {
 
 .card-footer {
   padding: var(--space-md) var(--space-lg);
+  border-top: 0.5px solid var(--border-subtle);
+  background: var(--bg-secondary);
   border-top: 0.5px solid var(--border-subtle);
   background: var(--bg-secondary);
 }
@@ -1005,6 +1106,7 @@ a:hover {
   display: flex;
   align-items: center;
   gap: var(--space-md);
+  border-bottom: 0.5px solid var(--border-subtle);
   border-bottom: 0.5px solid var(--border-subtle);
   transition: background var(--transition-fast);
 }
@@ -1055,6 +1157,7 @@ a:hover {
   line-height: 1.7;
   color: var(--text-primary);
   font-weight: var(--font-weight-normal);
+  font-weight: var(--font-weight-normal);
 }
 
 .markdown-content h1,
@@ -1086,6 +1189,8 @@ a:hover {
 
 .markdown-content p:first-child { margin-top: 0; }
 .markdown-content p:last-child { margin-bottom: 0; }
+.markdown-content p:first-child { margin-top: 0; }
+.markdown-content p:last-child { margin-bottom: 0; }
 
 .markdown-content strong {
   font-weight: 600;
@@ -1099,6 +1204,7 @@ a:hover {
 .markdown-content a {
   color: var(--accent);
   text-decoration: underline;
+  text-decoration-color: rgba(204, 77, 40, 0.3);
   text-decoration-color: rgba(204, 77, 40, 0.3);
   text-underline-offset: 2px;
 }
@@ -1126,6 +1232,7 @@ a:hover {
   margin: 1em 0;
   padding: 0.5em 1em;
   border-left: 2px solid var(--accent);
+  border-left: 2px solid var(--accent);
   background: var(--accent-subtle);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   color: var(--text-secondary);
@@ -1142,14 +1249,17 @@ a:hover {
   padding: 0.15em 0.4em;
   border-radius: var(--radius-sm);
   color: var(--accent);
+  color: var(--accent);
 }
 
 .markdown-content pre {
   margin: 1em 0;
   padding: var(--space-md);
   background: var(--bg-secondary);
+  background: var(--bg-secondary);
   border-radius: var(--radius-md);
   overflow-x: auto;
+  border: 0.5px solid var(--border-default);
   border: 0.5px solid var(--border-default);
 }
 
@@ -1172,21 +1282,25 @@ a:hover {
 .markdown-content td {
   padding: var(--space-sm) var(--space-md);
   border: 0.5px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   text-align: left;
 }
 
 .markdown-content th {
+  background: var(--bg-secondary);
   background: var(--bg-secondary);
   font-weight: 600;
 }
 
 .markdown-content tr:hover td {
   background: var(--bg-secondary);
+  background: var(--bg-secondary);
 }
 
 .markdown-content hr {
   margin: 1.5em 0;
   border: none;
+  border-top: 0.5px solid var(--border-default);
   border-top: 0.5px solid var(--border-default);
 }
 
@@ -1245,6 +1359,7 @@ a:hover {
   font-size: 3rem;
   margin-bottom: var(--space-md);
   opacity: 0.4;
+  opacity: 0.4;
 }
 
 .empty-state-title {
@@ -1273,6 +1388,7 @@ a:hover {
   padding: var(--space-xs) var(--space-sm);
   background: var(--bg-elevated);
   border: 0.5px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   font-size: 0.75rem;
   white-space: nowrap;
@@ -1280,6 +1396,7 @@ a:hover {
   visibility: hidden;
   transition: all var(--transition-fast);
   z-index: 50;
+  box-shadow: var(--shadow-md);
   box-shadow: var(--shadow-md);
 }
 
@@ -1299,10 +1416,12 @@ a:hover {
   cursor: pointer;
   transition: background var(--transition-fast);
   border: 0.5px solid var(--border-default);
+  border: 0.5px solid var(--border-default);
 }
 
 .toggle.active {
   background: var(--accent);
+  border-color: var(--accent);
   border-color: var(--accent);
 }
 
@@ -1313,9 +1432,12 @@ a:hover {
   left: 2px;
   width: 19px;
   height: 19px;
+  width: 19px;
+  height: 19px;
   background: white;
   border-radius: 50%;
   transition: transform var(--transition-fast);
+  box-shadow: var(--shadow-sm);
   box-shadow: var(--shadow-sm);
 }
 
@@ -1353,6 +1475,7 @@ a:hover {
 .text-sm { font-size: 0.875rem; }
 .text-xs { font-size: 0.75rem; }
 .font-mono { font-family: var(--font-mono); }
+
 
 .truncate {
   overflow: hidden;

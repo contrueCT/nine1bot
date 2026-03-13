@@ -5,10 +5,25 @@
  * that need to run in the context of the page.
  */
 
+import { initAgentVisualIndicator, updateAgentVisualIndicator } from './agent-visual-indicator'
+
 console.log('[Nine1Bot Content Script] Loaded on:', window.location.href)
+initAgentVisualIndicator()
 
 // Listen for messages from the background service worker
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'nine1bot-agent-state') {
+    updateAgentVisualIndicator({
+      state: message.state ?? 'idle',
+      heartbeatAt: typeof message.heartbeatAt === 'number' ? message.heartbeatAt : Date.now(),
+      activeInThisTab: Boolean(message.activeInThisTab),
+      sameGroupActive: Boolean(message.sameGroupActive),
+      taskLabel: typeof message.taskLabel === 'string' ? message.taskLabel : undefined,
+    })
+    sendResponse({ success: true })
+    return true
+  }
+
   if (message?.type === 'nine1bot-content-request') {
     handleContentRequest(message.action, message.params)
       .then((result) => sendResponse({ success: true, result }))

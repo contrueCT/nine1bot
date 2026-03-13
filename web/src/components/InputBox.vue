@@ -522,6 +522,7 @@ function formatSize(bytes: number): string {
 
 .attachment-remove:hover {
   background: var(--bg-tertiary);
+  background: var(--bg-tertiary);
   color: var(--error);
 }
 
@@ -713,7 +714,11 @@ function formatSize(bytes: number): string {
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
+  padding: 8px 14px;
   margin-bottom: 8px;
+  background: var(--accent-subtle);
+  border: 0.5px solid var(--accent);
+  border-radius: var(--radius-md);
   background: var(--accent-subtle);
   border: 0.5px solid var(--accent);
   border-radius: var(--radius-md);

@@ -35,6 +35,15 @@ export function buildSnapshotExpression(opts: SnapshotOptions = {}): string {
     var refId = opts.refId;
     var maxChars = opts.maxChars;
 
+    function getOrCreateRef(element) {
+      var existingRef = element.getAttribute('data-mcp-ref');
+      if (existingRef) return existingRef;
+
+      var nextRef = 'ref_' + Math.random().toString(36).slice(2, 9);
+      element.setAttribute('data-mcp-ref', nextRef);
+      return nextRef;
+    }
+
     function getImplicitRole(tagName) {
       var roleMap = {
         a: 'link', button: 'button', input: 'textbox', select: 'combobox',
@@ -57,8 +66,7 @@ export function buildSnapshotExpression(opts: SnapshotOptions = {}): string {
         || '';
       var text = (element.textContent || '').slice(0, 100).trim();
 
-      var ref = 'ref_' + Math.random().toString(36).slice(2, 9);
-      element.setAttribute('data-mcp-ref', ref);
+      var ref = getOrCreateRef(element);
 
       var info = { tag: tagName, ref: ref };
 

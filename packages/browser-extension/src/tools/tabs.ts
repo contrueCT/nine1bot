@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolResult } from './index'
+import { addTabToNine1Group } from '../background/tab-group-manager'
 
 interface TabsContextArgs {
   createIfEmpty?: boolean
@@ -68,6 +69,7 @@ export const tabsContextTool = {
         const newTab = await chrome.tabs.create({ url: 'about:blank' })
         if (newTab.id) {
           mcpTabIds.add(newTab.id)
+          await addTabToNine1Group(newTab.id)
           managedTabs.push({
             id: newTab.id,
             url: newTab.url,
@@ -139,6 +141,7 @@ export const tabsCreateTool = {
       }
 
       mcpTabIds.add(newTab.id)
+      await addTabToNine1Group(newTab.id)
 
       return {
         content: [

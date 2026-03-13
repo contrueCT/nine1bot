@@ -516,6 +516,15 @@ export class BridgeServer {
     const checkExpression = `document.body.innerText.includes(${JSON.stringify(text)})`
 
     while (Date.now() - startTime < maxWait) {
+      if (channel === 'extension') {
+        const targetNumericId = Number(tabId)
+        const states = this.relay?.getAgentStates() ?? []
+        const state = states.find((s) => s.tabId === targetNumericId)
+        if (state?.state === 'stopping') {
+          throw new Error('Wait cancelled by user stop request')
+        }
+      }
+
       let found = false
 
       if (channel === 'extension') {
@@ -728,16 +737,58 @@ export class BridgeServer {
 
   // ==================== Extension Tool Forwarding ====================
 
-  async callExtensionTool(tabId: string, toolName: string, args: Record<string, unknown> = {}): Promise<ExtensionToolResult> {
+  async callExtensionTool(
+    tabId: string,
+    toolName: string,
+    args: Record<string, unknown> = {},
+    options?: { timeoutMs?: number; taskLabel?: string },
+  ): Promise<ExtensionToolResult> {
     if (!this.isExtensionConnected) {
       throw new Error('Chrome extension not connected. Install and connect the Nine1Bot Browser Control extension.')
     }
+    const supportedTools = this.relay!.getTools()
+    if (supportedTools.length > 0 && !supportedTools.includes(toolName)) {
+      throw new Error(`Unknown extension tool: ${toolName}. Available: ${supportedTools.join(', ')}`)
+    }
     const result = await this.relay!.sendCommand(
       'Extension.callTool',
-      { toolName, args },
+      {
+        toolName,
+        args,
+        timeoutMs: options?.timeoutMs,
+        taskLabel: options?.taskLabel,
+      },
       tabId
     )
     return result as ExtensionToolResult
+  }
+
+  async readConsoleMessages(
+    tabId: string,
+    options?: { sampleMs?: number; max?: number; sinceMs?: number; level?: string },
+    browser?: BrowserTarget,
+  ): Promise<unknown[]> {
+    const channel = this.getChannel(browser)
+    if (channel === 'cdp') {
+      throw new Error('console_messages is currently supported only in extension channel. Use browser=\"user\".')
+    }
+    const result = await this.callExtensionTool(tabId, 'console_messages', options ?? {})
+    const text = result.content?.find((c) => c.type === 'text')?.text ?? '[]'
+    return JSON.parse(text)
+  }
+
+  async readNetworkRequests(
+    tabId: string,
+    options?: { sampleMs?: number; max?: number; sinceMs?: number; resourceType?: string },
+    browser?: BrowserTarget,
+  ): Promise<unknown[]> {
+    const channel = this.getChannel(browser)
+    if (channel === 'cdp') {
+      throw new Error('network_requests is currently supported only in extension channel. Use browser=\"user\".')
+    }
+    const result = await this.callExtensionTool(tabId, 'network_requests', options ?? {})
+    const text = result.content?.find((c) => c.type === 'text')?.text ?? '[]'
+    return JSON.parse(text)
   }
 
   // ==================== Internal Helpers ====================
@@ -795,9 +846,16 @@ export class BridgeServer {
       resultJson = String(await evaluateScript(wsUrl, expression) ?? 'null')
     }
 
-    const parsed = JSON.parse(resultJson)
-    if (!parsed) {
-      throw new Error(`Element with ref "${ref}" not found`)
+    const parsed = JSON.parse(resultJson) as {
+      found?: boolean
+      centerX?: number
+      centerY?: number
+      visible?: boolean
+      message?: string
+    } | null
+
+    if (!parsed || parsed.found === false) {
+      throw new Error(parsed?.message || `Element with ref "${ref}" not found`)
     }
 
     if (!parsed.visible) {
@@ -823,8 +881,22 @@ export class BridgeServer {
         const wsUrl = await this.getTargetWsUrl(tabId)
         newJson = String(await evaluateScript(wsUrl, expression) ?? 'null')
       }
-      const newParsed = JSON.parse(newJson)
-      if (newParsed) return [newParsed.centerX, newParsed.centerY]
+      const newParsed = JSON.parse(newJson) as {
+        found?: boolean
+        centerX?: number
+        centerY?: number
+        message?: string
+      } | null
+      if (!newParsed || newParsed.found === false) {
+        throw new Error(newParsed?.message || `Element with ref "${ref}" could not be resolved after scrolling`)
+      }
+      if (typeof newParsed.centerX === 'number' && typeof newParsed.centerY === 'number') {
+        return [newParsed.centerX, newParsed.centerY]
+      }
+    }
+
+    if (typeof parsed.centerX !== 'number' || typeof parsed.centerY !== 'number') {
+      throw new Error(parsed.message || `Element with ref "${ref}" did not resolve to valid coordinates`)
     }
 
     return [parsed.centerX, parsed.centerY]
@@ -873,6 +945,27 @@ export class BridgeServer {
           title: t.targetInfo.title,
           url: t.targetInfo.url,
         })),
+      })
+    })
+
+    app.get('/extension/health', (c) => {
+      const health = this.relay?.getHealth() ?? null
+      const helloAt = this.relay?.getHelloAt() ?? null
+      const capabilities = this.relay?.getCapabilities() ?? {}
+      const agentStates = this.relay?.getAgentStates() ?? []
+      return c.json({
+        connected: this.isExtensionConnected,
+        helloAt,
+        health,
+        capabilities,
+        agentStates,
+      })
+    })
+
+    app.get('/extension/tools', (c) => {
+      return c.json({
+        connected: this.isExtensionConnected,
+        tools: this.relay?.getTools() ?? [],
       })
     })
 
@@ -1023,6 +1116,34 @@ export class BridgeServer {
         if (!expression) return c.json({ ok: false, error: 'expression is required' }, 400)
         const result = await this.evaluate(tabId, expression, browser)
         return c.json({ ok: true, result })
+      } catch (error) {
+        return c.json({ ok: false, error: String(error) }, 500)
+      }
+    })
+
+    app.post('/tabs/:targetId/diagnostics/console', async (c) => {
+      try {
+        const tabId = c.req.param('targetId')
+        const browser = c.req.query('browser') as BrowserTarget | undefined
+        const body = await c.req
+          .json<{ sampleMs?: number; max?: number; sinceMs?: number; level?: string }>()
+          .catch(() => ({}))
+        const entries = await this.readConsoleMessages(tabId, body, browser)
+        return c.json({ ok: true, entries })
+      } catch (error) {
+        return c.json({ ok: false, error: String(error) }, 500)
+      }
+    })
+
+    app.post('/tabs/:targetId/diagnostics/network', async (c) => {
+      try {
+        const tabId = c.req.param('targetId')
+        const browser = c.req.query('browser') as BrowserTarget | undefined
+        const body = await c.req
+          .json<{ sampleMs?: number; max?: number; sinceMs?: number; resourceType?: string }>()
+          .catch(() => ({}))
+        const entries = await this.readNetworkRequests(tabId, body, browser)
+        return c.json({ ok: true, entries })
       } catch (error) {
         return c.json({ ok: false, error: String(error) }, 500)
       }

@@ -7,7 +7,7 @@
  */
 
 import { setupMcpServer } from './mcp-server'
-import { initRelayClient, isRelayConnected, connectToRelay, disconnectFromRelay } from './relay-client'
+import { initRelayClient, isRelayConnected, connectToRelay } from './relay-client'
 
 console.log('[Nine1Bot Browser Control] Service Worker starting...')
 
@@ -40,19 +40,30 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.action.onClicked.addListener((tab) => {
   console.log('[Nine1Bot Browser Control] Extension icon clicked, tab:', tab.id)
 
-  // Show connection status
-  const connected = isRelayConnected()
-  console.log('[Nine1Bot Browser Control] Relay connection status:', connected ? 'Connected' : 'Disconnected')
-
-  if (tab.id) {
-    chrome.tabs.get(tab.id, (tabInfo) => {
-      console.log('[Nine1Bot Browser Control] Current tab info:', {
-        url: tabInfo.url,
-        title: tabInfo.title,
-        relayConnected: connected,
-      })
+  // Prefer opening side panel on icon click
+  const windowId = tab.windowId
+  chrome.sidePanel
+    .open({ windowId })
+    .catch((error) => {
+      console.warn('[Nine1Bot Browser Control] Failed to open side panel:', error)
     })
+})
+
+chrome.commands.onCommand.addListener((command, tab) => {
+  if (command !== 'open-side-panel') return
+  const windowId = tab?.windowId
+  if (windowId === undefined) return
+  chrome.sidePanel.open({ windowId }).catch((error) => {
+    console.warn('[Nine1Bot Browser Control] Failed to open side panel via command:', error)
+  })
+})
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'nine1bot-sidepanel-health-check') {
+    sendResponse({ connected: isRelayConnected() })
+    return true
   }
+  return false
 })
 
 // Keep service worker alive periodically

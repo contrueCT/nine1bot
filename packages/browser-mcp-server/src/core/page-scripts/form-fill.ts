@@ -28,7 +28,13 @@ export function buildFormFillExpression(ref: string, value: unknown): string {
     var element = document.querySelector('[data-mcp-ref="' + refId + '"]');
 
     if (!element) {
-      return JSON.stringify({ success: false, error: 'Element with ref "' + refId + '" not found' });
+      var hasAnyRefs = Boolean(document.querySelector('[data-mcp-ref]'));
+      return JSON.stringify({
+        success: false,
+        error: hasAnyRefs
+          ? 'Element with ref "' + refId + '" not found. This ref is likely stale after a later snapshot/find call or a DOM re-render. Re-run browser_snapshot/browser_find before filling.'
+          : 'Element with ref "' + refId + '" not found and the page currently has no ref markers. Run browser_snapshot/browser_find before filling, or re-snapshot after navigation.'
+      });
     }
 
     try {

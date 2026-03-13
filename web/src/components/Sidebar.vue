@@ -58,6 +58,7 @@ const emit = defineEmits<{
   'abort-session': [sessionId: string]
   'open-settings': []
   'open-search': []
+
   'change-directory': [directory: string]
   'switch-mode': [mode: AppMode]
   'select-project': [projectId: string]
@@ -250,8 +251,8 @@ function contextMenuDelete() {
             <button
               v-if="isSessionRunning(session.id)"
               class="mini-btn abort"
-              @click="emit('abort-session', session.id)"
               title="停止"
+              @click="emit('abort-session', session.id)"
             >
               <Square :size="10" fill="currentColor" />
             </button>
@@ -586,7 +587,7 @@ function contextMenuDelete() {
   border-color: var(--border-subtle);
 }
 
-.session-item.active {
+.nav-item.active {
   background: var(--accent-subtle);
   border-color: rgba(0, 0, 0, 0.05);
 }
@@ -711,6 +712,7 @@ function contextMenuDelete() {
   gap: 6px;
   padding: 6px 12px;
   border: none;
+  background: transparent;
   background: transparent;
   color: var(--text-muted);
   font-family: var(--font-sans);
@@ -873,6 +875,8 @@ function contextMenuDelete() {
 .dialog {
   background: var(--bg-elevated);
   border: 0.5px solid var(--border-default);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   width: 320px;
   max-width: 90vw;
@@ -884,6 +888,7 @@ function contextMenuDelete() {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-md);
+  border-bottom: 0.5px solid var(--border-subtle);
   border-bottom: 0.5px solid var(--border-subtle);
   font-weight: 600;
 }
@@ -904,6 +909,7 @@ function contextMenuDelete() {
 
 .dialog-header .action-btn:hover {
   background: var(--bg-tertiary);
+  background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
@@ -916,9 +922,12 @@ function contextMenuDelete() {
   padding: var(--space-sm) var(--space-md);
   background: var(--bg-primary);
   border: 0.5px solid var(--border-default);
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 14px;
+  font-weight: var(--font-weight-normal);
   font-weight: var(--font-weight-normal);
 }
 
@@ -943,6 +952,7 @@ function contextMenuDelete() {
   gap: var(--space-sm);
   padding: var(--space-md);
   border-top: 0.5px solid var(--border-subtle);
+  border-top: 0.5px solid var(--border-subtle);
 }
 
 .dialog-footer .btn-sm {
@@ -955,6 +965,7 @@ function contextMenuDelete() {
 }
 
 .dialog-footer .btn-danger {
+  background: var(--error);
   background: var(--error);
   color: white;
   border: none;

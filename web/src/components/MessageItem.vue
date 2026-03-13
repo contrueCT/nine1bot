@@ -595,7 +595,6 @@ function formatText(text: string): string {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 </style>
 
 <!-- Non-scoped styles for Teleported dialog -->
