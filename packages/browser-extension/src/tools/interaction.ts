@@ -26,6 +26,11 @@ interface ComputerArgs {
   modifiers?: string
 }
 
+interface RefCoordinateResult {
+  coords?: [number, number]
+  message?: string
+}
+
 // Debugger management
 const attachedTabs = new Set<number>()
 
@@ -74,20 +79,133 @@ async function dispatchMouseEvent(
   })
 }
 
-async function getElementCoordinates(tabId: number, ref: string): Promise<[number, number] | null> {
+async function getElementCoordinates(tabId: number, ref: string): Promise<RefCoordinateResult> {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (refId) => {
-      const element = document.querySelector(`[data-mcp-ref="${refId}"]`)
-      if (!element) return null
+      function isVisibleElement(element: Element | null): boolean {
+        if (!element) return false
+        const style = window.getComputedStyle(element)
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false
+        const rect = element.getBoundingClientRect()
+        return !(rect.width === 0 && rect.height === 0)
+      }
 
-      const rect = element.getBoundingClientRect()
-      return [rect.x + rect.width / 2, rect.y + rect.height / 2]
+      function isDisabledElement(element: Element): boolean {
+        return Boolean(
+          ('disabled' in element && (element as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).disabled) ||
+          element.getAttribute('disabled') !== null ||
+          element.getAttribute('aria-disabled') === 'true'
+        )
+      }
+
+      function isActionableElement(element: Element | null): boolean {
+        if (!element || isDisabledElement(element)) return false
+
+        const tagName = element.tagName.toLowerCase()
+        if (tagName === 'a' && (element as HTMLAnchorElement).href) return true
+        if (['button', 'input', 'select', 'textarea', 'summary'].includes(tagName)) return true
+
+        const role = (element.getAttribute('role') || '').toLowerCase()
+        if (/button|link|checkbox|radio|textbox|combobox|listbox|menuitem|tab|switch/.test(role)) return true
+
+        const tabIndex = element.getAttribute('tabindex')
+        if (tabIndex !== null && tabIndex !== '-1') return true
+
+        if (element.getAttribute('onclick') || element.getAttribute('onkeydown') || element.getAttribute('onkeyup')) return true
+
+        return false
+      }
+
+      function getActionableScore(element: Element): number {
+        if (!isActionableElement(element) || !isVisibleElement(element)) return -1
+
+        const tagName = element.tagName.toLowerCase()
+        let score = 0
+
+        if (tagName === 'button') score += 60
+        else if (tagName === 'a') score += 55
+        else if (tagName === 'input') score += 50
+        else if (tagName === 'select' || tagName === 'textarea') score += 45
+        else if (tagName === 'summary') score += 35
+
+        const role = (element.getAttribute('role') || '').toLowerCase()
+        if (role === 'button' || role === 'link') score += 35
+        else if (role) score += 20
+
+        if (element.getAttribute('onclick')) score += 20
+
+        const tabIndex = element.getAttribute('tabindex')
+        if (tabIndex !== null && tabIndex !== '-1') score += 10
+
+        if ((element.textContent || '').trim()) score += 5
+
+        return score
+      }
+
+      function findBestActionableDescendant(root: Element): Element | null {
+        let best: Element | null = null
+        let bestScore = -1
+        const queue: Array<{ element: Element; depth: number }> = []
+
+        for (const child of root.children) {
+          queue.push({ element: child, depth: 1 })
+        }
+
+        while (queue.length > 0) {
+          const current = queue.shift()
+          if (!current) break
+
+          const score = getActionableScore(current.element)
+          if (score >= 0) {
+            const adjustedScore = score - current.depth * 2
+            if (adjustedScore > bestScore) {
+              best = current.element
+              bestScore = adjustedScore
+            }
+          }
+
+          for (const child of current.element.children) {
+            queue.push({ element: child, depth: current.depth + 1 })
+          }
+        }
+
+        return best
+      }
+
+      function findNearestActionableAncestor(element: Element): Element | null {
+        let current = element.parentElement
+        while (current) {
+          if (getActionableScore(current) >= 0) return current
+          current = current.parentElement
+        }
+        return null
+      }
+
+      const element = document.querySelector(`[data-mcp-ref="${refId}"]`)
+      if (!element) {
+        const hasAnyRefs = Boolean(document.querySelector('[data-mcp-ref]'))
+        return {
+          message: hasAnyRefs
+            ? `Element with ref "${refId}" not found. This ref is likely stale after a later snapshot/find call or a DOM re-render. Re-run browser_snapshot/browser_find before interacting.`
+            : `Element with ref "${refId}" not found and the page currently has no ref markers. Run browser_snapshot/browser_find before interacting, or re-snapshot after navigation.`,
+        }
+      }
+
+      let target: Element = element
+      if (getActionableScore(element) < 0) {
+        target = findBestActionableDescendant(element) || findNearestActionableAncestor(element) || element
+      }
+
+      const rect = target.getBoundingClientRect()
+      return {
+        coords: [rect.x + rect.width / 2, rect.y + rect.height / 2] as [number, number],
+      }
     },
     args: [ref],
   })
 
-  return results[0]?.result as [number, number] | null
+  return (results[0]?.result as RefCoordinateResult | undefined) || {}
 }
 
 export const computerTool = {
@@ -182,14 +300,14 @@ export const computerTool = {
       let coords: [number, number] | undefined = coordinate
 
       if (ref && !coords) {
-        const refCoords = await getElementCoordinates(targetTabId, ref)
-        if (!refCoords) {
+        const resolution = await getElementCoordinates(targetTabId, ref)
+        if (!resolution.coords) {
           return {
-            content: [{ type: 'text', text: `Error: Element with ref "${ref}" not found` }],
+            content: [{ type: 'text', text: `Error: ${resolution.message || `Element with ref "${ref}" not found`}` }],
             isError: true,
           }
         }
-        coords = refCoords
+        coords = resolution.coords
       }
 
       switch (action) {

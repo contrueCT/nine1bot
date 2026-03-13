@@ -846,9 +846,16 @@ export class BridgeServer {
       resultJson = String(await evaluateScript(wsUrl, expression) ?? 'null')
     }
 
-    const parsed = JSON.parse(resultJson)
-    if (!parsed) {
-      throw new Error(`Element with ref "${ref}" not found`)
+    const parsed = JSON.parse(resultJson) as {
+      found?: boolean
+      centerX?: number
+      centerY?: number
+      visible?: boolean
+      message?: string
+    } | null
+
+    if (!parsed || parsed.found === false) {
+      throw new Error(parsed?.message || `Element with ref "${ref}" not found`)
     }
 
     if (!parsed.visible) {
@@ -874,8 +881,22 @@ export class BridgeServer {
         const wsUrl = await this.getTargetWsUrl(tabId)
         newJson = String(await evaluateScript(wsUrl, expression) ?? 'null')
       }
-      const newParsed = JSON.parse(newJson)
-      if (newParsed) return [newParsed.centerX, newParsed.centerY]
+      const newParsed = JSON.parse(newJson) as {
+        found?: boolean
+        centerX?: number
+        centerY?: number
+        message?: string
+      } | null
+      if (!newParsed || newParsed.found === false) {
+        throw new Error(newParsed?.message || `Element with ref "${ref}" could not be resolved after scrolling`)
+      }
+      if (typeof newParsed.centerX === 'number' && typeof newParsed.centerY === 'number') {
+        return [newParsed.centerX, newParsed.centerY]
+      }
+    }
+
+    if (typeof parsed.centerX !== 'number' || typeof parsed.centerY !== 'number') {
+      throw new Error(parsed.message || `Element with ref "${ref}" did not resolve to valid coordinates`)
     }
 
     return [parsed.centerX, parsed.centerY]
