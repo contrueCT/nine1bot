@@ -22,6 +22,8 @@ const {
   defaultProvider,
   defaultModel,
   loadingProviders,
+  importingAuth,
+  authImportResult,
   mcpServers,
   loadingMcp,
   skills,
@@ -34,7 +36,8 @@ const {
   removeMcp,
   startOAuth,
   setApiKey,
-  removeAuth
+  removeAuth,
+  importAuthFromOpencode
 } = useSettings()
 
 const { theme, toggleTheme } = useTheme()
@@ -187,9 +190,12 @@ function handleOverlayClick(e: MouseEvent) {
         <AuthManager
           v-if="activeTab === 'auth'"
           :loading="loadingProviders"
+          :importing="importingAuth"
+          :importResult="authImportResult"
           @oauth="startOAuth"
           @set-api-key="setApiKey"
           @remove="removeAuth"
+          @import-opencode="importAuthFromOpencode"
         />
 
         <!-- Preferences Tab -->

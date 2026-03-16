@@ -886,6 +886,14 @@ export interface AuthMethod {
   name?: string
 }
 
+export interface AuthImportResult {
+  sourceFound: boolean
+  imported: string[]
+  skippedExisting: string[]
+  skippedInvalid: string[]
+  totalSource: number
+}
+
 export interface CustomProviderModel {
   id: string
   name?: string
@@ -1164,6 +1172,17 @@ export const authApi = {
       method: 'DELETE'
     })
   }
+}
+
+export async function importAuthFromOpencode(): Promise<AuthImportResult> {
+  const res = await fetch(`${BASE_URL}/auth/import/opencode`, {
+    method: 'POST'
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || `Failed to import auth: ${res.status}`)
+  }
+  return res.json()
 }
 
 // === Question API ===

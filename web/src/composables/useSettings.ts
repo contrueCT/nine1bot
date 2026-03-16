@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
-import { providerApi, configApi, mcpApi, skillApi, authApi, nine1botConfigApi, customProviderApi } from '../api/client'
-import type { Provider, McpServer, Skill, Config, McpConfig, CustomProvider } from '../api/client'
+import { providerApi, configApi, mcpApi, skillApi, authApi, nine1botConfigApi, customProviderApi, importAuthFromOpencode as importAuthFromOpencodeApi } from '../api/client'
+import type { Provider, McpServer, Skill, Config, McpConfig, CustomProvider, AuthImportResult } from '../api/client'
 
 const showSettings = ref(false)
 const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth' | 'preferences' | 'profile'>('models')
@@ -12,8 +12,10 @@ const connectedProviders = ref<string[]>([])
 const currentProvider = ref<string>('')
 const currentModel = ref<string>('')
 const loadingProviders = ref(false)
+const importingAuth = ref(false)
 const providerSearchQuery = ref('')
 const customProviders = ref<Record<string, CustomProvider>>({})
+const authImportResult = ref<AuthImportResult | null>(null)
 
 // 供应商优先级（热门供应商排在前面）
 const PROVIDER_PRIORITY: Record<string, number> = {
@@ -42,6 +44,7 @@ const defaultModel = ref<string>('')
 export function useSettings() {
   function openSettings() {
     showSettings.value = true
+    authImportResult.value = null
     loadCustomProviders().then(() => loadProviders())
     loadMcpServers()
     loadSkills()
@@ -221,6 +224,20 @@ export function useSettings() {
     }
   }
 
+  async function importAuthFromOpencode() {
+    importingAuth.value = true
+    try {
+      authImportResult.value = null
+      authImportResult.value = await importAuthFromOpencodeApi()
+      await loadProviders()
+    } catch (e) {
+      console.error('Failed to import auth from OpenCode:', e)
+      throw e
+    } finally {
+      importingAuth.value = false
+    }
+  }
+
   async function loadCustomProviders() {
     try {
       const list = await customProviderApi.list()
@@ -332,6 +349,8 @@ export function useSettings() {
     defaultProvider,
     defaultModel,
     loadingProviders,
+    importingAuth,
+    authImportResult,
     mcpServers,
     loadingMcp,
     skills,
@@ -355,6 +374,7 @@ export function useSettings() {
     startOAuth,
     setApiKey,
     removeAuth,
+    importAuthFromOpencode,
     upsertCustomProvider,
     removeCustomProvider
   }

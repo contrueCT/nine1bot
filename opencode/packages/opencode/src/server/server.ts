@@ -523,6 +523,29 @@ export namespace Server {
             return c.json(true)
           },
         )
+        .post(
+          "/auth/import/opencode",
+          describeRoute({
+            summary: "Import auth credentials from OpenCode",
+            description: "Copy authentication credentials from the OpenCode auth store into the Nine1Bot auth store.",
+            operationId: "auth.import.opencode",
+            responses: {
+              200: {
+                description: "Import completed",
+                content: {
+                  "application/json": {
+                    schema: resolver(Auth.ImportResult),
+                  },
+                },
+              },
+            },
+          }),
+          async (c) => {
+            const result = await Auth.importFromOpencode()
+            Provider.refresh()
+            return c.json(result)
+          },
+        )
         .delete(
           "/auth/:providerID",
           describeRoute({

@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import type { AuthImportResult } from '../api/client'
 import { useSettings } from '../composables/useSettings'
 
 defineProps<{
   loading: boolean
+  importing: boolean
+  importResult: AuthImportResult | null
 }>()
 
 const emit = defineEmits<{
   oauth: [providerId: string]
   'set-api-key': [providerId: string, apiKey: string]
   remove: [providerId: string]
+  'import-opencode': []
 }>()
 
 const { filteredProviders, providerSearchQuery, customProviders, upsertCustomProvider, removeCustomProvider } = useSettings()
@@ -178,6 +182,32 @@ async function handleDeleteCustomProvider(providerId: string) {
         </svg>
         <span>API Key 安全存储在本地，不会上传到任何服务器</span>
       </div>
+    </div>
+
+    <div class="import-auth-panel">
+      <div class="import-auth-copy">
+        <div class="import-auth-title">Import from OpenCode</div>
+        <div class="import-auth-desc">Imports OpenCode auth once. Nine1Bot only uses local auth after import.</div>
+      </div>
+      <button class="btn btn-secondary" :disabled="importing" @click="emit('import-opencode')">
+        {{ importing ? 'Importing...' : 'Import Auth' }}
+      </button>
+    </div>
+
+    <div v-if="importResult" class="import-auth-result">
+      <p v-if="!importResult.sourceFound" class="text-muted text-sm">No OpenCode auth file was found.</p>
+      <template v-else>
+        <p class="text-sm">
+          Imported {{ importResult.imported.length }} item<span v-if="importResult.imported.length !== 1">s</span>
+          from {{ importResult.totalSource }} source record<span v-if="importResult.totalSource !== 1">s</span>.
+        </p>
+        <p v-if="importResult.skippedExisting.length > 0" class="text-muted text-sm">
+          Skipped existing: {{ importResult.skippedExisting.join(', ') }}
+        </p>
+        <p v-if="importResult.skippedInvalid.length > 0" class="text-muted text-sm">
+          Skipped invalid: {{ importResult.skippedInvalid.join(', ') }}
+        </p>
+      </template>
     </div>
 
     <div class="custom-provider-card">
@@ -397,6 +427,50 @@ async function handleDeleteCustomProvider(providerId: string) {
 .auth-hint svg {
   flex-shrink: 0;
   color: var(--success);
+}
+
+.import-auth-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  margin-top: var(--space-md);
+  border: 0.5px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.import-auth-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.import-auth-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.import-auth-desc {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.import-auth-result {
+  padding: var(--space-md);
+  border: 0.5px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+}
+
+.import-auth-result p {
+  margin: 0;
+}
+
+.import-auth-result p + p {
+  margin-top: var(--space-xs);
 }
 
 .search-box {

@@ -205,10 +205,6 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   process.env.NINE1BOT_CONFIG_PATH = options.configPath
 
   // Provider 认证配置：继承控制
-  const providerConfig = fullConfig.provider as any || {}
-  if (providerConfig.inheritOpencode === false) {
-    process.env.OPENCODE_DISABLE_OPENCODE_AUTH = 'true'
-  }
 
   // 设置 Nine1Bot 独立的认证存储路径
   await mkdir(getGlobalConfigDir(), { recursive: true })

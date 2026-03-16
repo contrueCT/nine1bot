@@ -218,7 +218,6 @@ export async function runSetup(): Promise<void> {
 
       if (!prompts.isCancel(apiKey) && apiKey) {
         config.provider = {
-          inheritOpencode: false,
           [provider]: {
             options: {
               apiKey: apiKey,
