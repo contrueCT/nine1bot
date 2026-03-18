@@ -5,6 +5,7 @@ import type { Nine1BotConfig } from '../config/schema'
 import { loadConfig, findConfigPath, getDefaultConfigPath } from '../config/loader'
 import { startServer, type ServerInstance } from './server'
 import { createTunnel, type TunnelManager } from '../tunnel'
+import { startFeishuService, type FeishuServiceHandle } from '../feishu/service'
 
 const execFileAsync = promisify(execFile)
 
@@ -19,6 +20,7 @@ export interface LaunchOptions {
 export interface LaunchResult {
   server: ServerInstance
   tunnel?: TunnelManager
+  feishu?: FeishuServiceHandle
   localUrl: string
   publicUrl?: string
   configPath: string
@@ -55,6 +57,14 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
   })
 
   const localUrl = server.url || `http://${serverConfig.hostname}:${serverConfig.port}`
+
+  let feishu: FeishuServiceHandle | undefined
+  if (config.feishu?.enabled) {
+    feishu = await startFeishuService(config.feishu, {
+      localUrl,
+      auth: config.auth,
+    })
+  }
 
   // 2. 创建隧道（如果启用）
   let tunnel: TunnelManager | undefined
@@ -98,6 +108,7 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
   return {
     server,
     tunnel,
+    feishu,
     localUrl,
     publicUrl,
     configPath,
@@ -114,6 +125,14 @@ export async function shutdown(result: LaunchResult): Promise<void> {
       await result.tunnel.stop()
     } catch {
       // 忽略停止隧道时的错误
+    }
+  }
+
+  if (result.feishu) {
+    try {
+      await result.feishu.stop()
+    } catch {
+      // 忽略停止飞书服务时的错误
     }
   }
 

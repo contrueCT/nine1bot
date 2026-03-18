@@ -63,6 +63,38 @@ export const BrowserConfigSchema = z.object({
   headless: z.boolean().default(false),
 })
 
+export const FeishuConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    mode: z.enum(['websocket']).default('websocket'),
+    appId: z.string().optional(),
+    appSecret: z.string().optional(),
+    verificationToken: z.string().optional(),
+    encryptKey: z.string().optional(),
+    defaultDirectory: z.string().optional(),
+  })
+  .superRefine((config, ctx) => {
+    if (!config.enabled) {
+      return
+    }
+
+    if (!config.appId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['appId'],
+        message: 'appId is required when feishu.enabled is true',
+      })
+    }
+
+    if (!config.appSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['appSecret'],
+        message: 'appSecret is required when feishu.enabled is true',
+      })
+    }
+  })
+
 // ===== OpenCode 兼容配置（简化版）=====
 
 const PermissionActionSchema = z.enum(['ask', 'allow', 'deny'])
@@ -177,6 +209,7 @@ export const Nine1BotConfigSchema = z.object({
   isolation: IsolationConfigSchema.default({}),
   skills: SkillsConfigSchema.default({}),
   browser: BrowserConfigSchema.default({}),
+  feishu: FeishuConfigSchema.default({}),
 
   // OpenCode 兼容配置
   model: z.string().optional(),
@@ -247,5 +280,6 @@ export type NatappConfig = z.infer<typeof NatappConfigSchema>
 export type IsolationConfig = z.infer<typeof IsolationConfigSchema>
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>
 export type BrowserConfig = z.infer<typeof BrowserConfigSchema>
+export type FeishuConfig = z.infer<typeof FeishuConfigSchema>
 export type CustomProvider = z.infer<typeof CustomProviderSchema>
 export type CustomProviderModel = z.infer<typeof CustomProviderModelSchema>

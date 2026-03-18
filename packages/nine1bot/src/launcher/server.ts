@@ -54,7 +54,7 @@ export interface StartServerOptions {
 /**
  * Nine1Bot 特有的配置字段（需要从 opencode 配置中过滤掉）
  */
-const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills', 'sandbox', 'browser', 'customProviders']
+const NINE1BOT_ONLY_FIELDS = ['server', 'auth', 'tunnel', 'isolation', 'skills', 'sandbox', 'browser', 'feishu', 'customProviders']
 
 function protocolToNpm(protocol: CustomProvider['protocol']): string {
   return protocol === 'anthropic' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible'
