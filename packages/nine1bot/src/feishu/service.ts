@@ -25,6 +25,11 @@ const WELCOME_TEXT = [
   '/cwd 查看当前工作目录',
   '/cwd <path> 切换工作目录并新建会话',
 ].join('\n')
+const PROJECT_COMMAND_TEXT = [
+  '/project 查看当前项目',
+  '/project list 查看可切换的项目',
+  '/project <id或名称> 切换项目并新建会话',
+].join('\n')
 const FEISHU_SYSTEM_PROMPT = [
   'You are replying inside a Feishu private chat.',
   'Keep replies plain text, concise, and easy to read in chat.',
@@ -36,6 +41,7 @@ const FILE_LIMIT_BYTES = 10 * 1024 * 1024
 const DEDUP_TTL_MS = 10 * 60 * 1000
 const PROGRESS_FLUSH_MS = 2500
 const EVENT_RETRY_DELAY_MS = 1000
+const PROJECT_LIST_LIMIT = 12
 
 type FeishuMessageEvent = {
   event_id?: string
@@ -97,7 +103,11 @@ type LocalSessionInfo = {
 type LocalProjectInfo = {
   id: string
   name?: string
+  worktree?: string
   rootDirectory?: string
+  time?: {
+    updated: number
+  }
 }
 
 type AssistantResult = {
@@ -211,6 +221,14 @@ function chunkText(text: string, maxLength = 4000): string[] {
     chunks.push(remaining)
   }
   return chunks
+}
+
+function getProjectDisplayName(project: Pick<LocalProjectInfo, 'id' | 'name' | 'rootDirectory' | 'worktree'>): string {
+  return project.name || project.rootDirectory || project.worktree || project.id
+}
+
+function getProjectDirectory(project: Pick<LocalProjectInfo, 'rootDirectory' | 'worktree'>): string | undefined {
+  return project.rootDirectory || project.worktree
 }
 
 function inferMimeFromFilename(filename: string, fallback = 'application/octet-stream'): string {
@@ -515,6 +533,7 @@ export class FeishuService implements FeishuServiceHandle {
       const projectName = await this.getProjectLabel(binding)
       await this.replyText(chatId, [
         WELCOME_TEXT,
+        PROJECT_COMMAND_TEXT,
         '',
         `当前目录：${binding.directory}`,
         `项目：${projectName}`,
@@ -522,7 +541,7 @@ export class FeishuService implements FeishuServiceHandle {
       ].join('\n'))
     } catch (error: any) {
       console.warn(`[Nine1Bot][Feishu] failed to handle p2p_chat_create: ${error?.message || error}`)
-      await this.replyText(chatId, WELCOME_TEXT).catch(() => undefined)
+      await this.replyText(chatId, [WELCOME_TEXT, PROJECT_COMMAND_TEXT].join('\n')).catch(() => undefined)
     }
   }
 
@@ -693,7 +712,99 @@ export class FeishuService implements FeishuServiceHandle {
       return
     }
 
-    await this.replyText(message.chatId, UNKNOWN_COMMAND_TEXT)
+    if (text === '/project') {
+      const binding = await this.resolveBinding(message.openId)
+      const project = await this.getProjectInfo(binding.projectId)
+      const projectName = project ? getProjectDisplayName(project) : binding.projectId
+      const projectDirectory = project ? getProjectDirectory(project) || binding.directory : binding.directory
+      await this.replyText(message.chatId, [
+        `当前项目：${projectName}`,
+        `Project ID：${binding.projectId}`,
+        `目录：${projectDirectory}`,
+        `Session：${binding.sessionId}`,
+      ].join('\n'))
+      return
+    }
+
+    if (text === '/project list') {
+      const projects = await this.listProjects()
+      if (projects.length === 0) {
+        await this.replyText(message.chatId, '当前没有可切换的项目。')
+        return
+      }
+
+      const lines = ['可切换的项目：']
+      for (const [index, project] of projects.slice(0, PROJECT_LIST_LIMIT).entries()) {
+        lines.push(`${index + 1}. ${getProjectDisplayName(project)}`)
+        lines.push(`ID：${project.id}`)
+        lines.push(`目录：${getProjectDirectory(project) || '未提供目录信息'}`)
+      }
+      if (projects.length > PROJECT_LIST_LIMIT) {
+        lines.push(`还有 ${projects.length - PROJECT_LIST_LIMIT} 个项目未显示，请使用更具体的 ID 或名称。`)
+      }
+      await this.replyText(message.chatId, lines.join('\n'))
+      return
+    }
+
+    if (text.startsWith('/project ')) {
+      const rawInput = trimWrappedQuotes(text.slice(9).trim())
+      if (!rawInput) {
+        await this.replyText(message.chatId, '请提供要切换的项目 ID 或名称。')
+        return
+      }
+
+      const projects = await this.listProjects()
+      const exactById = projects.find((project) => project.id === rawInput)
+      if (exactById) {
+        const projectDirectory = getProjectDirectory(exactById)
+        if (!projectDirectory) {
+          await this.replyText(message.chatId, `项目存在但缺少可用目录：${exactById.id}`)
+          return
+        }
+        const nextBinding = await this.createAndBindSession(message.openId, projectDirectory)
+        await this.replyText(message.chatId, [
+          '已切换到新项目，并为你新建了会话。',
+          `当前项目：${getProjectDisplayName(exactById)}`,
+          `Project ID：${exactById.id}`,
+          `目录：${nextBinding.directory}`,
+          `Session：${nextBinding.sessionId}`,
+        ].join('\n'))
+        return
+      }
+
+      const exactByName = projects.filter((project) => getProjectDisplayName(project) === rawInput)
+      if (exactByName.length === 1) {
+        const project = exactByName[0]
+        const projectDirectory = getProjectDirectory(project)
+        if (!projectDirectory) {
+          await this.replyText(message.chatId, `项目存在但缺少可用目录：${project.id}`)
+          return
+        }
+        const nextBinding = await this.createAndBindSession(message.openId, projectDirectory)
+        await this.replyText(message.chatId, [
+          '已切换到新项目，并为你新建了会话。',
+          `当前项目：${getProjectDisplayName(project)}`,
+          `Project ID：${project.id}`,
+          `目录：${nextBinding.directory}`,
+          `Session：${nextBinding.sessionId}`,
+        ].join('\n'))
+        return
+      }
+
+      if (exactByName.length > 1) {
+        const lines = ['匹配到多个同名项目，请改用 projectId：']
+        for (const project of exactByName) {
+          lines.push(`${getProjectDisplayName(project)} | ${project.id}`)
+        }
+        await this.replyText(message.chatId, lines.join('\n'))
+        return
+      }
+
+      await this.replyText(message.chatId, `未找到匹配的项目：${rawInput}`)
+      return
+    }
+
+    await this.replyText(message.chatId, [UNKNOWN_COMMAND_TEXT, PROJECT_COMMAND_TEXT].join('\n'))
   }
 
   private async handleConversation(message: NormalizedMessage): Promise<void> {
@@ -793,10 +904,21 @@ export class FeishuService implements FeishuServiceHandle {
   }
 
   private async getProjectLabel(binding: FeishuConversationBinding): Promise<string> {
-    const project = await this.requestJson<LocalProjectInfo>(`/project/${encodeURIComponent(binding.projectId)}`, {
+    const project = await this.getProjectInfo(binding.projectId)
+    return project ? getProjectDisplayName(project) : binding.projectId
+  }
+
+  private async getProjectInfo(projectId: string): Promise<LocalProjectInfo | undefined> {
+    return this.requestJson<LocalProjectInfo>(`/project/${encodeURIComponent(projectId)}`, {
       timeoutMs: 10000,
     }).catch(() => undefined)
-    return project?.name || project?.rootDirectory || binding.projectId
+  }
+
+  private async listProjects(): Promise<LocalProjectInfo[]> {
+    const projects = await this.requestJson<LocalProjectInfo[]>('/project', {
+      timeoutMs: 10000,
+    }).catch(() => [])
+    return [...projects].sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0))
   }
 
   private async resolveDirectoryInput(baseDirectory: string, input: string): Promise<string> {
