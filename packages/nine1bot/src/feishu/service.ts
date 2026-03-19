@@ -8,7 +8,6 @@ import { getFeishuBindingStorePath } from './store'
 import type { FeishuConversationBinding, FeishuEventDedupEntry, FeishuMessageLockState } from './types'
 
 const BUSY_TEXT = '当前会话正在处理中，请稍后再发，或发送 /new 新开会话。'
-const START_TEXT = '收到，正在处理，我会把进展分段发给你。'
 const UNSUPPORTED_TEXT = '目前飞书私聊只支持文本、图片和文件消息。'
 const UNKNOWN_COMMAND_TEXT = [
   '当前支持的命令：',
@@ -29,7 +28,7 @@ const WELCOME_TEXT = [
 const FEISHU_SYSTEM_PROMPT = [
   'You are replying inside a Feishu private chat.',
   'Keep replies plain text, concise, and easy to read in chat.',
-  'Do not expose tool internals, raw reasoning, or UI event structures.',
+  'Do not use markdown in this chat, and do not include code blocks.',
   'If a permission request or follow-up question is rejected, clearly tell the user that they need to continue in the web UI.',
 ].join('\n')
 const IMAGE_LIMIT_BYTES = 20 * 1024 * 1024
@@ -699,7 +698,6 @@ export class FeishuService implements FeishuServiceHandle {
 
   private async handleConversation(message: NormalizedMessage): Promise<void> {
     let binding = await this.resolveBinding(message.openId)
-    await this.replyText(message.chatId, START_TEXT)
 
     const context: ActiveSessionContext = {
       openId: message.openId,
