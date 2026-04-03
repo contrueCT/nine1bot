@@ -24,7 +24,17 @@
     "disableProjectConfig": false
   },
   "provider": {},
-  "mcp": {},
+  "mcp": {
+    // "remote-docs": {
+    //   "type": "remote",
+    //   "url": "https://mcp.example.com/http",
+    //   "oauth": {
+    //     "clientId": "your-client-id",
+    //     "clientSecret": "your-client-secret",
+    //     "scope": "read write"
+    //   }
+    // }
+  },
   "browser": {
     "enabled": false,
     "cdpPort": 9222,

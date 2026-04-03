@@ -9,6 +9,7 @@ defineProps<{
 
 const emit = defineEmits<{
   connect: [name: string]
+  authenticate: [name: string]
   disconnect: [name: string]
   add: [name: string, config: McpConfig]
   remove: [name: string]
@@ -32,6 +33,7 @@ function getStatusBadge(status: string) {
   switch (status) {
     case 'connected': return 'badge-success'
     case 'connecting': return 'badge-warning'
+    case 'auth_in_progress': return 'badge-warning'
     case 'failed': return 'badge-error'
     case 'needs_auth': return 'badge-warning'
     case 'needs_client_registration': return 'badge-warning'
@@ -44,10 +46,11 @@ function getStatusText(status: string) {
   switch (status) {
     case 'connected': return '已连接'
     case 'connecting': return '连接中'
+    case 'auth_in_progress': return '认证中'
     case 'disabled': return '已禁用'
     case 'failed': return '连接失败'
     case 'needs_auth': return '需要认证'
-    case 'needs_client_registration': return '需要注册'
+    case 'needs_client_registration': return '需要静态注册'
     default: return status
   }
 }
@@ -508,7 +511,7 @@ function confirmRemove(name: string) {
           <button
             v-else-if="server.status === 'needs_auth'"
             class="btn btn-secondary btn-sm"
-            @click="emit('connect', server.name)"
+            @click="emit('authenticate', server.name)"
           >
             认证
           </button>

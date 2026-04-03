@@ -2,7 +2,7 @@ import { resolve, dirname, basename } from 'path'
 import { writeFile, mkdir } from 'fs/promises'
 import { tmpdir } from 'os'
 import type { ServerConfig, AuthConfig, Nine1BotConfig, CustomProvider } from '../config/schema'
-import { getInstallDir, getGlobalSkillsDir, getAuthPath, getGlobalConfigDir, getProjectEnvDir } from '../config/loader'
+import { getInstallDir, getGlobalSkillsDir, getAuthPath, getGlobalConfigDir, getMcpAuthPath, getProjectEnvDir } from '../config/loader'
 import { getGlobalPreferencesPath } from '../preferences'
 // 静态导入 OpenCode 服务器（编译时打包）
 import { Server as OpencodeServer } from '../../../../opencode/packages/opencode/src/server/server'
@@ -209,6 +209,7 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   // 设置 Nine1Bot 独立的认证存储路径
   await mkdir(getGlobalConfigDir(), { recursive: true })
   process.env.NINE1BOT_AUTH_PATH = getAuthPath()
+  process.env.NINE1BOT_MCP_AUTH_PATH = getMcpAuthPath()
   await mkdir(getProjectEnvDir(), { recursive: true })
   process.env.NINE1BOT_PROJECT_ENV_DIR = getProjectEnvDir()
 

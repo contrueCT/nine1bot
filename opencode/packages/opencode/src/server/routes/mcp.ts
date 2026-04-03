@@ -88,8 +88,54 @@ export const McpRoutes = lazy(() =>
         if (!supportsOAuth) {
           return c.json({ error: `MCP server ${name} does not support OAuth` }, 400)
         }
-        const result = await MCP.startAuth(name)
+        const result = await MCP.startAuth(name, {
+          mode: "server",
+          serverOrigin: new URL(c.req.url).origin,
+        })
         return c.json(result)
+      },
+    )
+    .get(
+      "/oauth/callback",
+      describeRoute({
+        summary: "MCP OAuth browser callback",
+        description: "Handle the browser redirect for MCP OAuth authentication.",
+        operationId: "mcp.auth.browserCallback",
+        responses: {
+          200: {
+            description: "OAuth callback page",
+            content: {
+              "text/html": {
+                schema: resolver(z.string()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          code: z.string().optional(),
+          state: z.string().optional(),
+          error: z.string().optional(),
+          error_description: z.string().optional(),
+          lark_mcp_error: z.string().optional(),
+        }),
+      ),
+      async (c) => {
+        const query = c.req.valid("query")
+        const result = await MCP.handleOAuthCallback({
+          code: query.code,
+          state: query.state,
+          error: query.error,
+          errorDescription: query.error_description,
+          oauthError: query.lark_mcp_error,
+        })
+        if ("redirectUrl" in result) {
+          return c.redirect(result.redirectUrl, 302)
+        }
+        return c.html(result.html, result.status as 200 | 400)
       },
     )
     .post(

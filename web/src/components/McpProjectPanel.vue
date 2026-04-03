@@ -44,6 +44,48 @@ async function connectServer(name: string) {
   }
 }
 
+async function authenticateServer(name: string) {
+  try {
+    const { url } = await mcpApi.startAuth(name)
+    const popup = window.open(url, '_blank', 'width=700,height=780')
+
+    if (!popup) {
+      window.location.href = url
+      return
+    }
+
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < 120000) {
+      const next = await mcpApi.list()
+      servers.value = next
+      const match = next.find(server => server.name === name)
+
+      if (!match) {
+        throw new Error(`MCP server not found after auth: ${name}`)
+      }
+
+      if (match.status === 'connected') {
+        return
+      }
+
+      if (match.status === 'auth_in_progress') {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        continue
+      }
+
+      if (match.status === 'failed' || match.status === 'needs_client_registration') {
+        throw new Error(match.error || `MCP auth failed for ${name}`)
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+
+    throw new Error(`Timed out waiting for MCP auth: ${name}`)
+  } catch (e) {
+    console.error('Failed to authenticate MCP server:', e)
+  }
+}
+
 async function disconnectServer(name: string) {
   try {
     await mcpApi.disconnect(name)
@@ -66,9 +108,11 @@ function getStatusText(status: string): string {
   switch (status) {
     case 'connected': return 'Connected'
     case 'connecting': return 'Connecting...'
+    case 'auth_in_progress': return 'Authorizing...'
     case 'disabled': return 'Disconnected'
     case 'failed': return 'Failed'
     case 'needs_auth': return 'Auth Required'
+    case 'needs_client_registration': return 'Static Client Required'
     default: return status
   }
 }
@@ -253,6 +297,14 @@ onMounted(loadServers)
               title="Disconnect"
             >
               <Unplug :size="14" />
+            </button>
+            <button
+              v-else-if="server.status === 'needs_auth'"
+              class="mcp-action-btn connect"
+              @click="authenticateServer(server.name)"
+              title="Authenticate"
+            >
+              <Plug :size="14" />
             </button>
             <Loader2 v-else-if="server.status === 'connecting'" :size="14" class="spin" />
           </div>

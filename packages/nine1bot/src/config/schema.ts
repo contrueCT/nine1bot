@@ -128,11 +128,18 @@ const McpLocalSchema = z.object({
   timeout: z.number().optional(),
 })
 
+const McpOAuthSchema = z.object({
+  clientId: z.string().optional(),
+  clientSecret: z.string().optional(),
+  scope: z.string().optional(),
+})
+
 const McpRemoteSchema = z.object({
   type: z.literal('remote'),
   url: z.string(),
   enabled: z.boolean().optional(),
   headers: z.record(z.string()).optional(),
+  oauth: z.union([McpOAuthSchema, z.literal(false)]).optional(),
   timeout: z.number().optional(),
 })
 
@@ -210,6 +217,7 @@ export const Nine1BotConfigSchema = z.object({
   skills: SkillsConfigSchema.default({}),
   browser: BrowserConfigSchema.default({}),
   feishu: FeishuConfigSchema.default({}),
+
 
   // OpenCode 兼容配置
   model: z.string().optional(),

@@ -10617,6 +10617,16 @@
         },
         "required": ["status"]
       },
+      "MCPStatusAuthInProgress": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "auth_in_progress"
+          }
+        },
+        "required": ["status"]
+      },
       "MCPStatusNeedsClientRegistration": {
         "type": "object",
         "properties": {
@@ -10643,6 +10653,9 @@
           },
           {
             "$ref": "#/components/schemas/MCPStatusNeedsAuth"
+          },
+          {
+            "$ref": "#/components/schemas/MCPStatusAuthInProgress"
           },
           {
             "$ref": "#/components/schemas/MCPStatusNeedsClientRegistration"

@@ -2073,6 +2073,10 @@ export type McpStatusNeedsAuth = {
   status: "needs_auth"
 }
 
+export type McpStatusAuthInProgress = {
+  status: "auth_in_progress"
+}
+
 export type McpStatusNeedsClientRegistration = {
   status: "needs_client_registration"
   error: string
@@ -2083,6 +2087,7 @@ export type McpStatus =
   | McpStatusDisabled
   | McpStatusFailed
   | McpStatusNeedsAuth
+  | McpStatusAuthInProgress
   | McpStatusNeedsClientRegistration
 
 export type Path = {

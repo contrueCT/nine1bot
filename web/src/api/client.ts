@@ -815,8 +815,15 @@ export interface PermissionRequest {
 // === MCP Types ===
 export interface McpServer {
   name: string
-  // 后端状态: connected, disabled, failed, needs_auth, needs_client_registration
-  status: 'connected' | 'disabled' | 'failed' | 'needs_auth' | 'needs_client_registration' | 'connecting'
+  // 后端状态: connected, disabled, failed, needs_auth, auth_in_progress, needs_client_registration
+  status:
+    | 'connected'
+    | 'disabled'
+    | 'failed'
+    | 'needs_auth'
+    | 'auth_in_progress'
+    | 'needs_client_registration'
+    | 'connecting'
   error?: string
   tools?: McpTool[]
   resources?: McpResource[]
@@ -854,10 +861,17 @@ export interface McpLocalConfig {
   timeout?: number
 }
 
+export interface McpOAuthConfig {
+  clientId?: string
+  clientSecret?: string
+  scope?: string
+}
+
 export interface McpRemoteConfig {
   type: 'remote'
   url: string
   headers?: Record<string, string>
+  oauth?: McpOAuthConfig | false
   enabled?: boolean
   timeout?: number
 }
@@ -931,7 +945,7 @@ export const mcpApi = {
   // 获取所有 MCP 服务器状态
   // 后端返回 Record<string, MCP.StatusInfo>，转换为数组
   async list(): Promise<McpServer[]> {
-    const res = await fetch(`${BASE_URL}/mcp`)
+    const res = await fetchWithTimeout(`${BASE_URL}/mcp`)
     const data = await res.json()
     // 后端返回 { serverName: { status, tools, ... }, ... }
     if (typeof data === 'object' && !Array.isArray(data)) {
@@ -949,7 +963,7 @@ export const mcpApi = {
 
   // 添加新 MCP 服务器
   async add(name: string, config: McpConfig): Promise<void> {
-    const res = await fetch(`${BASE_URL}/mcp`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/mcp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, config })
@@ -962,7 +976,7 @@ export const mcpApi = {
 
   // 删除 MCP 服务器
   async remove(name: string): Promise<void> {
-    const res = await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/mcp/${encodeURIComponent(name)}`, {
       method: 'DELETE'
     })
     if (!res.ok) {
@@ -973,29 +987,43 @@ export const mcpApi = {
 
   // 连接 MCP 服务器
   async connect(name: string): Promise<void> {
-    await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}/connect`, {
+    await fetchWithTimeout(`${BASE_URL}/mcp/${encodeURIComponent(name)}/connect`, {
       method: 'POST'
     })
   },
 
   // 断开 MCP 服务器
   async disconnect(name: string): Promise<void> {
-    await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}/disconnect`, {
+    await fetchWithTimeout(`${BASE_URL}/mcp/${encodeURIComponent(name)}/disconnect`, {
       method: 'POST'
     })
   },
 
   // 启动 OAuth 认证
   async startAuth(name: string): Promise<{ url: string }> {
-    const res = await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}/auth`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/mcp/${encodeURIComponent(name)}/auth`, {
       method: 'POST'
     })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to start MCP auth: ${res.status}`)
+    }
     const data = await res.json()
     return { url: data.authorizationUrl || data.url }
   },
 
+  async removeAuth(name: string): Promise<void> {
+    const res = await fetchWithTimeout(`${BASE_URL}/mcp/${encodeURIComponent(name)}/auth`, {
+      method: 'DELETE'
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to remove MCP auth: ${res.status}`)
+    }
+  },
+
   async health(name: string): Promise<McpHealth> {
-    const res = await fetch(`${BASE_URL}/mcp/${encodeURIComponent(name)}/health`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/mcp/${encodeURIComponent(name)}/health`, {
       method: 'POST'
     })
     const data = await res.json()

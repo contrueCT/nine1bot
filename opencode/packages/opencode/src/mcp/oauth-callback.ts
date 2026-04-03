@@ -78,6 +78,7 @@ export namespace McpOAuthCallback {
         const state = url.searchParams.get("state")
         const error = url.searchParams.get("error")
         const errorDescription = url.searchParams.get("error_description")
+        const larkMcpError = url.searchParams.get("lark_mcp_error")
 
         log.info("received oauth callback", { hasCode: !!code, state, error })
 
@@ -85,7 +86,7 @@ export namespace McpOAuthCallback {
         if (!state) {
           const errorMsg = "Missing required state parameter - potential CSRF attack"
           log.error("oauth callback missing state parameter", { url: url.toString() })
-          return new Response(HTML_ERROR(errorMsg), {
+          return new Response(renderError(errorMsg), {
             status: 400,
             headers: { "Content-Type": "text/html" },
           })
@@ -97,15 +98,17 @@ export namespace McpOAuthCallback {
             const pending = pendingAuths.get(state)!
             clearTimeout(pending.timeout)
             pendingAuths.delete(state)
-            pending.reject(new Error(errorMsg))
+            const authError = new Error(errorMsg) as Error & { oauthError?: string }
+            authError.oauthError = larkMcpError || error
+            pending.reject(authError)
           }
-          return new Response(HTML_ERROR(errorMsg), {
+          return new Response(renderError(errorMsg), {
             headers: { "Content-Type": "text/html" },
           })
         }
 
         if (!code) {
-          return new Response(HTML_ERROR("No authorization code provided"), {
+          return new Response(renderError("No authorization code provided"), {
             status: 400,
             headers: { "Content-Type": "text/html" },
           })
@@ -115,7 +118,7 @@ export namespace McpOAuthCallback {
         if (!pendingAuths.has(state)) {
           const errorMsg = "Invalid or expired state parameter - potential CSRF attack"
           log.error("oauth callback with invalid state", { state, pendingStates: Array.from(pendingAuths.keys()) })
-          return new Response(HTML_ERROR(errorMsg), {
+          return new Response(renderError(errorMsg), {
             status: 400,
             headers: { "Content-Type": "text/html" },
           })
@@ -127,7 +130,7 @@ export namespace McpOAuthCallback {
         pendingAuths.delete(state)
         pending.resolve(code)
 
-        return new Response(HTML_SUCCESS, {
+        return new Response(renderSuccess(), {
           headers: { "Content-Type": "text/html" },
         })
       },
@@ -149,11 +152,11 @@ export namespace McpOAuthCallback {
     })
   }
 
-  export function cancelPending(mcpName: string): void {
-    const pending = pendingAuths.get(mcpName)
+  export function cancelPending(oauthState: string): void {
+    const pending = pendingAuths.get(oauthState)
     if (pending) {
       clearTimeout(pending.timeout)
-      pendingAuths.delete(mcpName)
+      pendingAuths.delete(oauthState)
       pending.reject(new Error("Authorization cancelled"))
     }
   }
@@ -196,5 +199,13 @@ export namespace McpOAuthCallback {
 
   export function isRunning(): boolean {
     return server !== undefined
+  }
+
+  export function renderSuccess() {
+    return HTML_SUCCESS
+  }
+
+  export function renderError(error: string) {
+    return HTML_ERROR(error)
   }
 }

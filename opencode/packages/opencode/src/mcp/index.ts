@@ -16,7 +16,7 @@ import z from "zod/v4"
 import { Instance } from "../project/instance"
 import { Installation } from "../installation"
 import { withTimeout } from "@/util/timeout"
-import { McpOAuthProvider } from "./oauth-provider"
+import { McpOAuthProvider, OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_PORT } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
 import { BusEvent } from "../bus/bus-event"
@@ -132,6 +132,13 @@ export namespace MCP {
         }),
       z
         .object({
+          status: z.literal("auth_in_progress"),
+        })
+        .meta({
+          ref: "MCPStatusAuthInProgress",
+        }),
+      z
+        .object({
           status: z.literal("needs_client_registration"),
           error: z.string(),
         })
@@ -170,7 +177,46 @@ export namespace MCP {
   }
 
   // Convert MCP tool definition to AI SDK Tool type
-  async function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Promise<Tool> {
+  function isAuthenticationError(error: unknown) {
+    return (
+      error instanceof UnauthorizedError ||
+      (error instanceof Error &&
+        /unauthorized|invalid[_ ]token|reauth|authentication required|invalid_client|invalid_grant/i.test(
+          error.message,
+        ))
+    )
+  }
+
+  type AuthFailureReason = "needs_auth" | "invalid_client" | "invalid_grant" | "registration_required"
+
+  function classifyAuthenticationError(error: unknown): AuthFailureReason | undefined {
+    if (!isAuthenticationError(error)) {
+      return undefined
+    }
+
+    const message = error instanceof Error ? error.message : String(error)
+
+    if (/dynamic client registration|pre-registered client|required clientId|needs_client_registration/i.test(message)) {
+      return "registration_required"
+    }
+
+    if (/invalid_client/i.test(message)) {
+      return "invalid_client"
+    }
+
+    if (/invalid_grant|reauth_required|insufficient_scope/i.test(message)) {
+      return "invalid_grant"
+    }
+
+    return "needs_auth"
+  }
+
+  async function convertMcpTool(
+    serverName: string,
+    mcpTool: MCPToolDef,
+    client: MCPClient,
+    timeout?: number,
+  ): Promise<Tool> {
     const inputSchema = mcpTool.inputSchema
 
     // Spread first, then override type to ensure it's always "object"
@@ -185,17 +231,54 @@ export namespace MCP {
       description: mcpTool.description ?? "",
       inputSchema: jsonSchema(schema),
       execute: async (args: unknown) => {
-        return client.callTool(
-          {
-            name: mcpTool.name,
-            arguments: args as Record<string, unknown>,
-          },
-          CallToolResultSchema,
-          {
-            resetTimeoutOnProgress: true,
-            timeout,
-          },
-        )
+        try {
+          return await client.callTool(
+            {
+              name: mcpTool.name,
+              arguments: args as Record<string, unknown>,
+            },
+            CallToolResultSchema,
+            {
+              resetTimeoutOnProgress: true,
+              timeout,
+            },
+          )
+        } catch (error) {
+          if (!isAuthenticationError(error)) {
+            throw error
+          }
+
+          const message = error instanceof Error ? error.message : String(error)
+          await markFailed(serverName, message)
+
+          const cfg = await Config.get()
+          const entry = cfg.mcp?.[serverName]
+          if (!entry || !isMcpConfigured(entry)) {
+            throw error
+          }
+
+          const recovered = await ensureServerConnected(serverName, entry, { interactiveAuth: true })
+          if (!recovered) {
+            throw error
+          }
+
+          const refreshedClient = (await clients())[serverName]
+          if (!refreshedClient) {
+            throw error
+          }
+
+          return refreshedClient.callTool(
+            {
+              name: mcpTool.name,
+              arguments: args as Record<string, unknown>,
+            },
+            CallToolResultSchema,
+            {
+              resetTimeoutOnProgress: true,
+              timeout,
+            },
+          )
+        }
       },
     })
   }
@@ -218,9 +301,28 @@ export namespace MCP {
     s.resources[serverName] = resourcesResult.resources.map(toResourceInfo)
   }
 
-  // Store transports for OAuth servers to allow finishing auth
   type TransportWithAuth = StreamableHTTPClientTransport | SSEClientTransport
-  const pendingOAuthTransports = new Map<string, TransportWithAuth>()
+  type StartAuthMode = "loopback" | "server"
+
+  type StartAuthOptions = {
+    mode?: StartAuthMode
+    serverOrigin?: string
+    attempt?: number
+  }
+
+  type PendingOAuthSession = {
+    directory: string
+    mcpName: string
+    state: string
+    transport: TransportWithAuth
+    mode: StartAuthMode
+    serverOrigin?: string
+    attempt: number
+  }
+
+  const pendingOAuthSessions = new Map<string, PendingOAuthSession>()
+  const connectionFlights = new Map<string, Promise<boolean>>()
+  const authLaunchFlights = new Map<string, Promise<Status>>()
 
   // Prompt cache types
   type PromptInfo = Awaited<ReturnType<MCPClient["listPrompts"]>>["prompts"][number]
@@ -231,9 +333,237 @@ export namespace MCP {
     return typeof entry === "object" && entry !== null && "type" in entry
   }
 
+  type McpRemote = Extract<Config.Mcp, { type: "remote" }>
+
   type ReconnectState = {
     attempts: number
     nextAt: number
+  }
+
+  function createOAuthState() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(32)))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+  }
+
+  function getLoopbackRedirectUrl() {
+    return `http://127.0.0.1:${OAUTH_CALLBACK_PORT}${OAUTH_CALLBACK_PATH}`
+  }
+
+  function getServerRedirectUrl(serverOrigin: string) {
+    if (!serverOrigin) {
+      throw new Error("Server origin is required for MCP OAuth server callback mode")
+    }
+    return `${serverOrigin.replace(/\/$/, "")}/mcp/oauth/callback`
+  }
+
+  function createRemoteTransports(mcp: McpRemote, authProvider?: McpOAuthProvider) {
+    return [
+      {
+        name: "StreamableHTTP",
+        transport: new StreamableHTTPClientTransport(new URL(mcp.url), {
+          authProvider,
+          requestInit: mcp.headers ? { headers: mcp.headers } : undefined,
+        }),
+      },
+      {
+        name: "SSE",
+        transport: new SSEClientTransport(new URL(mcp.url), {
+          authProvider,
+          requestInit: mcp.headers ? { headers: mcp.headers } : undefined,
+        }),
+      },
+    ] satisfies Array<{ name: string; transport: TransportWithAuth }>
+  }
+
+  function buildOAuthProvider(
+    mcpName: string,
+    mcp: McpRemote,
+    redirectUrl: string,
+    onRedirect: (url: URL) => void | Promise<void>,
+  ) {
+    const oauthConfig = typeof mcp.oauth === "object" ? mcp.oauth : undefined
+    return new McpOAuthProvider(
+      mcpName,
+      mcp.url,
+      {
+        clientId: oauthConfig?.clientId,
+        clientSecret: oauthConfig?.clientSecret,
+        scope: oauthConfig?.scope,
+      },
+      redirectUrl,
+      {
+        onRedirect,
+      },
+    )
+  }
+
+  function hasStaticClientRegistration(mcp: McpRemote) {
+    return typeof mcp.oauth === "object" && Boolean(mcp.oauth.clientId)
+  }
+
+  async function clearDynamicOAuthState(mcpName: string) {
+    await Promise.all([
+      McpAuth.clearTokens(mcpName),
+      McpAuth.clearClientInfo(mcpName),
+      McpAuth.clearLastAuthError(mcpName),
+    ]).catch(() => undefined)
+  }
+
+  function isFeishuLikeServer(serverName: string, mcp: McpRemote) {
+    return /lark|feishu/i.test(serverName) || /lark|feishu/i.test(mcp.url)
+  }
+
+  function shouldPreflightFeishuIntent(userText: string) {
+    return /飞书|feishu|lark|知识库|文档|wiki|docs|群聊|群|chat|消息/i.test(userText)
+  }
+
+  function getPendingSessionByName(mcpName: string) {
+    for (const session of pendingOAuthSessions.values()) {
+      if (session.mcpName === mcpName) {
+        return session
+      }
+    }
+  }
+
+  function clearPendingSessionsForName(mcpName: string) {
+    for (const [state, session] of pendingOAuthSessions.entries()) {
+      if (session.mcpName === mcpName) {
+        pendingOAuthSessions.delete(state)
+        McpOAuthCallback.cancelPending(state)
+      }
+    }
+  }
+
+  async function cleanupPendingOAuthSession(session: PendingOAuthSession) {
+    pendingOAuthSessions.delete(session.state)
+    McpOAuthCallback.cancelPending(session.state)
+    await Promise.all([
+      McpAuth.clearOAuthState(session.mcpName).catch(() => undefined),
+      McpAuth.clearCodeVerifier(session.mcpName).catch(() => undefined),
+    ])
+  }
+
+  async function retryAfterInvalidClient(session: PendingOAuthSession) {
+    return Instance.provide({
+      directory: session.directory,
+      fn: async () => {
+        const cfg = await Config.get()
+        const mcpConfig = cfg.mcp?.[session.mcpName]
+        if (!mcpConfig || !isMcpConfigured(mcpConfig) || mcpConfig.type !== "remote") {
+          return undefined
+        }
+
+        await clearDynamicOAuthState(session.mcpName)
+
+        if (session.attempt >= 1 || hasStaticClientRegistration(mcpConfig)) {
+          return undefined
+        }
+
+        await cleanupPendingOAuthSession(session)
+
+        const { authorizationUrl } = await startAuth(session.mcpName, {
+          mode: session.mode,
+          serverOrigin: session.serverOrigin,
+          attempt: session.attempt + 1,
+        })
+        const oauthState = await McpAuth.getOAuthState(session.mcpName)
+        if (!authorizationUrl || !oauthState) {
+          return undefined
+        }
+
+        return {
+          authorizationUrl,
+          oauthState,
+        }
+      },
+    })
+  }
+
+  async function runBrowserAuthorization(
+    mcpName: string,
+    authorizationUrl: string,
+    oauthState: string,
+  ): Promise<Status> {
+    log.info("launching background oauth flow", { mcpName, authorizationUrl, oauthState })
+    const s = await state()
+    s.status[mcpName] = {
+      status: "auth_in_progress",
+    }
+
+    const callbackPromise = McpOAuthCallback.waitForCallback(oauthState)
+
+    try {
+      const subprocess = await open(authorizationUrl)
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => resolve(), 500)
+        subprocess.on("error", (error) => {
+          clearTimeout(timeout)
+          reject(error)
+        })
+        subprocess.on("exit", (code) => {
+          if (code !== null && code !== 0) {
+            clearTimeout(timeout)
+            reject(new Error(`Browser open failed with exit code ${code}`))
+          }
+        })
+      })
+    } catch (error) {
+      log.warn("failed to open browser, user must open URL manually", { mcpName, error })
+      await Bus.publish(BrowserOpenFailed, { mcpName, url: authorizationUrl }).catch(() => undefined)
+    }
+
+    try {
+      const code = await callbackPromise
+      const status = await finishAuthByState(oauthState, code)
+      const nextState = await state()
+      nextState.status[mcpName] = status
+      return status
+    } catch (error) {
+      const oauthError =
+        error && typeof error === "object" && "oauthError" in error && typeof error.oauthError === "string"
+          ? error.oauthError
+          : undefined
+      const session = pendingOAuthSessions.get(oauthState)
+      if (oauthError === "invalid_client" && session) {
+        log.warn("received invalid_client during browser authorization, retrying with fresh registration", {
+          mcpName,
+          attempt: session.attempt,
+        })
+        const recovered = await retryAfterInvalidClient(session)
+        if (recovered) {
+          return runBrowserAuthorization(mcpName, recovered.authorizationUrl, recovered.oauthState)
+        }
+      }
+      if (session) {
+        await cleanupPendingOAuthSession(session)
+      }
+      log.error("background oauth flow failed", { mcpName, error })
+      const nextState = await state()
+      const status: Status = {
+        status: "needs_auth",
+      }
+      nextState.status[mcpName] = status
+      return status
+    }
+  }
+
+  async function launchBrowserAuthorization(
+    mcpName: string,
+    authorizationUrl: string,
+    oauthState: string,
+  ): Promise<Status> {
+    const existing = authLaunchFlights.get(mcpName)
+    if (existing) {
+      return existing
+    }
+
+    const flight = runBrowserAuthorization(mcpName, authorizationUrl, oauthState).finally(() => {
+      authLaunchFlights.delete(mcpName)
+    })
+
+    authLaunchFlights.set(mcpName, flight)
+    return flight
   }
 
   function toToolInfo(tool: MCPToolDef): ToolInfo {
@@ -287,6 +617,133 @@ export namespace MCP {
       attempts,
       nextAt: computeNextReconnect(attempts),
     }
+  }
+
+  async function syncCreateResult(serverName: string, result: Awaited<ReturnType<typeof create>>) {
+    const s = await state()
+    const existingClient = s.clients[serverName]
+
+    s.status[serverName] = result.status
+
+    if (result.mcpClient) {
+      if (existingClient && existingClient !== result.mcpClient) {
+        await existingClient.close().catch((error) => {
+          log.error("Failed to close existing MCP client", { serverName, error })
+        })
+      }
+      s.clients[serverName] = result.mcpClient
+    } else if (existingClient) {
+      await existingClient.close().catch((error) => {
+        log.error("Failed to close existing MCP client", { serverName, error })
+      })
+      delete s.clients[serverName]
+    }
+
+    if (result.tools) {
+      s.tools[serverName] = result.tools
+    } else {
+      delete s.tools[serverName]
+    }
+
+    if (result.resources) {
+      s.resources[serverName] = result.resources
+    } else {
+      delete s.resources[serverName]
+    }
+
+    if (result.health) {
+      s.health[serverName] = result.health
+    } else {
+      delete s.health[serverName]
+    }
+  }
+
+  type EnsureServerConnectedOptions = {
+    interactiveAuth?: boolean
+    waitForAuthMs?: number
+  }
+
+  async function ensureServerConnected(
+    serverName: string,
+    entry: Config.Mcp,
+    options: EnsureServerConnectedOptions = {},
+  ): Promise<boolean> {
+    const existing = connectionFlights.get(serverName)
+    if (existing) {
+      return existing
+    }
+
+    const flight = (async () => {
+      const interactiveAuth = options.interactiveAuth ?? true
+      const waitForAuthMs = options.waitForAuthMs ?? 0
+      const s = await state()
+      if (s.status[serverName]?.status === "connected" && s.clients[serverName]) {
+        return true
+      }
+
+      const result = await create(serverName, entry)
+      await syncCreateResult(serverName, result)
+
+      if (result.status.status === "connected" && result.mcpClient) {
+        return true
+      }
+
+      if (!interactiveAuth || entry.type !== "remote" || entry.oauth === false) {
+        return false
+      }
+
+      const authStatus = await getAuthStatus(serverName)
+      const shouldAuthenticate =
+        result.status.status === "needs_auth" ||
+        result.status.status === "needs_client_registration" ||
+        authStatus === "not_authenticated" ||
+        authStatus === "expired"
+
+      if (!shouldAuthenticate) {
+        return false
+      }
+
+      const { authorizationUrl } = await startAuth(serverName, { mode: "loopback" })
+      if (!authorizationUrl) {
+        const nextState = await state()
+        return nextState.status[serverName]?.status === "connected"
+      }
+
+      const oauthState = await McpAuth.getOAuthState(serverName)
+      if (!oauthState) {
+        return false
+      }
+
+      const launch = launchBrowserAuthorization(serverName, authorizationUrl, oauthState)
+      if (waitForAuthMs <= 0) {
+        void launch
+        return false
+      }
+
+      const outcome = await Promise.race([
+        launch.then(() => "completed" as const),
+        new Promise<"timeout">((resolve) => {
+          const timer = setTimeout(() => resolve("timeout"), waitForAuthMs)
+          timer.unref?.()
+        }),
+      ])
+
+      if (outcome === "completed") {
+        const nextState = await state()
+        return nextState.status[serverName]?.status === "connected"
+      }
+
+      const nextState = await state()
+      nextState.status[serverName] = {
+        status: "auth_in_progress",
+      }
+      return false
+    })().finally(() => {
+      connectionFlights.delete(serverName)
+    })
+
+    connectionFlights.set(serverName, flight)
+    return flight
   }
 
   const state = Instance.state(
@@ -360,7 +817,7 @@ export namespace MCP {
           }),
         ),
       )
-      pendingOAuthTransports.clear()
+      pendingOAuthSessions.clear()
     },
   )
 
@@ -473,43 +930,21 @@ export namespace MCP {
     if (mcp.type === "remote") {
       // OAuth is enabled by default for remote servers unless explicitly disabled with oauth: false
       const oauthDisabled = mcp.oauth === false
-      const oauthConfig = typeof mcp.oauth === "object" ? mcp.oauth : undefined
       let authProvider: McpOAuthProvider | undefined
 
       if (!oauthDisabled) {
-        authProvider = new McpOAuthProvider(
+        authProvider = buildOAuthProvider(
           key,
-          mcp.url,
-          {
-            clientId: oauthConfig?.clientId,
-            clientSecret: oauthConfig?.clientSecret,
-            scope: oauthConfig?.scope,
-          },
-          {
-            onRedirect: async (url) => {
-              log.info("oauth redirect requested", { key, url: url.toString() })
-              // Store the URL - actual browser opening is handled by startAuth
-            },
+          mcp,
+          getLoopbackRedirectUrl(),
+          async (url) => {
+            log.info("oauth redirect requested", { key, url: url.toString() })
+            // Store the URL - actual browser opening is handled by startAuth
           },
         )
       }
 
-      const transports: Array<{ name: string; transport: TransportWithAuth }> = [
-        {
-          name: "StreamableHTTP",
-          transport: new StreamableHTTPClientTransport(new URL(mcp.url), {
-            authProvider,
-            requestInit: mcp.headers ? { headers: mcp.headers } : undefined,
-          }),
-        },
-        {
-          name: "SSE",
-          transport: new SSEClientTransport(new URL(mcp.url), {
-            authProvider,
-            requestInit: mcp.headers ? { headers: mcp.headers } : undefined,
-          }),
-        },
-      ]
+      const transports = createRemoteTransports(mcp, authProvider)
 
       let lastError: Error | undefined
       const connectTimeout = mcp.timeout ?? DEFAULT_TIMEOUT
@@ -529,16 +964,14 @@ export namespace MCP {
           lastError = error instanceof Error ? error : new Error(String(error))
 
           // Handle OAuth-specific errors
-          if (error instanceof UnauthorizedError) {
+          if (isAuthenticationError(error)) {
             log.info("mcp server requires authentication", { key, transport: name })
-
-            // Check if this is a "needs registration" error
-            if (lastError.message.includes("registration") || lastError.message.includes("client_id")) {
+            const reason = classifyAuthenticationError(lastError)
+            if (reason === "registration_required" && !hasStaticClientRegistration(mcp)) {
               status = {
                 status: "needs_client_registration" as const,
                 error: "Server does not support dynamic client registration. Please provide clientId in config.",
               }
-              // Show toast for needs_client_registration
               Bus.publish(TuiEvent.ToastShow, {
                 title: "MCP Authentication Required",
                 message: `Server "${key}" requires a pre-registered client ID. Add clientId to your config.`,
@@ -546,13 +979,14 @@ export namespace MCP {
                 duration: 8000,
               }).catch((e) => log.debug("failed to show toast", { error: e }))
             } else {
-              // Store transport for later finishAuth call
-              pendingOAuthTransports.set(key, transport)
+              if (reason === "invalid_client" && !hasStaticClientRegistration(mcp)) {
+                await clearDynamicOAuthState(key)
+              }
+
               status = { status: "needs_auth" as const }
-              // Show toast for needs_auth
               Bus.publish(TuiEvent.ToastShow, {
                 title: "MCP Authentication Required",
-                message: `Server "${key}" requires authentication. Run: opencode mcp auth ${key}`,
+                message: `Server "${key}" requires browser authorization.`,
                 variant: "warning",
                 duration: 8000,
               }).catch((e) => log.debug("failed to show toast", { error: e }))
@@ -667,11 +1101,17 @@ export namespace MCP {
     }
 
     const tools = result.tools.map(toToolInfo)
+    const resourcesResult = await withTimeout(mcpClient.listResources(), mcp.timeout ?? DEFAULT_TIMEOUT).catch((err) => {
+      log.debug("failed to get resources from client", { key, error: err })
+      return undefined
+    })
+    const resources = resourcesResult?.resources.map(toResourceInfo)
     const health: Health = {
       ok: true,
       checkedAt: new Date().toISOString(),
       latencyMs: Date.now() - toolStart,
       tools: tools.length,
+      resources: resources?.length,
     }
 
     log.info("create() successfully created client", { key, toolCount: result.tools.length })
@@ -679,6 +1119,7 @@ export namespace MCP {
       mcpClient,
       status,
       tools,
+      resources,
       health,
     }
   }
@@ -722,6 +1163,8 @@ export namespace MCP {
 
     return result
   }
+
+  const healthInFlight = new Map<string, Promise<Health>>()
 
   async function pingServer(
     serverName: string,
@@ -1003,12 +1446,13 @@ export namespace MCP {
   }
 
   export async function tools() {
-    const result: Record<string, Tool> = {}
-    const s = await state()
     const cfg = await Config.get()
     const config = cfg.mcp ?? {}
-    const clientsSnapshot = await clients()
+    const s = await state()
     const defaultTimeout = cfg.experimental?.mcp_timeout
+    const result: Record<string, Tool> = {}
+
+    const clientsSnapshot = await clients()
 
     for (const [clientName, client] of Object.entries(clientsSnapshot)) {
       // Only include tools from connected MCPs (skip disabled ones)
@@ -1037,7 +1481,12 @@ export namespace MCP {
       for (const mcpTool of toolsResult.tools) {
         const sanitizedClientName = clientName.replace(/[^a-zA-Z0-9_-]/g, "_")
         const sanitizedToolName = mcpTool.name.replace(/[^a-zA-Z0-9_-]/g, "_")
-        result[sanitizedClientName + "_" + sanitizedToolName] = await convertMcpTool(mcpTool, client, timeout)
+        result[sanitizedClientName + "_" + sanitizedToolName] = await convertMcpTool(
+          clientName,
+          mcpTool,
+          client,
+          timeout,
+        )
       }
     }
     return result
@@ -1086,8 +1535,16 @@ export namespace MCP {
   }
 
   export async function getPrompt(clientName: string, name: string, args?: Record<string, string>) {
-    const clientsSnapshot = await clients()
-    const client = clientsSnapshot[clientName]
+    let client = (await clients())[clientName]
+
+    if (!client) {
+      const cfg = await Config.get()
+      const entry = cfg.mcp?.[clientName]
+      if (entry && isMcpConfigured(entry)) {
+        await ensureServerConnected(clientName, entry, { interactiveAuth: true })
+        client = (await clients())[clientName]
+      }
+    }
 
     if (!client) {
       log.warn("client not found for prompt", {
@@ -1114,8 +1571,16 @@ export namespace MCP {
   }
 
   export async function readResource(clientName: string, resourceUri: string) {
-    const clientsSnapshot = await clients()
-    const client = clientsSnapshot[clientName]
+    let client = (await clients())[clientName]
+
+    if (!client) {
+      const cfg = await Config.get()
+      const entry = cfg.mcp?.[clientName]
+      if (entry && isMcpConfigured(entry)) {
+        await ensureServerConnected(clientName, entry, { interactiveAuth: true })
+        client = (await clients())[clientName]
+      }
+    }
 
     if (!client) {
       log.warn("client not found for prompt", {
@@ -1140,11 +1605,62 @@ export namespace MCP {
     return result
   }
 
+  async function finishAuthByState(oauthState: string, authorizationCode: string): Promise<Status> {
+    const session = pendingOAuthSessions.get(oauthState)
+
+    if (!session) {
+      throw new Error("No pending OAuth flow for the provided state")
+    }
+
+    try {
+      return await Instance.provide({
+        directory: session.directory,
+        fn: async () => {
+          const storedState = await McpAuth.getOAuthState(session.mcpName)
+          if (storedState !== oauthState) {
+            throw new Error("OAuth state mismatch - potential CSRF attack")
+          }
+
+          await session.transport.finishAuth(authorizationCode)
+          await McpAuth.clearCodeVerifier(session.mcpName)
+
+          const cfg = await Config.get()
+          const mcpConfig = cfg.mcp?.[session.mcpName]
+
+          if (!mcpConfig) {
+            throw new Error(`MCP server not found: ${session.mcpName}`)
+          }
+
+          if (!isMcpConfigured(mcpConfig)) {
+            throw new Error(`MCP server ${session.mcpName} is disabled or missing configuration`)
+          }
+
+          const result = await add(session.mcpName, mcpConfig)
+          const statusRecord = result.status as Record<string, Status>
+          return statusRecord[session.mcpName] ?? { status: "failed", error: "Unknown error after auth" }
+        },
+      })
+    } catch (error) {
+      log.error("failed to finish oauth", { mcpName: session.mcpName, error })
+      return {
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      }
+    } finally {
+      pendingOAuthSessions.delete(oauthState)
+      await McpAuth.clearCodeVerifier(session.mcpName).catch(() => undefined)
+      await McpAuth.clearOAuthState(session.mcpName).catch(() => undefined)
+    }
+  }
+
   /**
    * Start OAuth authentication flow for an MCP server.
    * Returns the authorization URL that should be opened in a browser.
    */
-  export async function startAuth(mcpName: string): Promise<{ authorizationUrl: string }> {
+  export async function startAuth(
+    mcpName: string,
+    options: StartAuthOptions = {},
+  ): Promise<{ authorizationUrl: string }> {
     const cfg = await Config.get()
     const mcpConfig = cfg.mcp?.[mcpName]
 
@@ -1164,57 +1680,96 @@ export namespace MCP {
       throw new Error(`MCP server ${mcpName} has OAuth explicitly disabled`)
     }
 
-    // Start the callback server
-    await McpOAuthCallback.ensureRunning()
+    const mode = options.mode ?? "loopback"
+    if (mode === "loopback") {
+      await McpOAuthCallback.ensureRunning()
+    }
 
-    // Generate and store a cryptographically secure state parameter BEFORE creating the provider
-    // The SDK will call provider.state() to read this value
-    const oauthState = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
+    const oauthState = createOAuthState()
     await McpAuth.updateOAuthState(mcpName, oauthState)
 
-    // Create a new auth provider for this flow
-    // OAuth config is optional - if not provided, we'll use auto-discovery
-    const oauthConfig = typeof mcpConfig.oauth === "object" ? mcpConfig.oauth : undefined
-    let capturedUrl: URL | undefined
-    const authProvider = new McpOAuthProvider(
-      mcpName,
-      mcpConfig.url,
-      {
-        clientId: oauthConfig?.clientId,
-        clientSecret: oauthConfig?.clientSecret,
-        scope: oauthConfig?.scope,
-      },
-      {
-        onRedirect: async (url) => {
-          capturedUrl = url
-        },
-      },
-    )
+    const redirectUrl =
+      mode === "server"
+        ? getServerRedirectUrl(options.serverOrigin ?? "")
+        : getLoopbackRedirectUrl()
 
-    // Create transport with auth provider
-    const transport = new StreamableHTTPClientTransport(new URL(mcpConfig.url), {
-      authProvider,
-    })
+    const connectTimeout = mcpConfig.timeout ?? DEFAULT_TIMEOUT
 
-    // Try to connect - this will trigger the OAuth flow
     try {
-      const client = new Client({
-        name: "opencode",
-        version: Installation.VERSION,
-      })
-      await client.connect(transport)
-      // If we get here, we're already authenticated
-      return { authorizationUrl: "" }
-    } catch (error) {
-      if (error instanceof UnauthorizedError && capturedUrl) {
-        // Store transport for finishAuth
-        pendingOAuthTransports.set(mcpName, transport)
-        return { authorizationUrl: capturedUrl.toString() }
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let capturedUrl: URL | undefined
+        const authProvider = buildOAuthProvider(
+          mcpName,
+          mcpConfig,
+          redirectUrl,
+          async (url) => {
+            capturedUrl = url
+          },
+        )
+        const transports = createRemoteTransports(mcpConfig, authProvider)
+        let retryAfterInvalidClient = false
+
+        for (const { name, transport } of transports) {
+          try {
+            const client = new Client({
+              name: "opencode",
+              version: Installation.VERSION,
+            })
+            await withTimeout(client.connect(transport), connectTimeout)
+            await client.close().catch(() => undefined)
+            return { authorizationUrl: "" }
+          } catch (error) {
+            const reason = classifyAuthenticationError(error)
+            if (isAuthenticationError(error) && capturedUrl) {
+              pendingOAuthSessions.set(oauthState, {
+                directory: Instance.directory,
+                mcpName,
+                state: oauthState,
+                transport,
+                mode,
+                serverOrigin: options.serverOrigin,
+                attempt: options.attempt ?? 0,
+              })
+              const s = await state()
+              s.status[mcpName] = {
+                status: "auth_in_progress",
+              }
+              return { authorizationUrl: capturedUrl.toString() }
+            }
+
+            if (reason === "invalid_client" && !hasStaticClientRegistration(mcpConfig) && attempt === 0) {
+              await clearDynamicOAuthState(mcpName)
+              retryAfterInvalidClient = true
+              break
+            }
+
+            if (reason === "registration_required" && !hasStaticClientRegistration(mcpConfig)) {
+              throw new Error("Server does not support dynamic client registration. Please provide clientId in config.")
+            }
+
+            log.debug("oauth start transport failed", {
+              mcpName,
+              transport: name,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          }
+        }
+
+        if (retryAfterInvalidClient) {
+          continue
+        }
+
+        break
       }
+    } catch (error) {
+      await McpAuth.clearOAuthState(mcpName).catch(() => undefined)
+      await McpAuth.clearCodeVerifier(mcpName).catch(() => undefined)
       throw error
     }
+
+    await McpAuth.clearOAuthState(mcpName).catch(() => undefined)
+    await McpAuth.clearCodeVerifier(mcpName).catch(() => undefined)
+    throw new Error(`Failed to start OAuth flow for MCP server: ${mcpName}`)
   }
 
   /**
@@ -1222,112 +1777,98 @@ export namespace MCP {
    * Opens the browser and waits for callback.
    */
   export async function authenticate(mcpName: string): Promise<Status> {
-    const { authorizationUrl } = await startAuth(mcpName)
+    const { authorizationUrl } = await startAuth(mcpName, { mode: "loopback" })
 
     if (!authorizationUrl) {
-      // Already authenticated
       const s = await state()
       return s.status[mcpName] ?? { status: "connected" }
     }
 
-    // Get the state that was already generated and stored in startAuth()
     const oauthState = await McpAuth.getOAuthState(mcpName)
     if (!oauthState) {
       throw new Error("OAuth state not found - this should not happen")
     }
 
-    // The SDK has already added the state parameter to the authorization URL
-    // We just need to open the browser
     log.info("opening browser for oauth", { mcpName, url: authorizationUrl, state: oauthState })
-
-    // Register the callback BEFORE opening the browser to avoid race condition
-    // when the IdP has an active SSO session and redirects immediately
-    const callbackPromise = McpOAuthCallback.waitForCallback(oauthState)
-
-    try {
-      const subprocess = await open(authorizationUrl)
-      // The open package spawns a detached process and returns immediately.
-      // We need to listen for errors which fire asynchronously:
-      // - "error" event: command not found (ENOENT)
-      // - "exit" with non-zero code: command exists but failed (e.g., no display)
-      await new Promise<void>((resolve, reject) => {
-        // Give the process a moment to fail if it's going to
-        const timeout = setTimeout(() => resolve(), 500)
-        subprocess.on("error", (error) => {
-          clearTimeout(timeout)
-          reject(error)
-        })
-        subprocess.on("exit", (code) => {
-          if (code !== null && code !== 0) {
-            clearTimeout(timeout)
-            reject(new Error(`Browser open failed with exit code ${code}`))
-          }
-        })
-      })
-    } catch (error) {
-      // Browser opening failed (e.g., in remote/headless sessions like SSH, devcontainers)
-      // Emit event so CLI can display the URL for manual opening
-      log.warn("failed to open browser, user must open URL manually", { mcpName, error })
-      Bus.publish(BrowserOpenFailed, { mcpName, url: authorizationUrl })
-    }
-
-    // Wait for callback using the already-registered promise
-    const code = await callbackPromise
-
-    // Validate and clear the state
-    const storedState = await McpAuth.getOAuthState(mcpName)
-    if (storedState !== oauthState) {
-      await McpAuth.clearOAuthState(mcpName)
-      throw new Error("OAuth state mismatch - potential CSRF attack")
-    }
-
-    await McpAuth.clearOAuthState(mcpName)
-
-    // Finish auth
-    return finishAuth(mcpName, code)
+    return launchBrowserAuthorization(mcpName, authorizationUrl, oauthState)
   }
 
   /**
    * Complete OAuth authentication with the authorization code.
    */
   export async function finishAuth(mcpName: string, authorizationCode: string): Promise<Status> {
-    const transport = pendingOAuthTransports.get(mcpName)
+    const storedState = await McpAuth.getOAuthState(mcpName)
+    const sessionState = storedState ?? getPendingSessionByName(mcpName)?.state
 
-    if (!transport) {
+    if (!sessionState) {
       throw new Error(`No pending OAuth flow for MCP server: ${mcpName}`)
     }
 
-    try {
-      // Call finishAuth on the transport
-      await transport.finishAuth(authorizationCode)
+    return finishAuthByState(sessionState, authorizationCode)
+  }
 
-      // Clear the code verifier after successful auth
-      await McpAuth.clearCodeVerifier(mcpName)
+  export async function handleOAuthCallback(input: {
+    code?: string | null
+    state?: string | null
+    error?: string | null
+    errorDescription?: string | null
+    oauthError?: string | null
+  }): Promise<{ html: string; status: number } | { redirectUrl: string; status: number }> {
+    const state = input.state ?? undefined
 
-      // Now try to reconnect
-      const cfg = await Config.get()
-      const mcpConfig = cfg.mcp?.[mcpName]
-
-      if (!mcpConfig) {
-        throw new Error(`MCP server not found: ${mcpName}`)
-      }
-
-      if (!isMcpConfigured(mcpConfig)) {
-        throw new Error(`MCP server ${mcpName} is disabled or missing configuration`)
-      }
-
-      // Re-add the MCP server to establish connection
-      pendingOAuthTransports.delete(mcpName)
-      const result = await add(mcpName, mcpConfig)
-
-      const statusRecord = result.status as Record<string, Status>
-      return statusRecord[mcpName] ?? { status: "failed", error: "Unknown error after auth" }
-    } catch (error) {
-      log.error("failed to finish oauth", { mcpName, error })
+    if (!state) {
       return {
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
+        html: McpOAuthCallback.renderError("Missing required state parameter - potential CSRF attack"),
+        status: 400,
       }
+    }
+
+    if (input.error) {
+      const errorMessage = input.errorDescription || input.error
+      const session = pendingOAuthSessions.get(state)
+      if (session) {
+        if (input.oauthError === "invalid_client") {
+          const recovered = await retryAfterInvalidClient(session)
+          if (recovered) {
+            return {
+              redirectUrl: recovered.authorizationUrl,
+              status: 302,
+            }
+          }
+        }
+        await cleanupPendingOAuthSession(session)
+      }
+      return {
+        html: McpOAuthCallback.renderError(errorMessage),
+        status: 400,
+      }
+    }
+
+    if (!input.code) {
+      return {
+        html: McpOAuthCallback.renderError("No authorization code provided"),
+        status: 400,
+      }
+    }
+
+    if (!pendingOAuthSessions.has(state)) {
+      return {
+        html: McpOAuthCallback.renderError("Invalid or expired state parameter - potential CSRF attack"),
+        status: 400,
+      }
+    }
+
+    const status = await finishAuthByState(state, input.code)
+    if (status.status === "connected") {
+      return {
+        html: McpOAuthCallback.renderSuccess(),
+        status: 200,
+      }
+    }
+
+    return {
+      html: McpOAuthCallback.renderError(status.status === "failed" ? status.error : "OAuth authentication failed"),
+      status: 400,
     }
   }
 
@@ -1335,9 +1876,8 @@ export namespace MCP {
    * Remove OAuth credentials for an MCP server.
    */
   export async function removeAuth(mcpName: string): Promise<void> {
+    clearPendingSessionsForName(mcpName)
     await McpAuth.remove(mcpName)
-    McpOAuthCallback.cancelPending(mcpName)
-    pendingOAuthTransports.delete(mcpName)
     await McpAuth.clearOAuthState(mcpName)
     log.info("removed oauth credentials", { mcpName })
   }
@@ -1361,6 +1901,44 @@ export namespace MCP {
     return !!entry?.tokens
   }
 
+  export async function prepareServersForTurn(
+    userText: string,
+    options: { waitForAuthMs?: number } = {},
+  ): Promise<{ authInProgressServers: string[] }> {
+    if (!shouldPreflightFeishuIntent(userText)) {
+      return { authInProgressServers: [] }
+    }
+
+    const cfg = await Config.get()
+    const config = cfg.mcp ?? {}
+    const authInProgressServers: string[] = []
+    const waitForAuthMs = options.waitForAuthMs ?? 120_000
+
+    for (const [serverName, entry] of Object.entries(config)) {
+      if (!isMcpConfigured(entry) || entry.type !== "remote" || entry.oauth === false || entry.enabled === false) {
+        continue
+      }
+
+      if (!isFeishuLikeServer(serverName, entry)) {
+        continue
+      }
+
+      const connected = await ensureServerConnected(serverName, entry, {
+        interactiveAuth: true,
+        waitForAuthMs,
+      })
+
+      if (!connected) {
+        const nextState = await state()
+        if (nextState.status[serverName]?.status === "auth_in_progress") {
+          authInProgressServers.push(serverName)
+        }
+      }
+    }
+
+    return { authInProgressServers }
+  }
+
   export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
 
   /**
@@ -1369,8 +1947,7 @@ export namespace MCP {
   export async function getAuthStatus(mcpName: string): Promise<AuthStatus> {
     const hasTokens = await hasStoredTokens(mcpName)
     if (!hasTokens) return "not_authenticated"
-    const expired = await McpAuth.isTokenExpired(mcpName)
+    const expired = await McpAuth.isTokenStale(mcpName)
     return expired ? "expired" : "authenticated"
   }
 }
-  const healthInFlight = new Map<string, Promise<Health>>()

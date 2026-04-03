@@ -112,6 +112,9 @@ export const McpListCommand = cmd({
           } else if (status.status === "needs_auth") {
             statusIcon = "⚠"
             statusText = "needs authentication"
+          } else if (status.status === "auth_in_progress") {
+            statusIcon = "◐"
+            statusText = "authentication in progress"
           } else if (status.status === "needs_client_registration") {
             statusIcon = "✗"
             statusText = "needs client registration"
@@ -243,6 +246,12 @@ export const McpAuthCommand = cmd({
 
           if (status.status === "connected") {
             spinner.stop("Authentication successful!")
+          } else if (status.status === "auth_in_progress") {
+            spinner.stop("Authentication in progress")
+            prompts.log.info("Browser authorization is still in progress. Complete it, then retry your request.")
+          } else if (status.status === "needs_auth") {
+            spinner.stop("Authentication requires browser approval")
+            prompts.log.info("Complete the browser authorization to continue.")
           } else if (status.status === "needs_client_registration") {
             spinner.stop("Authentication failed", 1)
             prompts.log.error(status.error)
@@ -690,6 +699,7 @@ export const McpDebugCommand = cmd({
                 clientSecret: oauthConfig?.clientSecret,
                 scope: oauthConfig?.scope,
               },
+              "http://127.0.0.1:19876/mcp/oauth/callback",
               {
                 onRedirect: async () => {},
               },

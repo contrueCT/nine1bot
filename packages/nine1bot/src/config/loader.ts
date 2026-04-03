@@ -159,6 +159,15 @@ export function getAuthPath(): string {
 }
 
 /**
+ * 获取 MCP OAuth 认证文件路径
+ * - Windows: %LOCALAPPDATA%\nine1bot\mcp-auth.json
+ * - Unix: ~/.local/share/nine1bot/mcp-auth.json
+ */
+export function getMcpAuthPath(): string {
+  return join(getDataDir(), 'mcp-auth.json')
+}
+
+/**
  * 获取项目环境变量目录路径
  * 与 auth.json 同级目录，便于统一管理 Nine1Bot 私有数据
  * - Windows: %LOCALAPPDATA%\nine1bot\project-env
@@ -279,10 +288,30 @@ async function loadConfigFile(configPath: string): Promise<Partial<Nine1BotConfi
  */
 export async function loadConfig(customConfigPath?: string): Promise<Nine1BotConfig> {
   let result: Partial<Nine1BotConfig> = {}
+  const projectConfigPath = customConfigPath || await findConfigPath()
+  let projectConfig: Partial<Nine1BotConfig> = {}
+
+  if (projectConfigPath && await fileExists(projectConfigPath)) {
+    try {
+      projectConfig = await loadConfigFile(projectConfigPath)
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(`Invalid JSON in config file: ${projectConfigPath}`)
+      }
+      if (error && typeof error === 'object' && 'issues' in error) {
+        const zodError = error as { issues: Array<{ path: (string | number)[]; message: string }> }
+        const messages = zodError.issues.map(i => `  - ${i.path.join('.')}: ${i.message}`).join('\n')
+        throw new Error(`Invalid config in ${projectConfigPath}:\n${messages}`)
+      }
+      throw error
+    }
+  }
+
+  const skipGlobalConfig = Boolean(projectConfig.isolation?.disableGlobalConfig)
 
   // 1. 加载全局配置
   const globalConfigPath = getGlobalConfigPath()
-  if (await fileExists(globalConfigPath)) {
+  if (!skipGlobalConfig && await fileExists(globalConfigPath)) {
     try {
       const globalConfig = await loadConfigFile(globalConfigPath)
       result = deepMerge(result, globalConfig)
@@ -292,10 +321,8 @@ export async function loadConfig(customConfigPath?: string): Promise<Nine1BotCon
   }
 
   // 2. 加载项目配置
-  const projectConfigPath = customConfigPath || await findConfigPath()
   if (projectConfigPath && await fileExists(projectConfigPath)) {
     try {
-      const projectConfig = await loadConfigFile(projectConfigPath)
       result = deepMerge(result, projectConfig)
     } catch (error) {
       if (error instanceof SyntaxError) {
