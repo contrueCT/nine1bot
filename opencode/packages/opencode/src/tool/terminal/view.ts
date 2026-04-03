@@ -17,7 +17,8 @@ Use this to:
 - Monitor the state of long-running tasks
 - View full-screen applications like vim or htop
 
-The output is formatted to clearly show terminal boundaries.`,
+The output is formatted to clearly show terminal boundaries.
+If the output is too large, the latest terminal content is kept and older history is truncated.`,
 
   parameters: z.object({
     id: z.string().describe("Terminal session ID (from terminal_create or terminal_list)"),
@@ -68,5 +69,9 @@ ${"─".repeat(width)}`,
         cols: screenInfo?.cols,
       },
     }
+  },
+}, {
+  truncation: {
+    direction: "tail",
   },
 })
