@@ -2,14 +2,18 @@
   "manifest_version": 3,
   "name": "Nine1Bot Browser Control",
   "version": "0.1.0",
-  "description": "Browser automation and control for Nine1Bot via MCP protocol",
+  "description": "Browser automation and control for Nine1Bot via the built-in browser relay",
   "permissions": [
     "tabs",
     "activeTab",
     "scripting",
     "debugger",
     "storage",
-    "webNavigation"
+    "webNavigation",
+    "tabGroups",
+    "sidePanel",
+    "offscreen",
+    "notifications"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -39,5 +43,20 @@
       "128": "icons/icon128.png"
     },
     "default_title": "Nine1Bot Browser Control"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/index.html"
+  },
+  "commands": {
+    "open-side-panel": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "Command+Shift+E"
+      },
+      "description": "Open Nine1Bot Side Panel"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; frame-src 'self' http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:*"
   }
 }

@@ -61,6 +61,29 @@ Call this first to discover which browsers are available and get tab IDs.`,
       }
     }
 
+    if (status.runtime) {
+      lines.push(`Runtime: ${status.runtime.mode} @ ${status.runtime.serverOrigin}`)
+      lines.push(`  Instance: ${status.runtime.instanceId}`)
+      lines.push(
+        `  Extension handshake: ${status.runtime.extension.connected ? "connected" : "disconnected"}`
+        + `${status.runtime.extension.version ? ` (v${status.runtime.extension.version})` : ""}`,
+      )
+
+      if (status.runtime.extension.serverOrigin || status.runtime.extension.pairedInstanceId) {
+        lines.push(
+          `  Extension pairing: ${status.runtime.extension.serverOrigin ?? "unknown origin"}`
+          + `${status.runtime.extension.pairedInstanceId ? ` / ${status.runtime.extension.pairedInstanceId}` : ""}`,
+        )
+      }
+
+      for (const conflict of status.runtime.conflicts) {
+        lines.push(`  Warning: ${conflict.message}`)
+      }
+      for (const issue of status.runtime.issues) {
+        lines.push(`  ${issue.severity === "error" ? "Error" : "Warning"}: ${issue.message}`)
+      }
+    }
+
     return {
       title: "Browser status",
       output: lines.join("\n"),
@@ -519,7 +542,7 @@ Parameters:
     }
 
     const lines = matches.map(
-      (m, i) =>
+      (m: any, i: number) =>
         `${i + 1}. [${m.ref}] <${m.tag}>${m.role ? ` role=${m.role}` : ""}${m.label ? ` label="${m.label}"` : ""}\n   ${m.text ? `Text: "${m.text.slice(0, 80)}"` : "(no text)"}   Score: ${m.score}`,
     )
 
@@ -604,6 +627,100 @@ Parameters:
       title: "JavaScript executed",
       output: `Result:\n${output}`,
       metadata: {},
+    }
+  },
+})
+
+// ==================== 15. browser_console_messages ====================
+
+export const BrowserConsoleMessagesTool = Tool.define("browser_console_messages", {
+  description: `Capture console messages from the user browser tab (extension channel, on-demand sampling).
+
+Parameters:
+- tabId: Tab ID
+- sampleMs: Sampling window in ms (default: 1500)
+- max: Maximum entries (default: 50)
+- sinceMs: Only include entries newer than now-sinceMs
+- level: Optional level filter (log, warning, error, etc.)`,
+  parameters: z.object({
+    tabId: z.string().describe("Tab ID"),
+    browser: browserParam,
+    sampleMs: z.number().optional().describe("Sampling window in ms (default: 1500)"),
+    max: z.number().optional().describe("Maximum entries (default: 50)"),
+    sinceMs: z.number().optional().describe("Only include entries newer than now-sinceMs"),
+    level: z.string().optional().describe("Console level filter"),
+  }),
+  async execute(params, ctx) {
+    await ctx.ask({
+      permission: "browser_console_messages",
+      patterns: ["*"],
+      always: ["*"],
+      metadata: { tabId: params.tabId },
+    })
+
+    const bridge = requireBridge()
+    const entries = await bridge.readConsoleMessages(
+      params.tabId,
+      {
+        sampleMs: params.sampleMs,
+        max: params.max,
+        sinceMs: params.sinceMs,
+        level: params.level,
+      },
+      params.browser as BrowserTarget | undefined,
+    )
+
+    return {
+      title: `Console messages (${entries.length})`,
+      output: JSON.stringify(entries, null, 2),
+      metadata: { count: entries.length },
+    }
+  },
+})
+
+// ==================== 16. browser_network_requests ====================
+
+export const BrowserNetworkRequestsTool = Tool.define("browser_network_requests", {
+  description: `Capture network requests from the user browser tab (extension channel, on-demand sampling).
+
+Parameters:
+- tabId: Tab ID
+- sampleMs: Sampling window in ms (default: 1500)
+- max: Maximum entries (default: 50)
+- sinceMs: Only include entries newer than now-sinceMs
+- resourceType: Optional filter (Document, Script, XHR, Fetch, etc.)`,
+  parameters: z.object({
+    tabId: z.string().describe("Tab ID"),
+    browser: browserParam,
+    sampleMs: z.number().optional().describe("Sampling window in ms (default: 1500)"),
+    max: z.number().optional().describe("Maximum entries (default: 50)"),
+    sinceMs: z.number().optional().describe("Only include entries newer than now-sinceMs"),
+    resourceType: z.string().optional().describe("Network resource type filter"),
+  }),
+  async execute(params, ctx) {
+    await ctx.ask({
+      permission: "browser_network_requests",
+      patterns: ["*"],
+      always: ["*"],
+      metadata: { tabId: params.tabId },
+    })
+
+    const bridge = requireBridge()
+    const entries = await bridge.readNetworkRequests(
+      params.tabId,
+      {
+        sampleMs: params.sampleMs,
+        max: params.max,
+        sinceMs: params.sinceMs,
+        resourceType: params.resourceType,
+      },
+      params.browser as BrowserTarget | undefined,
+    )
+
+    return {
+      title: `Network requests (${entries.length})`,
+      output: JSON.stringify(entries, null, 2),
+      metadata: { count: entries.length },
     }
   },
 })
