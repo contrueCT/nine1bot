@@ -51,6 +51,10 @@ export interface StartServerOptions {
   fullConfig: Nine1BotConfig
 }
 
+function generateBrowserInstanceId(): string {
+  return `browser_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+}
+
 /**
  * Nine1Bot 特有的配置字段（需要从 opencode 配置中过滤掉）
  */
@@ -238,14 +242,17 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   const browserConfig = (fullConfig as any).browser
   if (browserConfig?.enabled) {
     try {
+      const serverOrigin = `http://${server.hostname}:${server.port}`
       bridgeServer = new BridgeServer({
         cdpPort: browserConfig.cdpPort ?? 9222,
         autoLaunch: browserConfig.autoLaunch ?? true,
         headless: browserConfig.headless ?? false,
+        serverOrigin,
+        instanceId: generateBrowserInstanceId(),
       })
       await bridgeServer.start()
       setBridgeServer(bridgeServer)
-      console.log('[Nine1Bot] Browser control enabled at /browser/')
+      console.log(`[Nine1Bot] Browser control enabled at ${serverOrigin}/browser/`)
     } catch (error: any) {
       console.warn(`[Nine1Bot] Failed to initialize browser bridge: ${error.message}`)
     }

@@ -1,7 +1,19 @@
 import type { ToolDefinition, ToolResult } from './index'
+import { addTabToNine1Group } from '../background/tab-group-manager'
 
 interface TabsContextArgs {
   createIfEmpty?: boolean
+  url?: string
+}
+
+interface TabsCreateArgs {
+  url?: string
+}
+
+function normalizeNewTabUrl(url?: string): string {
+  if (typeof url !== 'string') return 'about:blank'
+  const trimmed = url.trim()
+  return trimmed.length > 0 ? trimmed : 'about:blank'
 }
 
 // Track tabs created by this extension (MCP tab group)
@@ -25,7 +37,7 @@ export const tabsContextTool = {
   } satisfies ToolDefinition,
 
   async execute(args: unknown): Promise<ToolResult> {
-    const { createIfEmpty = false } = (args as TabsContextArgs) || {}
+    const { createIfEmpty = false, url } = (args as TabsContextArgs) || {}
 
     try {
       // Clean up closed tabs from our tracking
@@ -65,9 +77,10 @@ export const tabsContextTool = {
 
       // Create a new tab if requested and none exist
       if (createIfEmpty && managedTabs.length === 0) {
-        const newTab = await chrome.tabs.create({ url: 'about:blank' })
+        const newTab = await chrome.tabs.create({ url: normalizeNewTabUrl(url) })
         if (newTab.id) {
           mcpTabIds.add(newTab.id)
+          await addTabToNine1Group(newTab.id)
           managedTabs.push({
             id: newTab.id,
             url: newTab.url,
@@ -122,14 +135,21 @@ export const tabsCreateTool = {
     description: 'Creates a new empty tab in the MCP tab group. Use tabs_context_mcp first to see existing tabs.',
     inputSchema: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Optional initial URL to open in the new tab. Defaults to about:blank.',
+        },
+      },
       required: [],
     },
   } satisfies ToolDefinition,
 
-  async execute(_args: unknown): Promise<ToolResult> {
+  async execute(args: unknown): Promise<ToolResult> {
     try {
-      const newTab = await chrome.tabs.create({ url: 'about:blank' })
+      const { url } = (args as TabsCreateArgs) || {}
+      const initialUrl = normalizeNewTabUrl(url)
+      const newTab = await chrome.tabs.create({ url: initialUrl })
 
       if (!newTab.id) {
         return {
@@ -139,6 +159,7 @@ export const tabsCreateTool = {
       }
 
       mcpTabIds.add(newTab.id)
+      await addTabToNine1Group(newTab.id)
 
       return {
         content: [
@@ -150,6 +171,7 @@ export const tabsCreateTool = {
                 url: newTab.url,
                 title: newTab.title,
                 windowId: newTab.windowId,
+                requestedUrl: initialUrl,
                 message: 'New tab created and added to MCP tab group',
               },
               null,

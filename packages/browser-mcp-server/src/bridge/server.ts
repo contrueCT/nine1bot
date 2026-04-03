@@ -13,6 +13,7 @@
  */
 
 import { Hono } from 'hono'
+import { Socket } from 'node:net'
 import {
   listCdpTargets,
   captureScreenshot,
@@ -31,6 +32,8 @@ import type {
   ExtensionToolResult,
   BrowserTarget,
   BrowserStatus,
+  BrowserRuntimeConflict,
+  BrowserRuntimeStatus,
   SnapshotResult,
   ClickOptions,
 } from '../core/types'
@@ -44,6 +47,45 @@ export interface BridgeServerOptions {
   cdpPort?: number
   autoLaunch?: boolean
   headless?: boolean
+  serverOrigin?: string
+  instanceId?: string
+}
+
+const DEFAULT_SERVER_ORIGIN = 'http://127.0.0.1:4096'
+const LEGACY_BROWSER_PORTS = [18791, 18793]
+const EXTENSION_PROTOCOL_VERSION = '2026-03-15'
+
+function normalizeServerOrigin(serverOrigin: string): string {
+  try {
+    const parsed = new URL(serverOrigin)
+    return `${parsed.protocol}//${parsed.host}`
+  } catch {
+    return DEFAULT_SERVER_ORIGIN
+  }
+}
+
+function generateInstanceId(): string {
+  return `browser_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+async function isLocalPortListening(host: string, port: number): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const socket = new Socket()
+    let settled = false
+
+    const finish = (value: boolean) => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      resolve(value)
+    }
+
+    socket.setTimeout(250)
+    socket.once('connect', () => finish(true))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+    socket.connect(port, host)
+  })
 }
 
 /**
@@ -61,6 +103,8 @@ export class BridgeServer {
       cdpPort: options.cdpPort ?? 9222,
       autoLaunch: options.autoLaunch ?? true,
       headless: options.headless ?? false,
+      serverOrigin: normalizeServerOrigin(options.serverOrigin ?? DEFAULT_SERVER_ORIGIN),
+      instanceId: options.instanceId ?? generateInstanceId(),
     }
   }
 
@@ -171,7 +215,79 @@ export class BridgeServer {
       botStatus = { running: false, tabs: [] }
     }
 
-    return { user: userStatus, bot: botStatus }
+    return {
+      user: userStatus,
+      bot: botStatus,
+      runtime: await this.getRuntimeStatus(),
+    }
+  }
+
+  private async getRuntimeStatus(): Promise<BrowserRuntimeStatus> {
+    const hello = this.relay?.getHello() ?? null
+    const helloAt = this.relay?.getHelloAt() ?? null
+    const conflicts = await this.detectLegacyPortConflicts()
+    const issues: BrowserRuntimeStatus['issues'] = []
+
+    if (hello?.serverOrigin && normalizeServerOrigin(hello.serverOrigin) !== this.options.serverOrigin) {
+      issues.push({
+        code: 'extension_server_origin_mismatch',
+        severity: 'error',
+        message: `Extension is paired with ${hello.serverOrigin}, but this server expects ${this.options.serverOrigin}.`,
+      })
+    }
+
+    if (hello?.pairedInstanceId && hello.pairedInstanceId !== this.options.instanceId) {
+      issues.push({
+        code: 'extension_instance_mismatch',
+        severity: 'error',
+        message: `Extension is paired with instance ${hello.pairedInstanceId}, but this server instance is ${this.options.instanceId}.`,
+      })
+    }
+
+    for (const conflict of conflicts) {
+      issues.push({
+        code: `legacy_port_${conflict.port}`,
+        severity: 'warning',
+        message: conflict.message,
+      })
+    }
+
+    return {
+      mode: 'embedded',
+      serverOrigin: this.options.serverOrigin,
+      instanceId: this.options.instanceId,
+      extension: {
+        connected: this.isExtensionConnected,
+        helloAt,
+        version: hello?.version ?? null,
+        protocolVersion: hello?.protocolVersion ?? null,
+        serverOrigin: hello?.serverOrigin ?? null,
+        pairedInstanceId: hello?.pairedInstanceId ?? null,
+      },
+      conflicts,
+      issues,
+    }
+  }
+
+  private async detectLegacyPortConflicts(): Promise<BrowserRuntimeConflict[]> {
+    let currentPort: number | null = null
+    try {
+      currentPort = Number(new URL(this.options.serverOrigin).port || 80)
+    } catch {
+      currentPort = null
+    }
+
+    const conflicts: BrowserRuntimeConflict[] = []
+    for (const port of LEGACY_BROWSER_PORTS) {
+      if (currentPort === port) continue
+      if (!(await isLocalPortListening('127.0.0.1', port))) continue
+      conflicts.push({
+        host: '127.0.0.1',
+        port,
+        message: `Detected a legacy browser bridge listener on 127.0.0.1:${port}. Browser control now uses ${this.options.serverOrigin}/browser/* only.`,
+      })
+    }
+    return conflicts
   }
 
   /**
@@ -516,6 +632,15 @@ export class BridgeServer {
     const checkExpression = `document.body.innerText.includes(${JSON.stringify(text)})`
 
     while (Date.now() - startTime < maxWait) {
+      if (channel === 'extension') {
+        const targetNumericId = Number(tabId)
+        const states = this.relay?.getAgentStates() ?? []
+        const state = states.find((s) => s.tabId === targetNumericId)
+        if (state?.state === 'stopping') {
+          throw new Error('Wait cancelled by user stop request')
+        }
+      }
+
       let found = false
 
       if (channel === 'extension') {
@@ -718,8 +843,27 @@ export class BridgeServer {
         'Runtime.evaluate',
         { expression, returnByValue: true },
         tabId
-      ) as { result?: { value?: unknown } }
-      return result?.result?.value
+      ) as unknown
+
+      if (result && typeof result === 'object') {
+        const record = result as {
+          exceptionDetails?: { text?: string }
+          result?: { value?: unknown }
+          value?: unknown
+        }
+
+        if (record.exceptionDetails?.text) {
+          throw new Error(record.exceptionDetails.text)
+        }
+        if (record.result && typeof record.result === 'object' && 'value' in record.result) {
+          return record.result.value
+        }
+        if ('value' in record) {
+          return record.value
+        }
+      }
+
+      return result
     }
 
     const wsUrl = await this.getTargetWsUrl(tabId)
@@ -728,16 +872,58 @@ export class BridgeServer {
 
   // ==================== Extension Tool Forwarding ====================
 
-  async callExtensionTool(tabId: string, toolName: string, args: Record<string, unknown> = {}): Promise<ExtensionToolResult> {
+  async callExtensionTool(
+    tabId: string,
+    toolName: string,
+    args: Record<string, unknown> = {},
+    options?: { timeoutMs?: number; taskLabel?: string },
+  ): Promise<ExtensionToolResult> {
     if (!this.isExtensionConnected) {
       throw new Error('Chrome extension not connected. Install and connect the Nine1Bot Browser Control extension.')
     }
+    const supportedTools = this.relay!.getTools()
+    if (supportedTools.length > 0 && !supportedTools.includes(toolName)) {
+      throw new Error(`Unknown extension tool: ${toolName}. Available: ${supportedTools.join(', ')}`)
+    }
     const result = await this.relay!.sendCommand(
       'Extension.callTool',
-      { toolName, args },
+      {
+        toolName,
+        args,
+        timeoutMs: options?.timeoutMs,
+        taskLabel: options?.taskLabel,
+      },
       tabId
     )
     return result as ExtensionToolResult
+  }
+
+  async readConsoleMessages(
+    tabId: string,
+    options?: { sampleMs?: number; max?: number; sinceMs?: number; level?: string },
+    browser?: BrowserTarget,
+  ): Promise<unknown[]> {
+    const channel = this.getChannel(browser)
+    if (channel === 'cdp') {
+      throw new Error('console_messages is currently supported only in extension channel. Use browser=\"user\".')
+    }
+    const result = await this.callExtensionTool(tabId, 'console_messages', options ?? {})
+    const text = result.content?.find((c) => c.type === 'text')?.text ?? '[]'
+    return JSON.parse(text)
+  }
+
+  async readNetworkRequests(
+    tabId: string,
+    options?: { sampleMs?: number; max?: number; sinceMs?: number; resourceType?: string },
+    browser?: BrowserTarget,
+  ): Promise<unknown[]> {
+    const channel = this.getChannel(browser)
+    if (channel === 'cdp') {
+      throw new Error('network_requests is currently supported only in extension channel. Use browser=\"user\".')
+    }
+    const result = await this.callExtensionTool(tabId, 'network_requests', options ?? {})
+    const text = result.content?.find((c) => c.type === 'text')?.text ?? '[]'
+    return JSON.parse(text)
   }
 
   // ==================== Internal Helpers ====================
@@ -795,9 +981,16 @@ export class BridgeServer {
       resultJson = String(await evaluateScript(wsUrl, expression) ?? 'null')
     }
 
-    const parsed = JSON.parse(resultJson)
-    if (!parsed) {
-      throw new Error(`Element with ref "${ref}" not found`)
+    const parsed = JSON.parse(resultJson) as {
+      found?: boolean
+      centerX?: number
+      centerY?: number
+      visible?: boolean
+      message?: string
+    } | null
+
+    if (!parsed || parsed.found === false) {
+      throw new Error(parsed?.message || `Element with ref "${ref}" not found`)
     }
 
     if (!parsed.visible) {
@@ -823,8 +1016,22 @@ export class BridgeServer {
         const wsUrl = await this.getTargetWsUrl(tabId)
         newJson = String(await evaluateScript(wsUrl, expression) ?? 'null')
       }
-      const newParsed = JSON.parse(newJson)
-      if (newParsed) return [newParsed.centerX, newParsed.centerY]
+      const newParsed = JSON.parse(newJson) as {
+        found?: boolean
+        centerX?: number
+        centerY?: number
+        message?: string
+      } | null
+      if (!newParsed || newParsed.found === false) {
+        throw new Error(newParsed?.message || `Element with ref "${ref}" could not be resolved after scrolling`)
+      }
+      if (typeof newParsed.centerX === 'number' && typeof newParsed.centerY === 'number') {
+        return [newParsed.centerX, newParsed.centerY]
+      }
+    }
+
+    if (typeof parsed.centerX !== 'number' || typeof parsed.centerY !== 'number') {
+      throw new Error(parsed.message || `Element with ref "${ref}" did not resolve to valid coordinates`)
     }
 
     return [parsed.centerX, parsed.centerY]
@@ -834,6 +1041,15 @@ export class BridgeServer {
 
   private createHttpApp(): Hono {
     const app = new Hono()
+
+    app.get('/bootstrap', (c) => {
+      return c.json({
+        mode: 'embedded',
+        serverOrigin: this.options.serverOrigin,
+        instanceId: this.options.instanceId,
+        extensionProtocolVersion: EXTENSION_PROTOCOL_VERSION,
+      })
+    })
 
     app.get('/', async (c) => {
       try {
@@ -848,6 +1064,15 @@ export class BridgeServer {
       try {
         const status = await this.getStatus()
         return c.json({ ok: true, ...status })
+      } catch (error) {
+        return c.json({ ok: false, error: String(error) }, 500)
+      }
+    })
+
+    app.get('/diagnostics', async (c) => {
+      try {
+        const runtime = await this.getRuntimeStatus()
+        return c.json({ ok: true, runtime })
       } catch (error) {
         return c.json({ ok: false, error: String(error) }, 500)
       }
@@ -873,6 +1098,31 @@ export class BridgeServer {
           title: t.targetInfo.title,
           url: t.targetInfo.url,
         })),
+      })
+    })
+
+    app.get('/extension/health', (c) => {
+      const health = this.relay?.getHealth() ?? null
+      const helloAt = this.relay?.getHelloAt() ?? null
+      const hello = this.relay?.getHello() ?? null
+      const capabilities = this.relay?.getCapabilities() ?? {}
+      const agentStates = this.relay?.getAgentStates() ?? []
+      return c.json({
+        connected: this.isExtensionConnected,
+        helloAt,
+        hello,
+        health,
+        capabilities,
+        agentStates,
+        instanceId: this.options.instanceId,
+        serverOrigin: this.options.serverOrigin,
+      })
+    })
+
+    app.get('/extension/tools', (c) => {
+      return c.json({
+        connected: this.isExtensionConnected,
+        tools: this.relay?.getTools() ?? [],
       })
     })
 
@@ -1023,6 +1273,34 @@ export class BridgeServer {
         if (!expression) return c.json({ ok: false, error: 'expression is required' }, 400)
         const result = await this.evaluate(tabId, expression, browser)
         return c.json({ ok: true, result })
+      } catch (error) {
+        return c.json({ ok: false, error: String(error) }, 500)
+      }
+    })
+
+    app.post('/tabs/:targetId/diagnostics/console', async (c) => {
+      try {
+        const tabId = c.req.param('targetId')
+        const browser = c.req.query('browser') as BrowserTarget | undefined
+        const body = await c.req
+          .json<{ sampleMs?: number; max?: number; sinceMs?: number; level?: string }>()
+          .catch(() => ({}))
+        const entries = await this.readConsoleMessages(tabId, body, browser)
+        return c.json({ ok: true, entries })
+      } catch (error) {
+        return c.json({ ok: false, error: String(error) }, 500)
+      }
+    })
+
+    app.post('/tabs/:targetId/diagnostics/network', async (c) => {
+      try {
+        const tabId = c.req.param('targetId')
+        const browser = c.req.query('browser') as BrowserTarget | undefined
+        const body = await c.req
+          .json<{ sampleMs?: number; max?: number; sinceMs?: number; resourceType?: string }>()
+          .catch(() => ({}))
+        const entries = await this.readNetworkRequests(tabId, body, browser)
+        return c.json({ ok: true, entries })
       } catch (error) {
         return c.json({ ok: false, error: String(error) }, 500)
       }

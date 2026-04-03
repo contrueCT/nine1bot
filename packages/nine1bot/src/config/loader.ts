@@ -269,6 +269,31 @@ async function loadConfigFile(configPath: string): Promise<Partial<Nine1BotConfi
   }
 }
 
+function validateDeprecatedBrowserConfig(config: Partial<Nine1BotConfig>): void {
+  const issues: Array<{ path: string; message: string }> = []
+
+  const browserConfig = (config as any).browser
+  if (browserConfig && typeof browserConfig === 'object' && 'bridgePort' in browserConfig) {
+    issues.push({
+      path: 'browser.bridgePort',
+      message: 'deprecated. Browser control now uses the built-in /browser/* routes on the main server; remove bridgePort.',
+    })
+  }
+
+  const mcpConfig = (config as any).mcp
+  if (mcpConfig && typeof mcpConfig === 'object' && 'browser' in mcpConfig) {
+    issues.push({
+      path: 'mcp.browser',
+      message: 'deprecated. Browser control no longer supports MCP mode; remove mcp.browser and use browser.enabled instead.',
+    })
+  }
+
+  if (issues.length === 0) return
+
+  const messages = issues.map((issue) => `  - ${issue.path}: ${issue.message}`).join('\n')
+  throw new Error(`Invalid config:\n${messages}`)
+}
+
 /**
  * 加载配置文件
  * 配置优先级（从低到高）：
@@ -312,6 +337,7 @@ export async function loadConfig(customConfigPath?: string): Promise<Nine1BotCon
 
   // 验证并返回最终配置
   try {
+    validateDeprecatedBrowserConfig(result)
     return Nine1BotConfigSchema.parse(result)
   } catch (error) {
     if (error && typeof error === 'object' && 'issues' in error) {
