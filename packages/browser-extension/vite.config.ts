@@ -8,6 +8,9 @@ function copyStaticFiles() {
     name: 'copy-static-files',
     closeBundle() {
       const distDir = resolve(__dirname, 'dist')
+      if (!existsSync(distDir)) {
+        mkdirSync(distDir, { recursive: true })
+      }
 
       // Copy manifest.json
       copyFileSync(
@@ -46,6 +49,7 @@ export default defineConfig({
       input: {
         background: resolve(__dirname, 'src/background/index.ts'),
         content: resolve(__dirname, 'src/content/index.ts'),
+        sidepanel: resolve(__dirname, 'sidepanel/index.html'),
       },
       output: {
         entryFileNames: '[name]/index.js',

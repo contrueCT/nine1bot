@@ -1,7 +1,7 @@
 /**
- * Browser 模块导出
+ * Browser runtime wiring currently lives in launcher and browser-mcp-server.
+ * Keep this module as a placeholder so package-wide typecheck does not import
+ * non-existent implementation files.
  */
 
-export * from './cdp'
-export * from './chrome'
-export * from './extension-relay'
+export {}
