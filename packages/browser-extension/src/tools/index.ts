@@ -1,3 +1,5 @@
+import type { ToolExecutionContext } from './execution-context'
+
 // Tool definitions for MCP Server
 
 export interface ToolDefinition {
@@ -19,6 +21,8 @@ export interface ToolResult {
   }>
   isError?: boolean
 }
+
+export type ToolExecutor = (args: unknown, context?: ToolExecutionContext) => Promise<ToolResult>
 
 // Re-export all tools
 export * from './screenshot'
@@ -48,7 +52,7 @@ export const tools: Record<string, ToolDefinition> = {
   tabs_create_mcp: tabsCreateTool.definition,
 }
 
-export const toolExecutors: Record<string, (args: unknown) => Promise<ToolResult>> = {
+export const toolExecutors: Record<string, ToolExecutor> = {
   screenshot: screenshotTool.execute,
   navigate: navigateTool.execute,
   read_page: readPageTool.execute,
