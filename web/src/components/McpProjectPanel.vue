@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { X, Server, Loader2, Plug, Unplug, Plus } from 'lucide-vue-next'
 import { mcpApi } from '../api/client'
 import type { McpServer, McpConfig } from '../api/client'
+import { authenticateMcpWithPopup } from '../utils/mcp-auth'
 
 defineProps<{
   currentDirectory?: string
@@ -46,41 +47,11 @@ async function connectServer(name: string) {
 
 async function authenticateServer(name: string) {
   try {
-    const { url } = await mcpApi.startAuth(name)
-    const popup = window.open(url, '_blank', 'width=700,height=780')
-
-    if (!popup) {
-      window.location.href = url
-      return
-    }
-
-    const startedAt = Date.now()
-    while (Date.now() - startedAt < 120000) {
-      const next = await mcpApi.list()
-      servers.value = next
-      const match = next.find(server => server.name === name)
-
-      if (!match) {
-        throw new Error(`MCP server not found after auth: ${name}`)
-      }
-
-      if (match.status === 'connected') {
-        return
-      }
-
-      if (match.status === 'auth_in_progress') {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        continue
-      }
-
-      if (match.status === 'failed' || match.status === 'needs_client_registration') {
-        throw new Error(match.error || `MCP auth failed for ${name}`)
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 1000))
-    }
-
-    throw new Error(`Timed out waiting for MCP auth: ${name}`)
+    await authenticateMcpWithPopup(name, {
+      onUpdate: (next) => {
+        servers.value = next
+      },
+    })
   } catch (e) {
     console.error('Failed to authenticate MCP server:', e)
   }

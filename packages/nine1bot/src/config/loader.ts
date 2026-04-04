@@ -321,20 +321,8 @@ export async function loadConfig(customConfigPath?: string): Promise<Nine1BotCon
   }
 
   // 2. 加载项目配置
-  if (projectConfigPath && await fileExists(projectConfigPath)) {
-    try {
-      result = deepMerge(result, projectConfig)
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        throw new Error(`Invalid JSON in config file: ${projectConfigPath}`)
-      }
-      if (error && typeof error === 'object' && 'issues' in error) {
-        const zodError = error as { issues: Array<{ path: (string | number)[]; message: string }> }
-        const messages = zodError.issues.map(i => `  - ${i.path.join('.')}: ${i.message}`).join('\n')
-        throw new Error(`Invalid config in ${projectConfigPath}:\n${messages}`)
-      }
-      throw error
-    }
+  if (projectConfigPath) {
+    result = deepMerge(result, projectConfig)
   }
 
   // 验证并返回最终配置

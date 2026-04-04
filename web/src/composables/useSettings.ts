@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { providerApi, configApi, mcpApi, skillApi, authApi, nine1botConfigApi, customProviderApi, importAuthFromOpencode as importAuthFromOpencodeApi } from '../api/client'
 import type { Provider, McpServer, Skill, Config, McpConfig, CustomProvider, AuthImportResult } from '../api/client'
+import { authenticateMcpWithPopup } from '../utils/mcp-auth'
 
 const showSettings = ref(false)
 const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth' | 'preferences' | 'profile'>('models')
@@ -168,41 +169,6 @@ export function useSettings() {
     }
   }
 
-  async function waitForMcpAuth(name: string, timeoutMs = 120000) {
-    const startedAt = Date.now()
-
-    while (Date.now() - startedAt < timeoutMs) {
-      const servers = await mcpApi.list()
-      const match = servers.find(server => server.name === name)
-
-      if (!match) {
-        throw new Error(`MCP server not found after auth: ${name}`)
-      }
-
-      if (match.status === 'connected') {
-        mcpServers.value = servers
-        return
-      }
-
-      if (match.status === 'auth_in_progress') {
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        continue
-      }
-
-      if (match.status === 'failed') {
-        throw new Error(match.error || `MCP auth failed for ${name}`)
-      }
-
-      if (match.status === 'needs_client_registration') {
-        throw new Error(match.error || `MCP server ${name} requires a pre-registered clientId`)
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 1000))
-    }
-
-    throw new Error(`Timed out waiting for MCP auth: ${name}`)
-  }
-
   async function disconnectMcp(name: string) {
     try {
       await mcpApi.disconnect(name)
@@ -234,15 +200,11 @@ export function useSettings() {
 
   async function authenticateMcp(name: string) {
     try {
-      const { url } = await mcpApi.startAuth(name)
-      const popup = window.open(url, '_blank', 'width=700,height=780')
-
-      if (!popup) {
-        window.location.href = url
-        return
-      }
-
-      await waitForMcpAuth(name)
+      await authenticateMcpWithPopup(name, {
+        onUpdate: (servers) => {
+          mcpServers.value = servers
+        },
+      })
       await loadMcpServers()
     } catch (e) {
       console.error('Failed to authenticate MCP:', e)

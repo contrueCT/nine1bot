@@ -444,6 +444,11 @@ export namespace MCP {
     ])
   }
 
+  async function setStatusAfterAuthInterruption(mcpName: string, status: Status) {
+    const nextState = await state()
+    nextState.status[mcpName] = status
+  }
+
   async function retryAfterInvalidClient(session: PendingOAuthSession) {
     return Instance.provide({
       directory: session.directory,
@@ -1836,6 +1841,9 @@ export namespace MCP {
             }
           }
         }
+        await setStatusAfterAuthInterruption(session.mcpName, {
+          status: "needs_auth",
+        })
         await cleanupPendingOAuthSession(session)
       }
       return {
@@ -1845,6 +1853,13 @@ export namespace MCP {
     }
 
     if (!input.code) {
+      const session = pendingOAuthSessions.get(state)
+      if (session) {
+        await setStatusAfterAuthInterruption(session.mcpName, {
+          status: "needs_auth",
+        })
+        await cleanupPendingOAuthSession(session)
+      }
       return {
         html: McpOAuthCallback.renderError("No authorization code provided"),
         status: 400,
@@ -1858,12 +1873,17 @@ export namespace MCP {
       }
     }
 
+    const session = pendingOAuthSessions.get(state)
     const status = await finishAuthByState(state, input.code)
     if (status.status === "connected") {
       return {
         html: McpOAuthCallback.renderSuccess(),
         status: 200,
       }
+    }
+
+    if (session) {
+      await setStatusAfterAuthInterruption(session.mcpName, status)
     }
 
     return {

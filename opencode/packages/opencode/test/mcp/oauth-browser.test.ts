@@ -535,3 +535,53 @@ test("server callback redirects to a fresh authorization URL after invalid_clien
     },
   })
 })
+
+test("server callback error resets auth_in_progress back to needs_auth", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        `${dir}/opencode.json`,
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          mcp: {
+            "test-oauth-server-cancelled": {
+              type: "remote",
+              url: "https://example.com/mcp",
+            },
+          },
+        }),
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const started = await MCP.startAuth("test-oauth-server-cancelled", {
+        mode: "server",
+        serverOrigin: "https://bot.example.com",
+      })
+
+      expect(started.authorizationUrl).toContain(
+        encodeURIComponent("https://bot.example.com/mcp/oauth/callback"),
+      )
+
+      const oauthState = await waitFor(() => McpAuth.getOAuthState("test-oauth-server-cancelled"))
+
+      const response = await MCP.handleOAuthCallback({
+        state: oauthState,
+        error: "access_denied",
+        errorDescription: "User denied access",
+      })
+
+      expect("html" in response).toBe(true)
+      if (!("html" in response)) {
+        throw new Error("Expected HTML error response")
+      }
+      expect(response.status).toBe(400)
+
+      const statuses = await MCP.status()
+      expect(statuses["test-oauth-server-cancelled"]?.status).toBe("needs_auth")
+    },
+  })
+})
