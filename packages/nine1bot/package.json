@@ -9,7 +9,7 @@
   "main": "./src/index.ts",
   "scripts": {
     "dev": "bun run --conditions=browser ./src/index.ts",
-    "build": "bun build ./src/index.ts --outdir=./dist --target=node",
+    "build": "bun build ./src/index.ts --outdir=./dist --target=bun",
     "start": "bun run ./src/index.ts",
     "typecheck": "tsc --project tsconfig.check.json"
   },

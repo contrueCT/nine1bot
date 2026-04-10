@@ -46,9 +46,14 @@ export namespace Tool {
   export type InferParameters<T extends Info> = T extends Info<infer P> ? z.infer<P> : never
   export type InferMetadata<T extends Info> = T extends Info<any, infer M> ? M : never
 
+  export interface DefineOptions {
+    truncation?: Truncate.Options
+  }
+
   export function define<Parameters extends z.ZodType, Result extends Metadata>(
     id: string,
     init: Info<Parameters, Result>["init"] | Awaited<ReturnType<Info<Parameters, Result>["init"]>>,
+    options: DefineOptions = {},
   ): Info<Parameters, Result> {
     return {
       id,
@@ -72,7 +77,7 @@ export namespace Tool {
           if (result.metadata.truncated !== undefined) {
             return result
           }
-          const truncated = await Truncate.output(result.output, {}, initCtx?.agent)
+          const truncated = await Truncate.output(result.output, options.truncation ?? {}, initCtx?.agent)
           return {
             ...result,
             output: truncated.content,

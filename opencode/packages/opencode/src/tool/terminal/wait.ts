@@ -13,6 +13,7 @@ Use this after sending commands to wait for:
 - Process completion indicators
 
 This is more efficient than repeatedly calling terminal_view. The tool will check the terminal screen every 100ms until the pattern is found or timeout occurs.
+If the output is too large, the latest terminal content is kept and older history is truncated.
 
 Pattern tips:
 - Use regex for flexible matching
@@ -95,5 +96,9 @@ The pattern was not found. You can:
         },
       }
     }
+  },
+}, {
+  truncation: {
+    direction: "tail",
   },
 })

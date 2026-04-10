@@ -51,6 +51,22 @@ export interface StartServerOptions {
   fullConfig: Nine1BotConfig
 }
 
+function generateBrowserInstanceId(): string {
+  return `browser_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+function getBrowserServerOrigin(hostname: string, port: number): string {
+  const url = new URL('http://127.0.0.1')
+  const normalizedHostname = !hostname || hostname === '0.0.0.0'
+    ? '127.0.0.1'
+    : hostname === '::'
+      ? '::1'
+      : hostname
+  url.hostname = normalizedHostname
+  url.port = String(port)
+  return url.toString().replace(/\/$/, '')
+}
+
 /**
  * Nine1Bot 特有的配置字段（需要从 opencode 配置中过滤掉）
  */
@@ -239,14 +255,17 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   const browserConfig = (fullConfig as any).browser
   if (browserConfig?.enabled) {
     try {
+      const serverOrigin = getBrowserServerOrigin(server.hostname, server.port)
       bridgeServer = new BridgeServer({
         cdpPort: browserConfig.cdpPort ?? 9222,
         autoLaunch: browserConfig.autoLaunch ?? true,
         headless: browserConfig.headless ?? false,
+        serverOrigin,
+        instanceId: generateBrowserInstanceId(),
       })
       await bridgeServer.start()
       setBridgeServer(bridgeServer)
-      console.log('[Nine1Bot] Browser control enabled at /browser/')
+      console.log(`[Nine1Bot] Browser control enabled at ${serverOrigin}/browser/`)
     } catch (error: any) {
       console.warn(`[Nine1Bot] Failed to initialize browser bridge: ${error.message}`)
     }

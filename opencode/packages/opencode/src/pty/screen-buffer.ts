@@ -63,13 +63,23 @@ export namespace ScreenBuffer {
     }
 
     /**
+     * 获取当前可见视口在缓冲区中的起始行号
+     */
+    private getViewportTop() {
+      const buffer = this.term.buffer.active
+      const maxTop = Math.max(0, buffer.length - this.term.rows)
+      return Math.min(Math.max(0, buffer.viewportY), maxTop)
+    }
+
+    /**
      * 获取当前可见屏幕的文本内容
      */
     getScreen(): string[] {
       const lines: string[] = []
       const buffer = this.term.buffer.active
+      const viewportTop = this.getViewportTop()
       for (let i = 0; i < this.term.rows; i++) {
-        const line = buffer.getLine(i)
+        const line = buffer.getLine(viewportTop + i)
         if (line) {
           lines.push(line.translateToString().trimEnd())
         } else {
@@ -94,9 +104,10 @@ export namespace ScreenBuffer {
     getScreenAnsi(): string {
       const lines: string[] = []
       const buffer = this.term.buffer.active
+      const viewportTop = this.getViewportTop()
 
       for (let y = 0; y < this.term.rows; y++) {
-        const line = buffer.getLine(y)
+        const line = buffer.getLine(viewportTop + y)
         if (!line) {
           lines.push("")
           continue
@@ -209,11 +220,11 @@ export namespace ScreenBuffer {
     getScrollback(lines?: number): string[] {
       const result: string[] = []
       const buffer = this.term.buffer.active
-      const scrollbackLength = buffer.baseY
+      const viewportTop = this.getViewportTop()
 
-      const start = lines ? Math.max(0, scrollbackLength - lines) : 0
-      for (let i = start; i < scrollbackLength; i++) {
-        const line = buffer.getLine(i - scrollbackLength)
+      const start = lines ? Math.max(0, viewportTop - lines) : 0
+      for (let i = start; i < viewportTop; i++) {
+        const line = buffer.getLine(i)
         if (line) {
           result.push(line.translateToString().trimEnd())
         }
@@ -250,7 +261,7 @@ export namespace ScreenBuffer {
         rows: this.term.rows,
         cols: this.term.cols,
         cursor: this.getCursor(),
-        scrollbackLength: buffer.baseY,
+        scrollbackLength: this.getViewportTop(),
       }
     }
 

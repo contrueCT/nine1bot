@@ -59,6 +59,35 @@ export interface BrowserStatus {
     running: boolean
     tabs: Tab[]
   } | null
+  runtime?: BrowserRuntimeStatus
+}
+
+export interface BrowserStatusIssue {
+  code: string
+  severity: 'warning' | 'error'
+  message: string
+}
+
+export interface BrowserRuntimeConflict {
+  host: string
+  port: number
+  message: string
+}
+
+export interface BrowserRuntimeStatus {
+  mode: 'embedded'
+  serverOrigin: string
+  instanceId: string
+  extension: {
+    connected: boolean
+    helloAt: number | null
+    version: string | null
+    protocolVersion: string | null
+    serverOrigin: string | null
+    pairedInstanceId: string | null
+  }
+  conflicts: BrowserRuntimeConflict[]
+  issues: BrowserStatusIssue[]
 }
 
 /** Snapshot (a11y tree) result */

@@ -46,5 +46,29 @@ describe('loadConfig remote MCP oauth support', () => {
         scope: 'read write',
       },
     })
+describe('loadConfig browser migration guards', () => {
+  it('rejects deprecated mcp.browser config', async () => {
+    const configPath = await writeConfig({
+      browser: { enabled: true },
+      mcp: {
+        browser: {
+          type: 'local',
+          enabled: true,
+        },
+      },
+    })
+
+    await expect(loadConfig(configPath)).rejects.toThrow('mcp.browser')
+  })
+
+  it('rejects deprecated browser.bridgePort config', async () => {
+    const configPath = await writeConfig({
+      browser: {
+        enabled: true,
+        bridgePort: 18793,
+      },
+    })
+
+    await expect(loadConfig(configPath)).rejects.toThrow('browser.bridgePort')
   })
 })
