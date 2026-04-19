@@ -1,13 +1,5 @@
-const DEFAULT_SERVER_ORIGIN = 'http://127.0.0.1:4096'
-
-function normalizeServerOrigin(serverOrigin: string): string {
-  try {
-    const parsed = new URL(serverOrigin)
-    return `${parsed.protocol}//${parsed.host}`
-  } catch {
-    return DEFAULT_SERVER_ORIGIN
-  }
-}
+const DEFAULT_RELAY_URL = 'ws://127.0.0.1:4096/browser/extension'
+const DEFAULT_WEB_UI_URL = 'http://127.0.0.1:4096'
 
 function relayUrlToWebUrl(relayUrl: string): string {
   try {
@@ -15,33 +7,22 @@ function relayUrlToWebUrl(relayUrl: string): string {
     const scheme = parsed.protocol === 'wss:' ? 'https:' : 'http:'
     return `${scheme}//${parsed.host}`
   } catch {
-    return DEFAULT_SERVER_ORIGIN
+    return DEFAULT_WEB_UI_URL
   }
 }
 
 async function getWebUiUrl(): Promise<string> {
   try {
-    const stored = await chrome.storage.sync.get({
-      serverOrigin: '',
+    const { webUiUrl, relayUrl } = await chrome.storage.sync.get({
       webUiUrl: '',
-      relayUrl: '',
+      relayUrl: DEFAULT_RELAY_URL,
     })
-
-    const serverOrigin = typeof stored.serverOrigin === 'string' && stored.serverOrigin.trim()
-      ? normalizeServerOrigin(stored.serverOrigin)
-      : typeof stored.webUiUrl === 'string' && stored.webUiUrl.trim()
-        ? normalizeServerOrigin(stored.webUiUrl)
-        : typeof stored.relayUrl === 'string' && stored.relayUrl.trim()
-          ? relayUrlToWebUrl(stored.relayUrl)
-          : DEFAULT_SERVER_ORIGIN
-
-    await chrome.storage.sync.set({ serverOrigin })
-    await chrome.storage.sync.remove(['webUiUrl', 'relayUrl'])
-    return serverOrigin
+    if (typeof webUiUrl === 'string' && webUiUrl.trim()) return webUiUrl.trim()
+    if (typeof relayUrl === 'string' && relayUrl.trim()) return relayUrlToWebUrl(relayUrl)
   } catch {
     // ignore
   }
-  return DEFAULT_SERVER_ORIGIN
+  return DEFAULT_WEB_UI_URL
 }
 
 async function checkExtensionHealth(): Promise<boolean> {

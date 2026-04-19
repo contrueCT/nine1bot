@@ -27,9 +27,6 @@ export interface ConnectedTarget {
 
 export interface ExtensionHelloPayload {
   version?: string
-  protocolVersion?: string
-  serverOrigin?: string
-  pairedInstanceId?: string
   tools: string[]
   capabilities?: Record<string, unknown>
 }
@@ -55,7 +52,6 @@ export interface ExtensionRelay {
   getCapabilities: () => Record<string, unknown>
   getHealth: () => ExtensionHealthPayload | null
   getHelloAt: () => number | null
-  getHello: () => ExtensionHelloPayload | null
   getAgentStates: () => ExtensionAgentStatePayload[]
   sendCommand: (method: string, params?: unknown, targetId?: string) => Promise<unknown>
   stop: () => Promise<void>
@@ -81,7 +77,6 @@ let extensionTools: string[] = []
 let extensionCapabilities: Record<string, unknown> = {}
 let extensionHealth: ExtensionHealthPayload | null = null
 let extensionHelloAt: number | null = null
-let extensionHello: ExtensionHelloPayload | null = null
 const extensionAgentStates = new Map<number, ExtensionAgentStatePayload>()
 
 // ==================== Internal Helpers ====================
@@ -248,15 +243,11 @@ function handleExtensionMessage(data: string): void {
 
   if (parsed.method === 'extension.hello') {
     const params = (parsed.params ?? {}) as ExtensionHelloPayload
-    extensionHello = params
     extensionTools = Array.isArray(params.tools) ? params.tools.filter((x) => typeof x === 'string') : []
     extensionCapabilities = params.capabilities ?? {}
     extensionHelloAt = Date.now()
     console.log('[Extension Relay] Extension hello:', {
       version: params.version,
-      protocolVersion: params.protocolVersion,
-      serverOrigin: params.serverOrigin,
-      pairedInstanceId: params.pairedInstanceId,
       tools: extensionTools.length,
       capabilities: Object.keys(extensionCapabilities),
     })
@@ -376,7 +367,6 @@ function cleanupExtension(): void {
   extensionCapabilities = {}
   extensionHealth = null
   extensionHelloAt = null
-  extensionHello = null
   extensionAgentStates.clear()
 
   // Clear targets
@@ -395,11 +385,14 @@ function cleanupExtension(): void {
 
 // ==================== Hono Routes ====================
 
-export function createRelayRoutes(): Hono {
+export function createRelayRoutes(isEnabled: () => boolean = () => true): Hono {
   return new Hono()
     .get(
       '/extension',
       async (c, next) => {
+        if (!isEnabled()) {
+          return c.text('Browser control not enabled', 503)
+        }
         if (extensionWs && extensionWs.readyState === 1) {
           return c.text('Extension already connected', 409)
         }
@@ -427,6 +420,9 @@ export function createRelayRoutes(): Hono {
     .get(
       '/cdp',
       async (c, next) => {
+        if (!isEnabled()) {
+          return c.text('Browser control not enabled', 503)
+        }
         if (!extensionWs || extensionWs.readyState !== 1) {
           return c.text('Extension not connected', 503)
         }
@@ -503,7 +499,6 @@ export function getExtensionRelay(): ExtensionRelay {
     getCapabilities: () => ({ ...extensionCapabilities }),
     getHealth: () => (extensionHealth ? { ...extensionHealth } : null),
     getHelloAt: () => extensionHelloAt,
-    getHello: () => (extensionHello ? { ...extensionHello } : null),
     getAgentStates: () => Array.from(extensionAgentStates.values()).map((state) => ({ ...state })),
     sendCommand: async (method: string, params?: unknown, targetId?: string) => {
       if (!extensionWs || extensionWs.readyState !== 1) {

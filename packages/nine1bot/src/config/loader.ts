@@ -303,6 +303,20 @@ function validateDeprecatedBrowserConfig(config: Partial<Nine1BotConfig>): void 
   throw new Error(`Invalid config:\n${messages}`)
 }
 
+export function validateConfig(config: Partial<Nine1BotConfig>): Nine1BotConfig {
+  try {
+    validateDeprecatedBrowserConfig(config)
+    return Nine1BotConfigSchema.parse(config)
+  } catch (error) {
+    if (error && typeof error === 'object' && 'issues' in error) {
+      const zodError = error as { issues: Array<{ path: (string | number)[]; message: string }> }
+      const messages = zodError.issues.map(i => `  - ${i.path.join('.')}: ${i.message}`).join('\n')
+      throw new Error(`Invalid config:\n${messages}`)
+    }
+    throw error
+  }
+}
+
 /**
  * 加载配置文件
  * 配置优先级（从低到高）：
@@ -350,18 +364,7 @@ export async function loadConfig(customConfigPath?: string): Promise<Nine1BotCon
     result = deepMerge(result, projectConfig)
   }
 
-  // 验证并返回最终配置
-  try {
-    validateDeprecatedBrowserConfig(result)
-    return Nine1BotConfigSchema.parse(result)
-  } catch (error) {
-    if (error && typeof error === 'object' && 'issues' in error) {
-      const zodError = error as { issues: Array<{ path: (string | number)[]; message: string }> }
-      const messages = zodError.issues.map(i => `  - ${i.path.join('.')}: ${i.message}`).join('\n')
-      throw new Error(`Invalid config:\n${messages}`)
-    }
-    throw error
-  }
+  return validateConfig(result)
 }
 
 /**

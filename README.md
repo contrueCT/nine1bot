@@ -64,7 +64,16 @@ Nine1Bot has built-in browser automation with two modes: control the user's own 
 }
 ```
 
+Once enabled, Nine1Bot exposes the built-in `browser_*` tools directly.
+You do not need to add `browser-mcp-server` under `mcp`, and doing so will create duplicate `browser_browser_*` tool entries.
+
 > **Note**: The extension uses sensitive permissions (debugger, scripting, all_urls) for full browser automation. Only use in trusted environments.
+
+**Migrating old configs:**
+
+- The old `mcp.browser` + `browser-mcp-server` setup is deprecated and will now be ignored at startup
+- `BRIDGE_URL=http://127.0.0.1:18793` is deprecated; browser control is now available through the built-in `browser_*` tools
+- `browser.bridgePort` is deprecated and ignored; keep `"browser": { "enabled": true }` as the only browser entry point
 
 ### Built-in Skills
 

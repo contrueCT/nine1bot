@@ -55,6 +55,8 @@ export const SkillsConfigSchema = z.object({
 export const BrowserConfigSchema = z.object({
   // 是否启用浏览器控制
   enabled: z.boolean().default(false),
+  // 已废弃：浏览器桥接已内置到主服务的 /browser/ 路径
+  bridgePort: z.number().optional(),
   // Chrome CDP 端口
   cdpPort: z.number().default(9222),
   // 是否自动启动 Chrome
@@ -217,6 +219,7 @@ export const Nine1BotConfigSchema = z.object({
   skills: SkillsConfigSchema.default({}),
   browser: BrowserConfigSchema.default({}),
   feishu: FeishuConfigSchema.default({}),
+
 
 
   // OpenCode 兼容配置

@@ -13,7 +13,6 @@
  */
 
 import { Hono } from 'hono'
-import { Socket } from 'node:net'
 import {
   listCdpTargets,
   captureScreenshot,
@@ -25,6 +24,7 @@ import {
   withCdpSession,
 } from '../core/cdp'
 import { launchChrome, isChromeRunning, type ChromeInstance } from '../core/chrome'
+import { createBridgeHttpRoutes } from './http-routes'
 import { createRelayRoutes, getExtensionRelay, type ExtensionRelay } from './relay-routes'
 import type {
   Tab,
@@ -32,8 +32,6 @@ import type {
   ExtensionToolResult,
   BrowserTarget,
   BrowserStatus,
-  BrowserRuntimeConflict,
-  BrowserRuntimeStatus,
   SnapshotResult,
   ClickOptions,
 } from '../core/types'
@@ -47,45 +45,14 @@ export interface BridgeServerOptions {
   cdpPort?: number
   autoLaunch?: boolean
   headless?: boolean
-  serverOrigin?: string
-  instanceId?: string
 }
 
-const DEFAULT_SERVER_ORIGIN = 'http://127.0.0.1:4096'
-const LEGACY_BROWSER_PORTS = [18791, 18793]
-const EXTENSION_PROTOCOL_VERSION = '2026-03-15'
-
-function normalizeServerOrigin(serverOrigin: string): string {
-  try {
-    const parsed = new URL(serverOrigin)
-    return `${parsed.protocol}//${parsed.host}`
-  } catch {
-    return DEFAULT_SERVER_ORIGIN
+function normalizeBridgeOptions(options: BridgeServerOptions = {}): Required<BridgeServerOptions> {
+  return {
+    cdpPort: options.cdpPort ?? 9222,
+    autoLaunch: options.autoLaunch ?? true,
+    headless: options.headless ?? false,
   }
-}
-
-function generateInstanceId(): string {
-  return `browser_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
-}
-
-async function isLocalPortListening(host: string, port: number): Promise<boolean> {
-  return await new Promise((resolve) => {
-    const socket = new Socket()
-    let settled = false
-
-    const finish = (value: boolean) => {
-      if (settled) return
-      settled = true
-      socket.destroy()
-      resolve(value)
-    }
-
-    socket.setTimeout(250)
-    socket.once('connect', () => finish(true))
-    socket.once('timeout', () => finish(false))
-    socket.once('error', () => finish(false))
-    socket.connect(port, host)
-  })
 }
 
 /**
@@ -99,13 +66,7 @@ export class BridgeServer {
   private started = false
 
   constructor(options: BridgeServerOptions = {}) {
-    this.options = {
-      cdpPort: options.cdpPort ?? 9222,
-      autoLaunch: options.autoLaunch ?? true,
-      headless: options.headless ?? false,
-      serverOrigin: normalizeServerOrigin(options.serverOrigin ?? DEFAULT_SERVER_ORIGIN),
-      instanceId: options.instanceId ?? generateInstanceId(),
-    }
+    this.options = normalizeBridgeOptions(options)
   }
 
   // ==================== Lifecycle ====================
@@ -139,8 +100,75 @@ export class BridgeServer {
     console.log('[Browser Bridge] Stopped')
   }
 
+  async reconfigure(options: BridgeServerOptions = {}): Promise<void> {
+    const nextOptions = normalizeBridgeOptions(options)
+    const shouldRestartManagedChrome = Boolean(this.chromeInstance)
+      && (
+        this.options.cdpPort !== nextOptions.cdpPort
+        || this.options.headless !== nextOptions.headless
+      )
+
+    this.options = nextOptions
+
+    if (shouldRestartManagedChrome && this.chromeInstance) {
+      await this.chromeInstance.stop()
+      this.chromeInstance = null
+    }
+
+    if (this.started && !this.relay) {
+      this.relay = getExtensionRelay()
+    }
+  }
+
   get isExtensionConnected(): boolean {
     return this.relay?.extensionConnected() ?? false
+  }
+
+  getExtensionStatus() {
+    const targets = this.relay?.getTargets() ?? []
+    return {
+      connected: this.isExtensionConnected,
+      targets: targets.map(t => ({
+        id: t.targetId,
+        sessionId: t.sessionId,
+        title: t.targetInfo.title,
+        url: t.targetInfo.url,
+      })),
+    }
+  }
+
+  getExtensionHealth() {
+    return {
+      connected: this.isExtensionConnected,
+      helloAt: this.relay?.getHelloAt() ?? null,
+      health: this.relay?.getHealth() ?? null,
+      capabilities: this.relay?.getCapabilities() ?? {},
+      agentStates: this.relay?.getAgentStates() ?? [],
+    }
+  }
+
+  getExtensionToolsInfo() {
+    return {
+      connected: this.isExtensionConnected,
+      tools: this.relay?.getTools() ?? [],
+    }
+  }
+
+  async getVersionInfo() {
+    if (this.isExtensionConnected) {
+      return {
+        Browser: 'Nine1Bot/Extension-Relay',
+        'Protocol-Version': '1.3',
+        webSocketDebuggerUrl: '/browser/cdp',
+      }
+    }
+
+    try {
+      const version = await getCdpVersion(this.cdpUrl)
+      return { ...version, webSocketDebuggerUrl: '/browser/cdp' }
+    } catch {
+      return { Browser: 'Nine1Bot/Browser-Bridge', 'Protocol-Version': '1.3' }
+    }
   }
 
   // ==================== Channel Routing ====================
@@ -167,7 +195,7 @@ export class BridgeServer {
 
   getRoutes(): Hono {
     const app = new Hono()
-    app.route('/', createRelayRoutes())
+    app.route('/', createRelayRoutes(() => this.started))
     app.route('/', this.createHttpApp())
     return app
   }
@@ -215,79 +243,7 @@ export class BridgeServer {
       botStatus = { running: false, tabs: [] }
     }
 
-    return {
-      user: userStatus,
-      bot: botStatus,
-      runtime: await this.getRuntimeStatus(),
-    }
-  }
-
-  private async getRuntimeStatus(): Promise<BrowserRuntimeStatus> {
-    const hello = this.relay?.getHello() ?? null
-    const helloAt = this.relay?.getHelloAt() ?? null
-    const conflicts = await this.detectLegacyPortConflicts()
-    const issues: BrowserRuntimeStatus['issues'] = []
-
-    if (hello?.serverOrigin && normalizeServerOrigin(hello.serverOrigin) !== this.options.serverOrigin) {
-      issues.push({
-        code: 'extension_server_origin_mismatch',
-        severity: 'error',
-        message: `Extension is paired with ${hello.serverOrigin}, but this server expects ${this.options.serverOrigin}.`,
-      })
-    }
-
-    if (hello?.pairedInstanceId && hello.pairedInstanceId !== this.options.instanceId) {
-      issues.push({
-        code: 'extension_instance_mismatch',
-        severity: 'error',
-        message: `Extension is paired with instance ${hello.pairedInstanceId}, but this server instance is ${this.options.instanceId}.`,
-      })
-    }
-
-    for (const conflict of conflicts) {
-      issues.push({
-        code: `legacy_port_${conflict.port}`,
-        severity: 'warning',
-        message: conflict.message,
-      })
-    }
-
-    return {
-      mode: 'embedded',
-      serverOrigin: this.options.serverOrigin,
-      instanceId: this.options.instanceId,
-      extension: {
-        connected: this.isExtensionConnected,
-        helloAt,
-        version: hello?.version ?? null,
-        protocolVersion: hello?.protocolVersion ?? null,
-        serverOrigin: hello?.serverOrigin ?? null,
-        pairedInstanceId: hello?.pairedInstanceId ?? null,
-      },
-      conflicts,
-      issues,
-    }
-  }
-
-  private async detectLegacyPortConflicts(): Promise<BrowserRuntimeConflict[]> {
-    let currentPort: number | null = null
-    try {
-      currentPort = Number(new URL(this.options.serverOrigin).port || 80)
-    } catch {
-      currentPort = null
-    }
-
-    const conflicts: BrowserRuntimeConflict[] = []
-    for (const port of LEGACY_BROWSER_PORTS) {
-      if (currentPort === port) continue
-      if (!(await isLocalPortListening('127.0.0.1', port))) continue
-      conflicts.push({
-        host: '127.0.0.1',
-        port,
-        message: `Detected a legacy browser bridge listener on 127.0.0.1:${port}. Browser control now uses ${this.options.serverOrigin}/browser/* only.`,
-      })
-    }
-    return conflicts
+    return { user: userStatus, bot: botStatus }
   }
 
   /**
@@ -843,27 +799,8 @@ export class BridgeServer {
         'Runtime.evaluate',
         { expression, returnByValue: true },
         tabId
-      ) as unknown
-
-      if (result && typeof result === 'object') {
-        const record = result as {
-          exceptionDetails?: { text?: string }
-          result?: { value?: unknown }
-          value?: unknown
-        }
-
-        if (record.exceptionDetails?.text) {
-          throw new Error(record.exceptionDetails.text)
-        }
-        if (record.result && typeof record.result === 'object' && 'value' in record.result) {
-          return record.result.value
-        }
-        if ('value' in record) {
-          return record.value
-        }
-      }
-
-      return result
+      ) as { result?: { value?: unknown } }
+      return result?.result?.value
     }
 
     const wsUrl = await this.getTargetWsUrl(tabId)
@@ -1040,309 +977,8 @@ export class BridgeServer {
   // ==================== HTTP API Routes ====================
 
   private createHttpApp(): Hono {
-    const app = new Hono()
-
-    app.get('/bootstrap', (c) => {
-      return c.json({
-        mode: 'embedded',
-        serverOrigin: this.options.serverOrigin,
-        instanceId: this.options.instanceId,
-        extensionProtocolVersion: EXTENSION_PROTOCOL_VERSION,
-      })
+    return createBridgeHttpRoutes({
+      getBridge: () => this,
     })
-
-    app.get('/', async (c) => {
-      try {
-        const status = await this.getStatus()
-        return c.json({ ok: true, ...status })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.get('/status', async (c) => {
-      try {
-        const status = await this.getStatus()
-        return c.json({ ok: true, ...status })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.get('/diagnostics', async (c) => {
-      try {
-        const runtime = await this.getRuntimeStatus()
-        return c.json({ ok: true, runtime })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/launch', async (c) => {
-      try {
-        const body = await c.req.json<{ headless?: boolean; url?: string }>().catch(() => ({}))
-        const result = await this.launchBotBrowser(body)
-        return c.json({ ok: true, ...result })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.get('/extension/status', (c) => {
-      const targets = this.relay?.getTargets() ?? []
-      return c.json({
-        connected: this.isExtensionConnected,
-        targets: targets.map(t => ({
-          id: t.targetId,
-          sessionId: t.sessionId,
-          title: t.targetInfo.title,
-          url: t.targetInfo.url,
-        })),
-      })
-    })
-
-    app.get('/extension/health', (c) => {
-      const health = this.relay?.getHealth() ?? null
-      const helloAt = this.relay?.getHelloAt() ?? null
-      const hello = this.relay?.getHello() ?? null
-      const capabilities = this.relay?.getCapabilities() ?? {}
-      const agentStates = this.relay?.getAgentStates() ?? []
-      return c.json({
-        connected: this.isExtensionConnected,
-        helloAt,
-        hello,
-        health,
-        capabilities,
-        agentStates,
-        instanceId: this.options.instanceId,
-        serverOrigin: this.options.serverOrigin,
-      })
-    })
-
-    app.get('/extension/tools', (c) => {
-      return c.json({
-        connected: this.isExtensionConnected,
-        tools: this.relay?.getTools() ?? [],
-      })
-    })
-
-    app.get('/json/version', async (c) => {
-      if (this.isExtensionConnected) {
-        return c.json({
-          Browser: 'Nine1Bot/Extension-Relay',
-          'Protocol-Version': '1.3',
-          webSocketDebuggerUrl: '/browser/cdp',
-        })
-      }
-      try {
-        const version = await getCdpVersion(this.cdpUrl)
-        return c.json({ ...version, webSocketDebuggerUrl: '/browser/cdp' })
-      } catch {
-        return c.json({ Browser: 'Nine1Bot/Browser-Bridge', 'Protocol-Version': '1.3' })
-      }
-    })
-
-    app.get('/tabs', async (c) => {
-      try {
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const tabs = await this.listTabs(browser)
-        return c.json({ ok: true, tabs })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/snapshot', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const body = await c.req.json<{ depth?: number; filter?: 'all' | 'interactive' | 'visible'; refId?: string }>().catch(() => ({}))
-        const result = await this.snapshot(tabId, body, browser)
-        return c.json({ ok: true, ...result })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/find', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const { query } = await c.req.json<{ query: string }>()
-        if (!query) return c.json({ ok: false, error: 'query is required' }, 400)
-        const matches = await this.findElements(tabId, query, browser)
-        return c.json({ ok: true, matches })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/screenshot', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const body = await c.req.json<{ fullPage?: boolean; format?: 'png' | 'jpeg' }>().catch(() => ({}))
-        const result = await this.screenshot(tabId, body, browser)
-        return c.json({ ok: true, ...result })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/navigate', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const body = await c.req.json<{ url?: string; action?: string }>()
-        const result = await this.navigate(tabId, body as Parameters<typeof this.navigate>[1], browser)
-        return c.json({ ok: true, ...result })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/click', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const body = await c.req.json<ClickOptions>()
-        await this.clickElement(tabId, body, browser)
-        return c.json({ ok: true })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/fill', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const { ref, value } = await c.req.json<{ ref: string; value: unknown }>()
-        if (!ref) return c.json({ ok: false, error: 'ref is required' }, 400)
-        const result = await this.fillForm(tabId, ref, value, browser)
-        return c.json({ ok: true, ...result })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/press-key', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const { key } = await c.req.json<{ key: string }>()
-        if (!key) return c.json({ ok: false, error: 'key is required' }, 400)
-        await this.pressKey(tabId, key, browser)
-        return c.json({ ok: true })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/scroll', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browserParam = c.req.query('browser') as BrowserTarget | undefined
-        const { direction, amount, ref } = await c.req.json<{ direction: string; amount?: number; ref?: string }>()
-        if (!direction) return c.json({ ok: false, error: 'direction is required' }, 400)
-        await this.scroll(tabId, direction as 'up' | 'down' | 'left' | 'right', amount, ref, browserParam)
-        return c.json({ ok: true })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/wait', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const { text, timeout } = await c.req.json<{ text: string; timeout?: number }>()
-        if (!text) return c.json({ ok: false, error: 'text is required' }, 400)
-        const found = await this.waitForText(tabId, text, timeout, browser)
-        return c.json({ ok: true, found })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/evaluate', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const { expression } = await c.req.json<{ expression: string }>()
-        if (!expression) return c.json({ ok: false, error: 'expression is required' }, 400)
-        const result = await this.evaluate(tabId, expression, browser)
-        return c.json({ ok: true, result })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/diagnostics/console', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const body = await c.req
-          .json<{ sampleMs?: number; max?: number; sinceMs?: number; level?: string }>()
-          .catch(() => ({}))
-        const entries = await this.readConsoleMessages(tabId, body, browser)
-        return c.json({ ok: true, entries })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/diagnostics/network', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const body = await c.req
-          .json<{ sampleMs?: number; max?: number; sinceMs?: number; resourceType?: string }>()
-          .catch(() => ({}))
-        const entries = await this.readNetworkRequests(tabId, body, browser)
-        return c.json({ ok: true, entries })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/dialog', async (c) => {
-      try {
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const { action, promptText } = await c.req.json<{ action: 'accept' | 'dismiss'; promptText?: string }>()
-        if (!action) return c.json({ ok: false, error: 'action is required' }, 400)
-        await this.handleDialog(action, promptText, browser)
-        return c.json({ ok: true })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/upload', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const browser = c.req.query('browser') as BrowserTarget | undefined
-        const { ref, filePath } = await c.req.json<{ ref: string; filePath: string }>()
-        if (!ref || !filePath) return c.json({ ok: false, error: 'ref and filePath are required' }, 400)
-        await this.uploadFile(tabId, ref, filePath, browser)
-        return c.json({ ok: true })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    app.post('/tabs/:targetId/tool/:toolName', async (c) => {
-      try {
-        const tabId = c.req.param('targetId')
-        const toolName = c.req.param('toolName')
-        const args = await c.req.json().catch(() => ({})) as Record<string, unknown>
-        const result = await this.callExtensionTool(tabId, toolName, args)
-        return c.json({ ok: true, ...result })
-      } catch (error) {
-        return c.json({ ok: false, error: String(error) }, 500)
-      }
-    })
-
-    return app
   }
 }

@@ -2,14 +2,19 @@
  * Nine1Bot Browser Control Extension - Service Worker
  *
  * This is the main entry point for the Chrome extension's background service worker.
- * It initializes the Relay Client that connects to Nine1Bot's built-in /browser relay.
+ * It initializes both the MCP server (for direct connections) and the Relay Client
+ * (for connecting to Nine1Bot Bridge Server).
  */
 
+import { setupMcpServer } from './mcp-server'
 import { initRelayClient, isRelayConnected, connectToRelay } from './relay-client'
 
 console.log('[Nine1Bot Browser Control] Service Worker starting...')
 
-// Initialize Relay Client (connects to the built-in browser relay)
+// Initialize MCP server (for backward compatibility)
+setupMcpServer()
+
+// Initialize Relay Client (connects to Bridge Server)
 initRelayClient()
 
 // Extension installation/update handler
@@ -71,4 +76,4 @@ setInterval(() => {
 }, KEEP_ALIVE_INTERVAL)
 
 console.log('[Nine1Bot Browser Control] Service Worker initialized')
-console.log('[Nine1Bot Browser Control] Relay Client will connect to the configured Nine1Bot /browser/extension endpoint')
+console.log('[Nine1Bot Browser Control] Relay Client will connect to ws://127.0.0.1:4096/browser/extension')

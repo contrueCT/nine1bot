@@ -29,6 +29,15 @@ export function buildFindExpression(query: string): string {
     var words = searchQuery.toLowerCase().split(/\\s+/).filter(function(w) { return w.length > 0; });
     if (words.length === 0) return JSON.stringify([]);
 
+    function getOrCreateRef(element) {
+      var existingRef = element.getAttribute('data-mcp-ref');
+      if (existingRef) return existingRef;
+
+      var nextRef = 'ref_' + Math.random().toString(36).slice(2, 9);
+      element.setAttribute('data-mcp-ref', nextRef);
+      return nextRef;
+    }
+
     var elements = document.querySelectorAll('*');
 
     for (var i = 0; i < elements.length; i++) {
@@ -79,8 +88,7 @@ export function buildFindExpression(query: string): string {
       }
       if (directText.trim().length > 0) score += 1;
 
-      var ref = 'ref_' + Math.random().toString(36).slice(2, 9);
-      element.setAttribute('data-mcp-ref', ref);
+      var ref = getOrCreateRef(element);
 
       matches.push({
         ref: ref,

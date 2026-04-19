@@ -1301,6 +1301,11 @@ export namespace Config {
     return global()
   }
 
+  export function reloadRuntime() {
+    const resettableState = state as typeof state & { reset: () => void }
+    resettableState.reset()
+  }
+
   export async function update(config: Info) {
     const filepath = path.join(Instance.directory, "config.json")
     const existing = await loadFile(filepath)

@@ -147,12 +147,14 @@ download_from_release() {
 install_dependencies() {
     log_info "正在安装依赖..."
     cd "$INSTALL_DIR"
+    local engine_workspace_dir
+    engine_workspace_dir="$(node "$INSTALL_DIR/scripts/engine-manifest.mjs" workspace-root "$INSTALL_DIR")"
 
-    # 安装 opencode 依赖
-    log_info "安装 opencode 依赖..."
-    cd opencode
+    # 安装 engine 依赖
+    log_info "安装 engine 依赖..."
+    cd "$engine_workspace_dir"
     bun install --frozen-lockfile || bun install
-    cd ..
+    cd "$INSTALL_DIR"
 
     # 安装 nine1bot 依赖
     log_info "安装 nine1bot 依赖..."

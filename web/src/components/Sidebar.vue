@@ -58,6 +58,7 @@ const emit = defineEmits<{
   'abort-session': [sessionId: string]
   'open-settings': []
   'open-search': []
+
   'change-directory': [directory: string]
   'switch-mode': [mode: AppMode]
   'select-project': [projectId: string]
@@ -250,8 +251,8 @@ function contextMenuDelete() {
             <button
               v-if="isSessionRunning(session.id)"
               class="mini-btn abort"
-              @click="emit('abort-session', session.id)"
               title="停止"
+              @click="emit('abort-session', session.id)"
             >
               <Square :size="10" fill="currentColor" />
             </button>

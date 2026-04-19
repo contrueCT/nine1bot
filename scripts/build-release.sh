@@ -9,6 +9,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENGINE_PACKAGE_DIR="$(node "$SCRIPT_DIR/engine-manifest.mjs" package-cwd "$PROJECT_ROOT")"
+ENGINE_WORKSPACE_DIR="$(node "$SCRIPT_DIR/engine-manifest.mjs" workspace-root "$PROJECT_ROOT")"
 
 build_single() {
     local PLATFORM=$1
@@ -70,10 +72,10 @@ check_dependencies() {
         cd "$PROJECT_ROOT"
     fi
 
-    # 检查 opencode 依赖
-    if [ ! -d "$PROJECT_ROOT/opencode/node_modules" ]; then
-        echo "Installing opencode dependencies..."
-        cd "$PROJECT_ROOT/opencode"
+    # 检查 engine 依赖
+    if [ ! -d "$ENGINE_WORKSPACE_DIR/node_modules" ] && [ ! -d "$ENGINE_PACKAGE_DIR/node_modules" ]; then
+        echo "Installing engine dependencies..."
+        cd "$ENGINE_WORKSPACE_DIR"
         bun install
         cd "$PROJECT_ROOT"
     fi

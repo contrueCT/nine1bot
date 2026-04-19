@@ -8,6 +8,7 @@
 import path from "path"
 import fs from "fs"
 import { $ } from "bun"
+import { inspect } from "node:util"
 
 const projectRoot = path.resolve(import.meta.dir, "..")
 process.chdir(projectRoot)
@@ -76,6 +77,7 @@ if (targets.length === 0) {
 }
 
 console.log(`Building Nine1Bot v${version}`)
+console.log(`Bun version: ${Bun.version}`)
 console.log(`Targets: ${targets.map(t => `${t.os}-${t.arch}${t.avx2 === false ? "-baseline" : ""}`).join(", ")}`)
 console.log("")
 
@@ -126,6 +128,18 @@ for (const target of targets) {
     console.log(`✓ Built ${buildName}`)
   } catch (error: any) {
     console.error(`Build failed for ${buildName}: ${error.message}`)
+    if (Array.isArray(error?.logs) && error.logs.length > 0) {
+      console.error("Bun.build logs:")
+      for (const log of error.logs) {
+        console.error(log)
+      }
+    }
+    if (error?.cause) {
+      console.error("Build error cause:")
+      console.error(inspect(error.cause, { depth: 10, colors: false }))
+    }
+    console.error("Build error details:")
+    console.error(inspect(error, { depth: 10, colors: false }))
     if (error?.stack) {
       console.error(error.stack)
     }

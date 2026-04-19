@@ -17,14 +17,6 @@ interface FindArgs {
   query: string
 }
 
-// Element reference counter for unique IDs
-let refCounter = 0
-const refMap = new Map<string, string>() // ref -> selector
-
-function generateRef(): string {
-  return `ref_${++refCounter}`
-}
-
 // Inject content script function to read DOM
 async function readDOMFromTab(
   tabId: number,
@@ -34,6 +26,15 @@ async function readDOMFromTab(
     target: { tabId },
     func: (opts) => {
       const { depth, filter, refId, maxChars } = opts
+
+      function getOrCreateRef(element: Element): string {
+        const existingRef = element.getAttribute('data-mcp-ref')
+        if (existingRef) return existingRef
+
+        const nextRef = `ref_${Math.random().toString(36).slice(2, 9)}`
+        element.setAttribute('data-mcp-ref', nextRef)
+        return nextRef
+      }
 
       function getAccessibilityInfo(element: Element): Record<string, unknown> | null {
         const tagName = element.tagName.toLowerCase()
@@ -46,9 +47,7 @@ async function readDOMFromTab(
           ''
         const text = element.textContent?.slice(0, 100)?.trim() || ''
 
-        // Generate a unique ref for this element
-        const ref = `ref_${Math.random().toString(36).slice(2, 9)}`
-        element.setAttribute('data-mcp-ref', ref)
+        const ref = getOrCreateRef(element)
 
         const info: Record<string, unknown> = {
           tag: tagName,
@@ -370,6 +369,15 @@ export const findTool = {
       const results = await chrome.scripting.executeScript({
         target: { tabId: targetTabId },
         func: (searchQuery) => {
+          function getOrCreateRef(element: Element): string {
+            const existingRef = element.getAttribute('data-mcp-ref')
+            if (existingRef) return existingRef
+
+            const nextRef = `ref_${Math.random().toString(36).slice(2, 9)}`
+            element.setAttribute('data-mcp-ref', nextRef)
+            return nextRef
+          }
+
           const matches: Array<{
             ref: string
             tag: string
@@ -415,8 +423,7 @@ export const findTool = {
               tagName.includes(queryLower)
 
             if (isMatch) {
-              const ref = `ref_${Math.random().toString(36).slice(2, 9)}`
-              element.setAttribute('data-mcp-ref', ref)
+              const ref = getOrCreateRef(element)
 
               matches.push({
                 ref,

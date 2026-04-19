@@ -28,3 +28,5 @@ CLAUDE.md
 AGENTS.md
 config.json
 nine1bot.config.jsonc
+config.json.bak
+*.sqlite

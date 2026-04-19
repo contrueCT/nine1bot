@@ -1,90 +1,101 @@
-const NINE1_TAB_GROUP_TITLE = 'Nine1Bot'
-const NINE1_TAB_GROUP_COLOR: chrome.tabGroups.ColorEnum = 'blue'
+const GROUP_COLOR: chrome.tabGroups.ColorEnum = 'orange'
+const ACTIVE_TITLE_PREFIX = 'Nine1Bot'
+const IDLE_SUFFIX = '(idle)'
 
-let cleanupInstalled = false
+const windowToGroupId = new Map<number, number>()
+const tabToGroupId = new Map<number, number>()
 
-function formatGroupTitle(taskLabel?: string): string {
-  if (!taskLabel) return NINE1_TAB_GROUP_TITLE
-  const trimmed = taskLabel.trim()
-  if (!trimmed) return NINE1_TAB_GROUP_TITLE
-  return `${NINE1_TAB_GROUP_TITLE}: ${trimmed.slice(0, 32)}`
+function buildTitle(taskLabel?: string, active = true): string {
+  const base = taskLabel ? `${ACTIVE_TITLE_PREFIX} - ${taskLabel}` : ACTIVE_TITLE_PREFIX
+  return active ? base : `${base} ${IDLE_SUFFIX}`
 }
-
-async function getGroupIdForTab(tabId: number): Promise<number | null> {
-  try {
-    const tab = await chrome.tabs.get(tabId)
-    return typeof tab.groupId === 'number' && tab.groupId >= 0 ? tab.groupId : null
-  } catch {
-    return null
+async function ensureWindowGroup(windowId: number, seedTabId: number, taskLabel?: string): Promise<number> {
+  const existingGroupId = windowToGroupId.get(windowId)
+  if (existingGroupId !== undefined) {
+    await chrome.tabs.group({ groupId: existingGroupId, tabIds: [seedTabId] })
+    tabToGroupId.set(seedTabId, existingGroupId)
+    await chrome.tabGroups.update(existingGroupId, {
+      title: buildTitle(taskLabel, true),
+      color: GROUP_COLOR,
+      collapsed: false,
+    })
+    return existingGroupId
   }
-}
 
-async function updateGroup(groupId: number, options: {
-  collapsed?: boolean
-  taskLabel?: string
-}): Promise<void> {
+  const groupId = await chrome.tabs.group({ tabIds: [seedTabId] })
+  windowToGroupId.set(windowId, groupId)
+  tabToGroupId.set(seedTabId, groupId)
   await chrome.tabGroups.update(groupId, {
-    title: formatGroupTitle(options.taskLabel),
-    color: NINE1_TAB_GROUP_COLOR,
-    collapsed: options.collapsed ?? false,
+    title: buildTitle(taskLabel, true),
+    color: GROUP_COLOR,
+    collapsed: false,
   })
+  return groupId
 }
 
 export async function addTabToNine1Group(tabId: number, taskLabel?: string): Promise<number | null> {
   try {
-    const existingGroupId = await getGroupIdForTab(tabId)
-    if (existingGroupId !== null) {
-      await updateGroup(existingGroupId, { collapsed: false, taskLabel })
-      return existingGroupId
-    }
-
-    const groupId = await chrome.tabs.group({ tabIds: [tabId] })
-    await updateGroup(groupId, { collapsed: false, taskLabel })
+    const tab = await chrome.tabs.get(tabId)
+    const groupId = await ensureWindowGroup(tab.windowId, tabId, taskLabel)
     return groupId
-  } catch {
+  } catch (error) {
+    console.warn('[TabGroup] Failed to add tab to group:', tabId, error)
     return null
   }
 }
 
-export async function getTabsInGroupByTab(tabId: number): Promise<number[]> {
-  try {
-    const groupId = await getGroupIdForTab(tabId)
-    if (groupId === null) return [tabId]
-    const tabs = await chrome.tabs.query({ groupId })
-    const tabIds = tabs
-      .map((tab) => tab.id)
-      .filter((candidate): candidate is number => typeof candidate === 'number')
-    return tabIds.length > 0 ? tabIds : [tabId]
-  } catch {
-    return [tabId]
-  }
-}
-
 export async function setNine1GroupActive(tabId: number, taskLabel?: string): Promise<void> {
+  const groupId = tabToGroupId.get(tabId)
+  if (groupId === undefined) {
+    await addTabToNine1Group(tabId, taskLabel)
+    return
+  }
   try {
-    const groupId = await addTabToNine1Group(tabId, taskLabel)
-    if (groupId === null) return
-    await updateGroup(groupId, { collapsed: false, taskLabel })
-  } catch {
-    // ignore tab/group lifecycle races
+    await chrome.tabGroups.update(groupId, {
+      title: buildTitle(taskLabel, true),
+      color: GROUP_COLOR,
+      collapsed: false,
+    })
+  } catch (error) {
+    console.warn('[TabGroup] Failed to set group active:', groupId, error)
   }
 }
 
 export async function setNine1GroupIdle(tabId: number): Promise<void> {
+  const groupId = tabToGroupId.get(tabId)
+  if (groupId === undefined) return
   try {
-    const groupId = await getGroupIdForTab(tabId)
-    if (groupId === null) return
-    await updateGroup(groupId, { collapsed: true })
-  } catch {
-    // ignore tab/group lifecycle races
+    await chrome.tabGroups.update(groupId, {
+      title: buildTitle(undefined, false),
+      color: GROUP_COLOR,
+    })
+  } catch (error) {
+    console.warn('[TabGroup] Failed to set group idle:', groupId, error)
   }
 }
 
-export function setupTabGroupCleanup(): void {
-  if (cleanupInstalled) return
-  cleanupInstalled = true
+export async function getTabsInGroupByTab(tabId: number): Promise<number[]> {
+  const groupId = tabToGroupId.get(tabId)
+  if (groupId === undefined) return [tabId]
+  const tabs = await chrome.tabs.query({ groupId })
+  return tabs.map((t) => t.id).filter((id): id is number => id !== undefined)
+}
 
-  chrome.tabs.onRemoved.addListener(() => {
-    // Tab groups self-heal as tabs close; this keeps setup idempotent.
+export function setupTabGroupCleanup(): void {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    tabToGroupId.delete(tabId)
+  })
+
+  chrome.tabGroups.onRemoved.addListener((group) => {
+    for (const [windowId, gid] of windowToGroupId) {
+      if (gid === group.id) {
+        windowToGroupId.delete(windowId)
+      }
+    }
+    for (const [tabId, gid] of tabToGroupId) {
+      if (gid === group.id) {
+        tabToGroupId.delete(tabId)
+      }
+    }
   })
 }

@@ -131,6 +131,29 @@ export const ConfigRoutes = lazy(() =>
         return c.json(config)
       },
     )
+    .post(
+      "/runtime/reload",
+      describeRoute({
+        summary: "Reload runtime config state",
+        description: "Refresh in-memory config and provider caches from the current runtime config file without disposing sessions.",
+        operationId: "config.runtime.reload",
+        responses: {
+          200: {
+            description: "Successfully reloaded runtime config state",
+            content: {
+              "application/json": {
+                schema: resolver(z.object({ success: z.literal(true) })),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        Config.reloadRuntime()
+        Provider.refresh()
+        return c.json({ success: true as const })
+      },
+    )
     .get(
       "/providers",
       describeRoute({

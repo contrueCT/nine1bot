@@ -695,4 +695,3 @@ Nine1Bot 在 MCP 这块不只是“重启后生效”，它还实现了热更新
 - `opencode/packages/opencode/src/mcp/hot-reload.ts`
 - `opencode/packages/opencode/src/config/config.ts`
 - `opencode/packages/opencode/src/config/claude-mcp.ts`
-

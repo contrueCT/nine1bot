@@ -92,6 +92,8 @@ update_git() {
     log_info "检测到 Git 安装，使用 git pull 更新..."
 
     cd "$INSTALL_DIR"
+    local engine_workspace_dir
+    engine_workspace_dir="$(node "$INSTALL_DIR/scripts/engine-manifest.mjs" workspace-root "$INSTALL_DIR")"
 
     # 检查是否有未提交的更改
     if ! git diff-index --quiet HEAD -- 2>/dev/null; then
@@ -114,8 +116,8 @@ update_git() {
     setup_bun
 
     # 更新依赖
-    log_info "更新 opencode 依赖..."
-    cd opencode && bun install && cd ..
+    log_info "更新 engine 依赖..."
+    cd "$engine_workspace_dir" && bun install && cd "$INSTALL_DIR"
 
     log_info "更新 nine1bot 依赖..."
     cd packages/nine1bot && bun install && cd ../..

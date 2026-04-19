@@ -52,6 +52,8 @@ import {
   BrowserFindTool,
   BrowserUploadTool,
   BrowserEvaluateTool,
+  BrowserConsoleMessagesTool,
+  BrowserNetworkRequestsTool,
 } from "./browser"
 
 export namespace ToolRegistry {
@@ -166,6 +168,8 @@ export namespace ToolRegistry {
       BrowserFindTool,
       BrowserUploadTool,
       BrowserEvaluateTool,
+      BrowserConsoleMessagesTool,
+      BrowserNetworkRequestsTool,
       ...custom,
     ]
   }

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nine1Bot Side Panel</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #0f1115;
+        color: #fff;
+      }
+      .layout {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: 100%;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        background: #151922;
+      }
+      .title {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .status {
+        font-size: 12px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.14);
+      }
+      .status.connected {
+        background: rgba(16, 185, 129, 0.22);
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      button {
+        border: 0;
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #ff7a1a;
+        color: #fff;
+      }
+      iframe {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: #111;
+      }
+      .fallback {
+        display: none;
+        padding: 14px;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .fallback.visible {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <div class="toolbar">
+        <div class="title">Nine1Bot</div>
+        <div class="controls">
+          <span id="status" class="status">checking...</span>
+          <button id="reload" class="primary" type="button">Reload UI</button>
+        </div>
+      </div>
+      <iframe id="app-frame" title="Nine1Bot Web UI"></iframe>
+      <div id="fallback" class="fallback">
+        Unable to load Nine1Bot Web UI. Ensure Nine1Bot server is running at
+        <code id="target-url"></code>.
+      </div>
+    </div>
+    <script type="module" src="./index.js"></script>
+  </body>
+</html>

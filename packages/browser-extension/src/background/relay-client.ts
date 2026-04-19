@@ -19,8 +19,8 @@ import {
   setupTabGroupCleanup,
 } from './tab-group-manager'
 
-const DEFAULT_SERVER_ORIGIN = 'http://127.0.0.1:4096'
-const EXTENSION_PROTOCOL_VERSION = '2026-03-15'
+// 配置 - relay URL 可通过 chrome.storage.sync 修改
+const DEFAULT_RELAY_URL = 'ws://127.0.0.1:4096/browser/extension'
 
 const RECONNECT_BASE_INTERVAL = 5000
 const RECONNECT_MAX_INTERVAL = 60000
@@ -28,88 +28,16 @@ const HEALTH_REPORT_INTERVAL = 60000
 const AGENT_HEARTBEAT_INTERVAL = 1500
 const DEFAULT_TOOL_TIMEOUT_MS = 30000
 
-let configuredServerOrigin = DEFAULT_SERVER_ORIGIN
-let pairedInstanceId: string | null = null
-
-function normalizeServerOrigin(serverOrigin: string): string {
-  try {
-    const parsed = new URL(serverOrigin)
-    return `${parsed.protocol}//${parsed.host}`
-  } catch {
-    return DEFAULT_SERVER_ORIGIN
-  }
-}
-
-function serverOriginToRelayUrl(serverOrigin: string): string {
-  const parsed = new URL(serverOrigin)
-  const protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${parsed.host}/browser/extension`
-}
-
-function relayUrlToServerOrigin(relayUrl: string): string {
-  try {
-    const parsed = new URL(relayUrl)
-    const protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:'
-    return `${protocol}//${parsed.host}`
-  } catch {
-    return DEFAULT_SERVER_ORIGIN
-  }
-}
-
-async function migrateLegacyServerConfig(): Promise<string> {
-  try {
-    const stored = await chrome.storage.sync.get({
-      serverOrigin: '',
-      relayUrl: '',
-      webUiUrl: '',
-    })
-
-    const fromServerOrigin = typeof stored.serverOrigin === 'string' && stored.serverOrigin.trim()
-      ? normalizeServerOrigin(stored.serverOrigin)
-      : ''
-    const fromWebUi = typeof stored.webUiUrl === 'string' && stored.webUiUrl.trim()
-      ? normalizeServerOrigin(stored.webUiUrl)
-      : ''
-    const fromRelay = typeof stored.relayUrl === 'string' && stored.relayUrl.trim()
-      ? relayUrlToServerOrigin(stored.relayUrl)
-      : ''
-
-    const serverOrigin = fromServerOrigin || fromWebUi || fromRelay || DEFAULT_SERVER_ORIGIN
-
-    if (serverOrigin !== stored.serverOrigin || stored.relayUrl || stored.webUiUrl) {
-      await chrome.storage.sync.set({ serverOrigin })
-      await chrome.storage.sync.remove(['relayUrl', 'webUiUrl'])
-    }
-
-    return serverOrigin
-  } catch {
-    return DEFAULT_SERVER_ORIGIN
-  }
-}
-
-async function fetchBootstrap(serverOrigin: string): Promise<{ serverOrigin?: string; instanceId?: string } | null> {
-  try {
-    const response = await fetch(`${serverOrigin}/browser/bootstrap`)
-    if (!response.ok) return null
-    return await response.json() as { serverOrigin?: string; instanceId?: string }
-  } catch {
-    return null
-  }
-}
-
+/**
+ * 从 chrome.storage.sync 获取 relay URL（支持用户自定义）
+ */
 async function getConfiguredRelayUrl(): Promise<string> {
-  const storedServerOrigin = await migrateLegacyServerConfig()
-  const bootstrap = await fetchBootstrap(storedServerOrigin)
-  configuredServerOrigin = normalizeServerOrigin(bootstrap?.serverOrigin ?? storedServerOrigin)
-  pairedInstanceId = typeof bootstrap?.instanceId === 'string' ? bootstrap.instanceId : null
-
   try {
-    await chrome.storage.sync.set({ serverOrigin: configuredServerOrigin })
+    const { relayUrl } = await chrome.storage.sync.get({ relayUrl: DEFAULT_RELAY_URL })
+    return relayUrl
   } catch {
-    // ignore storage sync failures
+    return DEFAULT_RELAY_URL
   }
-
-  return serverOriginToRelayUrl(configuredServerOrigin)
 }
 
 interface RunningCommand {
@@ -175,9 +103,6 @@ function sendExtensionHello(): void {
     method: 'extension.hello',
     params: {
       version: chrome.runtime.getManifest().version,
-      protocolVersion: EXTENSION_PROTOCOL_VERSION,
-      serverOrigin: configuredServerOrigin,
-      pairedInstanceId,
       tools: Object.keys(toolExecutors),
       capabilities: {
         cancelCDPCommand: true,
@@ -523,24 +448,20 @@ async function handleCdpCommand(commandId: number, method: string, params: any, 
     case 'Runtime.evaluate': {
       if (!tabId) throw new Error('No active tab')
 
-      await ensureDebuggerAttached(tabId)
-      const expression = typeof params?.expression === 'string' ? params.expression : ''
-      const returnByValue = params?.returnByValue !== false
-
-      const result = await chrome.debugger.sendCommand(
-        { tabId },
-        'Runtime.evaluate',
-        {
-          expression,
-          returnByValue,
-          awaitPromise: true,
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (expr: string) => {
+          try {
+            return { result: { value: eval(expr) } }
+          } catch (e) {
+            return { exceptionDetails: { text: String(e) } }
+          }
         },
-      ) as {
-        exceptionDetails?: { text?: string }
-        result?: { value?: unknown }
-      }
+        args: [params?.expression || ''],
+      })
 
-      return result || {}
+      const evalResult = results[0]?.result
+      return evalResult || {}
     }
 
     case 'Input.dispatchMouseEvent': {
@@ -795,18 +716,7 @@ function setupRuntimeListeners(): void {
 /**
  * 连接到 Relay Server
  */
-export function connectToRelay(url?: string): void {
-  if (!url) {
-    getConfiguredRelayUrl()
-      .then((resolvedUrl) => {
-        connectToRelay(resolvedUrl)
-      })
-      .catch((error) => {
-        console.error('[Relay Client] Failed to resolve relay URL:', error)
-      })
-    return
-  }
-
+export function connectToRelay(url: string = DEFAULT_RELAY_URL): void {
   if (isConnecting || (ws && ws.readyState === WebSocket.OPEN)) {
     return
   }
@@ -945,5 +855,11 @@ export function initRelayClient(): void {
   })
 
   // 尝试连接（使用 chrome.storage 中配置的 URL）
-  connectToRelay()
+  getConfiguredRelayUrl().then((url) => {
+    try {
+      connectToRelay(url)
+    } catch (error) {
+      console.error('[Relay Client] Error in connectToRelay:', error)
+    }
+  })
 }

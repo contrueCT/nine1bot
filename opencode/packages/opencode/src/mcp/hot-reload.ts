@@ -8,6 +8,8 @@ import { homedir } from "os"
 import { join } from "path"
 
 const log = Log.create({ service: "mcp-hot-reload" })
+const LEGACY_BROWSER_MCP_MARKER = "browser-mcp-server"
+const LEGACY_BROWSER_BRIDGE_URL_MARKERS = ["127.0.0.1:18793", "localhost:18793"]
 
 // 缓存变量
 let lastConfigHash: string = ''
@@ -21,6 +23,60 @@ let watcherInterval: ReturnType<typeof setInterval> | null = null
  */
 function getGlobalConfigPath(): string {
   return join(homedir(), '.config', 'nine1bot', 'config.jsonc')
+}
+
+function getCommandParts(entry: unknown): string[] {
+  const command = (entry as { command?: unknown })?.command
+  if (!Array.isArray(command)) return []
+  return command.filter((part): part is string => typeof part === "string")
+}
+
+function getLegacyBrowserMcpEntry(name: string, entry: unknown) {
+  if (!entry || typeof entry !== "object") return null
+  if ((entry as { type?: unknown }).type !== "local") return null
+
+  const command = getCommandParts(entry)
+  if (!command.some((part) => part.includes(LEGACY_BROWSER_MCP_MARKER))) {
+    return null
+  }
+
+  const bridgeUrl = typeof (entry as { environment?: Record<string, unknown> }).environment?.BRIDGE_URL === "string"
+    ? (entry as { environment?: Record<string, string> }).environment?.BRIDGE_URL
+    : undefined
+
+  return { name, bridgeUrl }
+}
+
+function isDeprecatedBrowserBridgeUrl(url: string): boolean {
+  return LEGACY_BROWSER_BRIDGE_URL_MARKERS.some((marker) => url.includes(marker))
+}
+
+function warnAboutLegacyBrowserConfig(
+  filePath: string,
+  config: Record<string, any>,
+  ignoredLegacyBrowserMcp: Array<{ name: string; bridgeUrl?: string }>,
+): void {
+  if (config.browser?.bridgePort !== undefined) {
+    log.warn("browser.bridgePort is deprecated and ignored", { filePath })
+  }
+
+  for (const entry of ignoredLegacyBrowserMcp) {
+    log.warn("ignoring legacy browser MCP server", {
+      filePath,
+      name: entry.name,
+    })
+    if (entry.bridgeUrl && isDeprecatedBrowserBridgeUrl(entry.bridgeUrl)) {
+      log.warn("legacy browser MCP bridge URL is deprecated", {
+        filePath,
+        name: entry.name,
+        bridgeUrl: entry.bridgeUrl,
+      })
+    }
+  }
+
+  if (ignoredLegacyBrowserMcp.length > 0 && config.browser?.enabled !== true) {
+    log.warn('set "browser.enabled": true to keep browser control enabled', { filePath })
+  }
 }
 
 /**
@@ -68,12 +124,23 @@ async function loadMcpFromFile(filePath: string): Promise<Record<string, any>> {
     const jsonContent = content
       .replace(/\/\/.*$/gm, '') // 移除单行注释
       .replace(/\/\*[\s\S]*?\*\//g, '') // 移除多行注释
-    const config = JSON.parse(jsonContent)
+    const config = JSON.parse(jsonContent) as Record<string, any>
     const mcpConfig = config?.mcp || {}
 
     // 过滤掉继承控制字段，只保留 MCP 服务器配置
     const { inheritOpencode, inheritClaudeCode, ...servers } = mcpConfig
-    return servers
+    const ignoredLegacyBrowserMcp: Array<{ name: string; bridgeUrl?: string }> = []
+    const filteredServers = Object.fromEntries(
+      Object.entries(servers).filter(([name, entry]) => {
+        const legacyEntry = getLegacyBrowserMcpEntry(name, entry)
+        if (!legacyEntry) return true
+        ignoredLegacyBrowserMcp.push(legacyEntry)
+        return false
+      }),
+    )
+
+    warnAboutLegacyBrowserConfig(filePath, config, ignoredLegacyBrowserMcp)
+    return filteredServers
   } catch {
     return {}
   }

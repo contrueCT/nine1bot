@@ -15,28 +15,33 @@ export namespace Bus {
     }),
   )
 
-  const state = Instance.state(
-    () => {
-      const subscriptions = new Map<any, Subscription[]>()
+  let stateAccessor: undefined | (() => { subscriptions: Map<any, Subscription[]> })
 
-      return {
-        subscriptions,
-      }
-    },
-    async (entry) => {
-      const wildcard = entry.subscriptions.get("*")
-      if (!wildcard) return
-      const event = {
-        type: InstanceDisposed.type,
-        properties: {
-          directory: Instance.directory,
-        },
-      }
-      for (const sub of [...wildcard]) {
-        sub(event)
-      }
-    },
-  )
+  function state() {
+    stateAccessor ??= Instance.state(
+      () => {
+        const subscriptions = new Map<any, Subscription[]>()
+
+        return {
+          subscriptions,
+        }
+      },
+      async (entry) => {
+        const wildcard = entry.subscriptions.get("*")
+        if (!wildcard) return
+        const event = {
+          type: InstanceDisposed.type,
+          properties: {
+            directory: Instance.directory,
+          },
+        }
+        for (const sub of [...wildcard]) {
+          sub(event)
+        }
+      },
+    )
+    return stateAccessor()
+  }
 
   export async function publish<Definition extends BusEvent.Definition>(
     def: Definition,

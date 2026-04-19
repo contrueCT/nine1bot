@@ -1,18 +1,33 @@
-/**
- * BridgeServer singleton for process-level access.
- *
- * Nine1Bot's server.ts calls setBridgeServer() at startup,
- * then AI tools and routes access it via getBridgeServer().
- */
+import { BrowserServiceClient } from './service-client'
 
-import type { BridgeServer } from '../../../../packages/browser-mcp-server/src/bridge/server'
+type InProcessBridgeServer = any
 
-let instance: BridgeServer | null = null
+let instance: InProcessBridgeServer | null = null
+let serviceClient: BrowserServiceClient | null = null
 
-export function setBridgeServer(bridge: BridgeServer): void {
+export function setBridgeServer(bridge: InProcessBridgeServer): void {
   instance = bridge
+  serviceClient = null
 }
 
-export function getBridgeServer(): BridgeServer | null {
-  return instance
+export function clearBridgeServer(): void {
+  instance = null
+  serviceClient = null
+}
+
+export function getBridgeServer(): InProcessBridgeServer | BrowserServiceClient | null {
+  if (instance) {
+    return instance
+  }
+
+  const serviceUrl = process.env.BROWSER_SERVICE_URL
+  if (!serviceUrl) {
+    return null
+  }
+
+  if (!serviceClient || serviceClient.baseUrl !== serviceUrl) {
+    serviceClient = new BrowserServiceClient(serviceUrl)
+  }
+
+  return serviceClient
 }

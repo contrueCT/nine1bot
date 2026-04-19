@@ -1,7 +1,6 @@
 import open from 'open'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import type { Nine1BotConfig } from '../config/schema'
 import { loadConfig, findConfigPath, getDefaultConfigPath } from '../config/loader'
 import { startServer, type ServerInstance } from './server'
 import { createTunnel, type TunnelManager } from '../tunnel'
@@ -79,7 +78,7 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
     }
     try {
       tunnel = await createTunnel(config.tunnel)
-      publicUrl = await tunnel.start(serverConfig.port)
+      publicUrl = await tunnel.start(server.port)
     } catch (error: any) {
       console.warn(`Failed to create tunnel: ${error.message}`)
       // 清理可能已部分初始化的隧道资源

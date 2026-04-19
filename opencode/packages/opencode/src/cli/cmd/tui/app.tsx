@@ -2,7 +2,7 @@ import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentu
 import { Clipboard } from "@tui/util/clipboard"
 import { TextAttributes } from "@opentui/core"
 import { RouteProvider, useRoute } from "@tui/context/route"
-import { Switch, Match, createEffect, untrack, ErrorBoundary, createSignal, onMount, batch, Show, on } from "solid-js"
+import { Switch, Match, createEffect, untrack, ErrorBoundary, createSignal, onMount, batch, Show, on, createComponent } from "solid-js"
 import { Installation } from "@/installation"
 import { Flag } from "@/flag/flag"
 import { DialogProvider, useDialog } from "@tui/ui/dialog"
@@ -31,6 +31,7 @@ import { ExitProvider, useExit } from "./context/exit"
 import { Session as SessionApi } from "@/session"
 import { TuiEvent } from "./event"
 import { KVProvider, useKV } from "./context/kv"
+import type { EventSource } from "./context/sdk"
 import { Provider } from "@/provider/provider"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
 import open from "open"
@@ -97,7 +98,123 @@ async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   })
 }
 
-import type { EventSource } from "./context/sdk"
+function withChildren<Props extends Record<string, unknown>>(
+  props: Props,
+  children: () => unknown,
+): Props & { readonly children: unknown } {
+  return Object.defineProperty({ ...props }, "children", {
+    get: children,
+    enumerable: true,
+    configurable: true,
+  }) as Props & { readonly children: unknown }
+}
+
+function renderTuiRoot(
+  input: {
+    url: string
+    args: Args
+    directory?: string
+    fetch?: typeof fetch
+    events?: EventSource
+    onExit?: () => Promise<void>
+  },
+  mode: "dark" | "light",
+  onExit: () => Promise<void>,
+) {
+  return createComponent(ErrorBoundary, {
+    fallback: (error, reset) => createComponent(ErrorComponent, { error, reset, onExit, mode }),
+    get children() {
+      return createComponent(
+        ArgsProvider,
+        withChildren({ ...input.args }, () =>
+          createComponent(
+            ExitProvider,
+            withChildren({ onExit }, () =>
+              createComponent(
+                KVProvider,
+                withChildren({}, () =>
+                  createComponent(
+                    ToastProvider,
+                    withChildren({}, () =>
+                      createComponent(
+                        RouteProvider,
+                        withChildren({}, () =>
+                          createComponent(
+                            SDKProvider,
+                            withChildren(
+                              {
+                                url: input.url,
+                                directory: input.directory,
+                                fetch: input.fetch,
+                                events: input.events,
+                              },
+                              () =>
+                                createComponent(
+                                  SyncProvider,
+                                  withChildren({}, () =>
+                                    createComponent(
+                                      ThemeProvider,
+                                      withChildren({ mode }, () =>
+                                        createComponent(
+                                          LocalProvider,
+                                          withChildren({}, () =>
+                                            createComponent(
+                                              KeybindProvider,
+                                              withChildren({}, () =>
+                                                createComponent(
+                                                  PromptStashProvider,
+                                                  withChildren({}, () =>
+                                                    createComponent(
+                                                      DialogProvider,
+                                                      withChildren({}, () =>
+                                                        createComponent(
+                                                          CommandProvider,
+                                                          withChildren({}, () =>
+                                                            createComponent(
+                                                              FrecencyProvider,
+                                                              withChildren({}, () =>
+                                                                createComponent(
+                                                                  PromptHistoryProvider,
+                                                                  withChildren({}, () =>
+                                                                    createComponent(
+                                                                      PromptRefProvider,
+                                                                      withChildren({}, () =>
+                                                                        createComponent(App, {}),
+                                                                      ),
+                                                                    ),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      )
+    },
+  })
+}
 
 export function tui(input: {
   url: string
@@ -116,52 +233,7 @@ export function tui(input: {
     }
 
     render(
-      () => {
-        return (
-          <ErrorBoundary
-            fallback={(error, reset) => <ErrorComponent error={error} reset={reset} onExit={onExit} mode={mode} />}
-          >
-            <ArgsProvider {...input.args}>
-              <ExitProvider onExit={onExit}>
-                <KVProvider>
-                  <ToastProvider>
-                    <RouteProvider>
-                      <SDKProvider
-                        url={input.url}
-                        directory={input.directory}
-                        fetch={input.fetch}
-                        events={input.events}
-                      >
-                        <SyncProvider>
-                          <ThemeProvider mode={mode}>
-                            <LocalProvider>
-                              <KeybindProvider>
-                                <PromptStashProvider>
-                                  <DialogProvider>
-                                    <CommandProvider>
-                                      <FrecencyProvider>
-                                        <PromptHistoryProvider>
-                                          <PromptRefProvider>
-                                            <App />
-                                          </PromptRefProvider>
-                                        </PromptHistoryProvider>
-                                      </FrecencyProvider>
-                                    </CommandProvider>
-                                  </DialogProvider>
-                                </PromptStashProvider>
-                              </KeybindProvider>
-                            </LocalProvider>
-                          </ThemeProvider>
-                        </SyncProvider>
-                      </SDKProvider>
-                    </RouteProvider>
-                  </ToastProvider>
-                </KVProvider>
-              </ExitProvider>
-            </ArgsProvider>
-          </ErrorBoundary>
-        )
-      },
+      () => renderTuiRoot(input, mode, onExit),
       {
         targetFps: 60,
         gatherStats: false,

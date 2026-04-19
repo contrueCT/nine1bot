@@ -1,0 +1,23 @@
+{
+  "engineId": "opencode",
+  "engineVersion": "local",
+  "mode": "local-source",
+  "entry": {
+    "command": "bun",
+    "args": [
+      "run",
+      "--cwd",
+      "{installDir}/opencode/packages/opencode",
+      "src/index.ts",
+      "--",
+      "serve",
+      "--port",
+      "{port}",
+      "--hostname",
+      "{host}"
+    ]
+  },
+  "healthEndpoint": "/global/health",
+  "defaultPortStrategy": "ephemeral",
+  "runtimeLayoutVersion": 1
+}

@@ -36,6 +36,7 @@
   --transition-normal: 150ms var(--ease-smooth);
   --transition-slow: 300ms var(--ease-smooth);
 
+
   /* Layout */
   --sidebar-width: 260px;
   --sidebar-collapsed-width: 0px;
@@ -1353,6 +1354,7 @@ a:hover {
 .text-sm { font-size: 0.875rem; }
 .text-xs { font-size: 0.75rem; }
 .font-mono { font-family: var(--font-mono); }
+
 
 .truncate {
   overflow: hidden;

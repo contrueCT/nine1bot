@@ -14,8 +14,26 @@ import { lazy } from "../../util/lazy"
 
 export const BrowserRoutes = lazy(() => {
   const bridge = getBridgeServer()
-  if (bridge) {
+  if (bridge && "getRoutes" in bridge) {
     return bridge.getRoutes()
+  }
+
+  const serviceUrl = process.env.BROWSER_SERVICE_URL
+  if (serviceUrl) {
+    return new Hono().all("/*", async (c) => {
+      const url = new URL(c.req.url)
+      const pathname = url.pathname.replace(/^\/browser/, "") || "/"
+      const target = new URL(pathname + url.search, `${serviceUrl.replace(/\/$/, "")}/`)
+      const headers = new Headers(c.req.raw.headers)
+      headers.delete("host")
+      return fetch(target, {
+        method: c.req.method,
+        headers,
+        body: ["GET", "HEAD"].includes(c.req.method) ? undefined : c.req.raw.body,
+        // @ts-expect-error Bun accepts duplex for streaming request bodies.
+        duplex: "half",
+      })
+    })
   }
 
   // Fallback: browser control not enabled
