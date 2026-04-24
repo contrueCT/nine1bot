@@ -51,6 +51,16 @@ const model: Provider.Model = {
   headers: {},
   release_date: "2026-01-01",
 }
+const imageModel: Provider.Model = {
+  ...model,
+  capabilities: {
+    ...model.capabilities,
+    input: {
+      ...model.capabilities.input,
+      image: true,
+    },
+  },
+}
 
 function userInfo(id: string): MessageV2.User {
   return {
@@ -212,7 +222,7 @@ describe("session.message-v2.toModelMessage", () => {
             type: "file",
             mime: "image/png",
             filename: "img.png",
-            url: "https://example.com/img.png",
+            url: "data:image/png;base64,aW1n",
           },
           {
             ...basePart(messageID, "p4"),
@@ -240,11 +250,18 @@ describe("session.message-v2.toModelMessage", () => {
             description: "desc",
             agent: "agent",
           },
+          {
+            ...basePart(messageID, "p8"),
+            type: "file",
+            mime: "image/png",
+            filename: "remote.png",
+            url: "https://example.com/remote.png",
+          },
         ] as MessageV2.Part[],
       },
     ]
 
-    expect(MessageV2.toModelMessages(input, model)).toStrictEqual([
+    expect(MessageV2.toModelMessages(input, imageModel)).toStrictEqual([
       {
         role: "user",
         content: [
@@ -253,7 +270,7 @@ describe("session.message-v2.toModelMessage", () => {
             type: "file",
             mediaType: "image/png",
             filename: "img.png",
-            data: "https://example.com/img.png",
+            data: "data:image/png;base64,aW1n",
           },
           { type: "text", text: "What did we do so far?" },
           { type: "text", text: "The following tool was executed by the user" },
@@ -314,7 +331,7 @@ describe("session.message-v2.toModelMessage", () => {
       },
     ]
 
-    expect(MessageV2.toModelMessages(input, model)).toStrictEqual([
+    expect(MessageV2.toModelMessages(input, imageModel)).toStrictEqual([
       {
         role: "user",
         content: [{ type: "text", text: "run tool" }],
@@ -348,6 +365,90 @@ describe("session.message-v2.toModelMessage", () => {
               ],
             },
             providerOptions: { openai: { tool: "meta" } },
+          },
+        ],
+      },
+    ])
+  })
+
+  test("folds unsupported tool attachments into the tool output text", () => {
+    const userID = "m-user"
+    const assistantID = "m-assistant"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [
+          {
+            ...basePart(userID, "u1"),
+            type: "text",
+            text: "run tool",
+          },
+        ] as MessageV2.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1"),
+            type: "tool",
+            callID: "call-1",
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: { cmd: "ls" },
+              output: "ok",
+              title: "Bash",
+              metadata: {},
+              time: { start: 0, end: 1 },
+              attachments: [
+                {
+                  ...basePart(assistantID, "file-1"),
+                  type: "file",
+                  mime: "image/png",
+                  filename: "attachment.png",
+                  url: "data:image/png;base64,Zm9v",
+                },
+              ],
+            },
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "run tool" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "bash",
+            input: { cmd: "ls" },
+            providerExecuted: undefined,
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-1",
+            toolName: "bash",
+            output: {
+              type: "content",
+              value: [
+                {
+                  type: "text",
+                  text: "ok\n\n[1 file(s) omitted — current model does not support this input type]",
+                },
+              ],
+            },
           },
         ],
       },
