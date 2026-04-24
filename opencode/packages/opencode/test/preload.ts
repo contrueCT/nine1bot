@@ -3,13 +3,14 @@
 import os from "os"
 import path from "path"
 import fs from "fs/promises"
-import fsSync from "fs"
 import { afterAll } from "bun:test"
 
 const dir = path.join(os.tmpdir(), "opencode-test-data-" + process.pid)
 await fs.mkdir(dir, { recursive: true })
-afterAll(() => {
-  fsSync.rmSync(dir, { recursive: true, force: true })
+afterAll(async () => {
+  const { Instance } = await import("../src/project/instance")
+  await Instance.disposeAll().catch(() => undefined)
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined)
 })
 // Set test home directory to isolate tests from user's actual home directory
 // This prevents tests from picking up real user configs/skills from ~/.claude/skills
@@ -22,10 +23,18 @@ process.env["XDG_CACHE_HOME"] = path.join(dir, "cache")
 process.env["XDG_CONFIG_HOME"] = path.join(dir, "config")
 process.env["XDG_STATE_HOME"] = path.join(dir, "state")
 
+process.env["OPENCODE_DISABLE_DEFAULT_PLUGINS"] = "true"
+process.env["OPENCODE_DISABLE_OPENCODE_MCP"] = "true"
+process.env["OPENCODE_DISABLE_CLAUDE_CODE_MCP"] = "true"
+process.env["OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER"] = "true"
+process.env["OPENCODE_DISABLE_MODELS_FETCH"] = "true"
+
+await fs.mkdir(path.join(process.env["XDG_CONFIG_HOME"], "opencode", "node_modules"), { recursive: true })
+
 // Write the cache version file to prevent global/index.ts from clearing the cache
 const cacheDir = path.join(dir, "cache", "opencode")
 await fs.mkdir(cacheDir, { recursive: true })
-await fs.writeFile(path.join(cacheDir, "version"), "14")
+await fs.writeFile(path.join(cacheDir, "version"), "19")
 
 // Clear provider env vars to ensure clean test state
 delete process.env["ANTHROPIC_API_KEY"]

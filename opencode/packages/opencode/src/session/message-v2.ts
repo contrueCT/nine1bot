@@ -806,10 +806,4 @@ export namespace MessageV2 {
     }
   }
 
-  function isNetworkLikeError(e: Error): boolean {
-    const code = (e as any).code
-    if (typeof code === "number" && code >= 500 && code < 600) return true
-    const msg = e.message.toLowerCase()
-    return msg.includes("network") || msg.includes("connection lost") || msg.includes("etimedout") || msg.includes("econnrefused") || msg.includes("socket hang up")
-  }
 }

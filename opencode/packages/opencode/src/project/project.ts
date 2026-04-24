@@ -7,14 +7,13 @@ import { createHash } from "crypto"
 import { Storage } from "../storage/storage"
 import { Log } from "../util/log"
 import { Flag } from "@/flag/flag"
-import { Session } from "../session"
+import type { Session } from "../session"
 import { work } from "../util/queue"
 import { fn } from "@opencode-ai/util/fn"
 import { BusEvent } from "@/bus/bus-event"
 import { iife } from "@/util/iife"
 import { GlobalBus } from "@/bus/global"
 import { existsSync } from "fs"
-import { Bus } from "@/bus"
 
 export namespace Project {
   const log = Log.create({ service: "project" })
@@ -426,6 +425,7 @@ export namespace Project {
     })
     emitProjectUpdated(project)
 
+    const { Bus } = await import("@/bus")
     await Bus.publish(Event.ContextUpdated, {
       projectID,
       revision: next.revision,

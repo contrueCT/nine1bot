@@ -2,7 +2,8 @@ import z from "zod"
 import { Tool } from "./tool"
 import { getBridgeServer } from "../browser/bridge"
 import { Identifier } from "../id/id"
-import type { BrowserTarget } from "browser-mcp-server"
+
+type BrowserTarget = "user" | "bot"
 
 function requireBridge() {
   const bridge = getBridgeServer()
