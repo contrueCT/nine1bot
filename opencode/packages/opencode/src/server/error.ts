@@ -29,6 +29,26 @@ export const ERRORS = {
       },
     },
   },
+  409: {
+    description: "Conflict",
+    content: {
+      "application/json": {
+        schema: resolver(
+          z
+            .object({
+              name: z.literal("BusyError"),
+              message: z.string(),
+              data: z.object({
+                sessionID: z.string(),
+              }),
+            })
+            .meta({
+              ref: "BusyError",
+            }),
+        ),
+      },
+    },
+  },
 } as const
 
 export function errors(...codes: number[]) {

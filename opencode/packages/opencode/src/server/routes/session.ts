@@ -978,7 +978,7 @@ export const SessionRoutes = lazy(() =>
               },
             },
           },
-          ...errors(400, 404),
+          ...errors(400, 404, 409),
         },
       }),
       validator(
@@ -1010,7 +1010,7 @@ export const SessionRoutes = lazy(() =>
           204: {
             description: "Prompt accepted",
           },
-          ...errors(400, 404),
+          ...errors(400, 404, 409),
         },
       }),
       validator(
@@ -1021,13 +1021,10 @@ export const SessionRoutes = lazy(() =>
       ),
       validator("json", SessionPrompt.PromptInput.omit({ sessionID: true })),
       async (c) => {
-        c.status(204)
-        c.header("Content-Type", "application/json")
-        return stream(c, async () => {
-          const sessionID = c.req.valid("param").sessionID
-          const body = c.req.valid("json")
-          SessionPrompt.prompt({ ...body, sessionID })
-        })
+        const sessionID = c.req.valid("param").sessionID
+        const body = c.req.valid("json")
+        await SessionPrompt.promptAsync({ ...body, sessionID })
+        return new Response(null, { status: 204 })
       },
     )
     .post(

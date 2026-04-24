@@ -183,24 +183,12 @@ export namespace SessionPrompt {
 
   const state = Instance.state(
     () => {
-      const data: Record<
-        string,
-        {
-          abort: AbortController
-          callbacks: {
-            resolve(input: MessageV2.WithParts): void
-            reject(): void
-          }[]
-        }
-      > = {}
+      const data: Record<string, { abort: AbortController }> = {}
       return data
     },
     async (current) => {
       for (const item of Object.values(current)) {
         item.abort.abort()
-        for (const callback of item.callbacks) {
-          callback.reject()
-        }
       }
     },
   )
@@ -276,35 +264,92 @@ export namespace SessionPrompt {
   })
   export type PromptInput = z.infer<typeof PromptInput>
 
-  export const prompt = fn(PromptInput, async (input) => {
+  function reserve(sessionID: string) {
+    const s = state()
+    if (s[sessionID]) {
+      throw new Session.BusyError(sessionID)
+    }
+    const controller = new AbortController()
+    s[sessionID] = {
+      abort: controller,
+    }
+    SessionStatus.set(sessionID, { type: "busy" })
+    return controller.signal
+  }
+
+  function release(sessionID: string, options?: { abort?: boolean }) {
+    const s = state()
+    const match = s[sessionID]
+    if (!match) return
+    if (options?.abort) {
+      match.abort.abort()
+    }
+    delete s[sessionID]
+    SessionStatus.set(sessionID, { type: "idle" })
+    SessionProcessor.resetDoomLoopCount(sessionID)
+  }
+
+  export const _testing = {
+    reserve,
+    release,
+  }
+
+  async function acceptPrompt(input: PromptInput) {
+    const abort = reserve(input.sessionID)
     const session = await Session.get(input.sessionID)
-    await SessionRevert.cleanup(session)
+    try {
+      await SessionRevert.cleanup(session)
 
-    const message = await createUserMessage(input, session)
-    await Session.touch(input.sessionID)
+      const message = await createUserMessage(input, session)
+      await Session.touch(input.sessionID)
 
-    // this is backwards compatibility for allowing `tools` to be specified when
-    // prompting
-    const permissions: PermissionNext.Ruleset = []
-    for (const [tool, enabled] of Object.entries(input.tools ?? {})) {
-      permissions.push({
-        permission: tool,
-        action: enabled ? "allow" : "deny",
-        pattern: "*",
-      })
+      // this is backwards compatibility for allowing `tools` to be specified when
+      // prompting
+      const permissions: PermissionNext.Ruleset = []
+      for (const [tool, enabled] of Object.entries(input.tools ?? {})) {
+        permissions.push({
+          permission: tool,
+          action: enabled ? "allow" : "deny",
+          pattern: "*",
+        })
+      }
+      if (permissions.length > 0) {
+        session.permission = permissions
+        await Session.update(session.id, (draft) => {
+          draft.permission = permissions
+        })
+      }
+
+      return {
+        abort,
+        message,
+      }
+    } catch (error) {
+      release(input.sessionID)
+      throw error
     }
-    if (permissions.length > 0) {
-      session.permission = permissions
-      await Session.update(session.id, (draft) => {
-        draft.permission = permissions
-      })
-    }
+  }
 
+  export const prompt = fn(PromptInput, async (input) => {
+    const accepted = await acceptPrompt(input)
     if (input.noReply === true) {
-      return message
+      release(input.sessionID)
+      return accepted.message
     }
 
-    return loop(input.sessionID)
+    return loopWithAbort(input.sessionID, accepted.abort)
+  })
+
+  export const promptAsync = fn(PromptInput, async (input) => {
+    const accepted = await acceptPrompt(input)
+    if (input.noReply === true) {
+      release(input.sessionID)
+      return
+    }
+
+    void loopWithAbort(input.sessionID, accepted.abort).catch((error) =>
+      log.error("prompt_async failed", { sessionID: input.sessionID, error }),
+    )
   })
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
@@ -358,46 +403,17 @@ export namespace SessionPrompt {
     return parts
   }
 
-  function start(sessionID: string) {
-    const s = state()
-    if (s[sessionID]) return
-    const controller = new AbortController()
-    s[sessionID] = {
-      abort: controller,
-      callbacks: [],
-    }
-    return controller.signal
-  }
-
   export function cancel(sessionID: string) {
     log.info("cancel", { sessionID })
-    const s = state()
-    const match = s[sessionID]
-    if (!match) return
-    match.abort.abort()
-    for (const item of match.callbacks) {
-      item.reject()
-    }
-    delete s[sessionID]
-    SessionStatus.set(sessionID, { type: "idle" })
-    // Reset doom loop counter when session ends
-    SessionProcessor.resetDoomLoopCount(sessionID)
-    return
+    release(sessionID, { abort: true })
   }
 
-  export const loop = fn(Identifier.schema("session"), async (sessionID) => {
-    const abort = start(sessionID)
-    if (!abort) {
-      // Directly reject with BusyError instead of waiting indefinitely
-      throw new Session.BusyError(sessionID)
-    }
-
-    using _ = defer(() => cancel(sessionID))
+  async function loopWithAbort(sessionID: string, abort: AbortSignal) {
+    using _ = defer(() => release(sessionID))
 
     let step = 0
     const session = await Session.get(sessionID)
     while (true) {
-      SessionStatus.set(sessionID, { type: "busy" })
       log.info("loop", { step, sessionID })
       if (abort.aborted) break
       let msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
@@ -747,26 +763,6 @@ export namespace SessionPrompt {
       }
 
       const sessionMessages = clone(msgs)
-
-      // Ephemerally wrap queued user messages with a reminder to stay on track
-      if (step > 1 && lastFinished) {
-        for (const msg of sessionMessages) {
-          if (msg.info.role !== "user" || msg.info.id <= lastFinished.id) continue
-          for (const part of msg.parts) {
-            if (part.type !== "text" || part.ignored || part.synthetic) continue
-            if (!part.text.trim()) continue
-            part.text = [
-              "<system-reminder>",
-              "The user sent the following message:",
-              part.text,
-              "",
-              "Please address this message and continue with your tasks.",
-              "</system-reminder>",
-            ].join("\n")
-          }
-        }
-      }
-
       await Plugin.trigger("experimental.chat.messages.transform", {}, { messages: sessionMessages })
 
       const result = await processor.process({
@@ -807,13 +803,14 @@ export namespace SessionPrompt {
     SessionCompaction.prune({ sessionID })
     for await (const item of MessageV2.stream(sessionID)) {
       if (item.info.role === "user") continue
-      const queued = state()[sessionID]?.callbacks ?? []
-      for (const q of queued) {
-        q.resolve(item)
-      }
       return item
     }
     throw new Error("Impossible")
+  }
+
+  export const loop = fn(Identifier.schema("session"), async (sessionID) => {
+    const abort = reserve(sessionID)
+    return loopWithAbort(sessionID, abort)
   })
 
   async function lastModel(sessionID: string) {
@@ -1405,11 +1402,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
   })
   export type ShellInput = z.infer<typeof ShellInput>
   export async function shell(input: ShellInput) {
-    const abort = start(input.sessionID)
-    if (!abort) {
-      throw new Session.BusyError(input.sessionID)
-    }
-    using _ = defer(() => cancel(input.sessionID))
+    const abort = reserve(input.sessionID)
+    using _ = defer(() => release(input.sessionID))
 
     const session = await Session.get(input.sessionID)
     if (session.revert) {

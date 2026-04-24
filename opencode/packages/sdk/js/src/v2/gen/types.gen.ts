@@ -3305,6 +3305,16 @@ export type SessionPromptResponses = {
     info: AssistantMessage
     parts: Array<Part>
   }
+  /**
+   * Conflict
+   */
+  409: {
+    name: "BusyError"
+    message: string
+    data: {
+      sessionID: string
+    }
+  }
 }
 
 export type SessionPromptResponse = SessionPromptResponses[keyof SessionPromptResponses]
@@ -3489,6 +3499,16 @@ export type SessionPromptAsyncResponses = {
    * Prompt accepted
    */
   204: void
+  /**
+   * Conflict
+   */
+  409: {
+    name: "BusyError"
+    message: string
+    data: {
+      sessionID: string
+    }
+  }
 }
 
 export type SessionPromptAsyncResponse = SessionPromptAsyncResponses[keyof SessionPromptAsyncResponses]
