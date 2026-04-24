@@ -745,7 +745,7 @@ export namespace SessionPrompt {
       const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
       const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
 
-      const { tools, systemHints } = await resolveTools({
+      const tools = await resolveTools({
         agent,
         session,
         model,
@@ -773,7 +773,6 @@ export namespace SessionPrompt {
         system: [
           ...(await SystemPrompt.environment(model, session.directory)),
           ...(await InstructionPrompt.system()),
-          ...systemHints,
         ],
         messages: [
           ...MessageV2.toModelMessages(sessionMessages, model),
@@ -829,7 +828,6 @@ export namespace SessionPrompt {
     bypassAgentCheck: boolean
     messages: MessageV2.WithParts[]
   }) {
-    const systemHints: string[] = []
     using _ = log.time("resolveTools")
     const tools: Record<string, AITool> = {}
 
@@ -904,26 +902,6 @@ export namespace SessionPrompt {
           return result
         },
       })
-    }
-
-    const lastUserMessage = [...input.messages].reverse().find((message) => message.info.role === "user")
-    const lastUserText = lastUserMessage?.parts
-      .filter((part): part is MessageV2.TextPart => part.type === "text" && !part.ignored)
-      .map((part) => part.text)
-      .join("\n")
-      .trim()
-
-    if (lastUserText) {
-      const preflight = await Instance.provide({
-        directory: input.session.directory,
-        fn: () => MCP.prepareServersForTurn(lastUserText),
-      })
-
-      if (preflight.authInProgressServers.length > 0) {
-        systemHints.push(
-          "Feishu MCP authentication is in progress; do not ask the user to edit JSON or provide clientId manually.",
-        )
-      }
     }
 
     // Get MCP tools within session directory's Instance context
@@ -1024,7 +1002,7 @@ export namespace SessionPrompt {
       tools[key] = item
     }
 
-    return { tools, systemHints }
+    return tools
   }
 
   async function createUserMessage(input: PromptInput, session: Session.Info) {

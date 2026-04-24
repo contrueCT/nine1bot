@@ -410,14 +410,6 @@ export namespace MCP {
     ]).catch(() => undefined)
   }
 
-  function isFeishuLikeServer(serverName: string, mcp: McpRemote) {
-    return /lark|feishu/i.test(serverName) || /lark|feishu/i.test(mcp.url)
-  }
-
-  function shouldPreflightFeishuIntent(userText: string) {
-    return /飞书|feishu|lark|知识库|文档|wiki|docs|群聊|群|chat|消息/i.test(userText)
-  }
-
   function getPendingSessionByName(mcpName: string) {
     for (const session of pendingOAuthSessions.values()) {
       if (session.mcpName === mcpName) {
@@ -1919,44 +1911,6 @@ export namespace MCP {
   export async function hasStoredTokens(mcpName: string): Promise<boolean> {
     const entry = await McpAuth.get(mcpName)
     return !!entry?.tokens
-  }
-
-  export async function prepareServersForTurn(
-    userText: string,
-    options: { waitForAuthMs?: number } = {},
-  ): Promise<{ authInProgressServers: string[] }> {
-    if (!shouldPreflightFeishuIntent(userText)) {
-      return { authInProgressServers: [] }
-    }
-
-    const cfg = await Config.get()
-    const config = cfg.mcp ?? {}
-    const authInProgressServers: string[] = []
-    const waitForAuthMs = options.waitForAuthMs ?? 120_000
-
-    for (const [serverName, entry] of Object.entries(config)) {
-      if (!isMcpConfigured(entry) || entry.type !== "remote" || entry.oauth === false || entry.enabled === false) {
-        continue
-      }
-
-      if (!isFeishuLikeServer(serverName, entry)) {
-        continue
-      }
-
-      const connected = await ensureServerConnected(serverName, entry, {
-        interactiveAuth: true,
-        waitForAuthMs,
-      })
-
-      if (!connected) {
-        const nextState = await state()
-        if (nextState.status[serverName]?.status === "auth_in_progress") {
-          authInProgressServers.push(serverName)
-        }
-      }
-    }
-
-    return { authInProgressServers }
   }
 
   export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
