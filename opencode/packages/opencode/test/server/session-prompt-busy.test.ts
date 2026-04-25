@@ -192,6 +192,62 @@ describe("session prompt routes busy semantics", () => {
     })
   })
 
+  test("message endpoint keeps legacy system, tools, and model compatibility", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const app = Server.App()
+        const session = await Session.create({})
+
+        const response = await app.request(`/session/${session.id}/message`, {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            noReply: true,
+            system: "legacy message direct system prompt",
+            tools: {
+              bash: false,
+              edit: true,
+            },
+            model: {
+              providerID: "legacy-message-provider",
+              modelID: "legacy-message-model",
+            },
+            parts: [
+              {
+                type: "text",
+                text: "legacy message compatibility request",
+              },
+            ],
+          }),
+        })
+
+        expect(response.status).toBe(200)
+
+        const streamed = (await response.text()).trim()
+        expect(streamed).toContain("legacy-message-model")
+
+        const messages = await Session.messages({ sessionID: session.id })
+        expect(messages).toHaveLength(1)
+        const info = messages[0]?.info
+        if (!info || info.role !== "user") {
+          throw new Error("Expected persisted legacy message user message")
+        }
+        expect(info.system).toBe("legacy message direct system prompt")
+        expect(info.tools).toEqual({
+          bash: false,
+          edit: true,
+        })
+        expect(info.model).toEqual({
+          providerID: "legacy-message-provider",
+          modelID: "legacy-message-model",
+        })
+
+        await Session.remove(session.id)
+      },
+    })
+  })
+
   test("controller busy reject does not create a legacy-resumed profile", async () => {
     await Instance.provide({
       directory: projectRoot,
