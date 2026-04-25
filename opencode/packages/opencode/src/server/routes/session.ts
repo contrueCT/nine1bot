@@ -1026,7 +1026,12 @@ export const SessionRoutes = lazy(() =>
       ),
       validator(
         "json",
-        SessionPrompt.PromptInput.omit({ sessionID: true, runtimeModelSource: true, runtimeProfileSnapshot: true }),
+        SessionPrompt.PromptInput.omit({
+          sessionID: true,
+          runtimeModelSource: true,
+          runtimeProfileSnapshot: true,
+          runtimeTurnSnapshotId: true,
+        }),
       ),
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
@@ -1063,7 +1068,12 @@ export const SessionRoutes = lazy(() =>
       ),
       validator(
         "json",
-        SessionPrompt.PromptInput.omit({ sessionID: true, runtimeModelSource: true, runtimeProfileSnapshot: true }),
+        SessionPrompt.PromptInput.omit({
+          sessionID: true,
+          runtimeModelSource: true,
+          runtimeProfileSnapshot: true,
+          runtimeTurnSnapshotId: true,
+        }),
       ),
       async (c) => {
         const sessionID = c.req.valid("param").sessionID

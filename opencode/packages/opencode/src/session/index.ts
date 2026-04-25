@@ -238,6 +238,7 @@ export namespace Session {
     permission?: PermissionNext.Ruleset
     runtimeProfile?: SessionProfileSnapshot
     runtimeCurrentModel?: SessionRuntimeProfile.CurrentModel
+    runtimeAgentName?: string
   }) {
     const result: Info = {
       id: Identifier.descending("session", input.id),
@@ -261,6 +262,7 @@ export namespace Session {
           directory: result.directory,
           permission: result.permission,
           source: "new-session",
+          agentName: input.runtimeAgentName,
         }))
       result.runtime = await SessionRuntimeProfile.initialize(result, profile, {
         currentModel: input.runtimeCurrentModel,

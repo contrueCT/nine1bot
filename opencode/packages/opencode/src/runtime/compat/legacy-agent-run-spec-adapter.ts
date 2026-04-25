@@ -34,6 +34,7 @@ export namespace LegacyAgentRunSpecAdapter {
     directory?: string
     permission?: unknown
     source?: SessionProfileSnapshot["source"]
+    agentName?: string
   }
 
   export async function fromSessionMessage(input: SessionMessageInput): Promise<AgentRunSpec> {
@@ -156,7 +157,7 @@ export namespace LegacyAgentRunSpecAdapter {
   }
 
   export async function fromSessionCreate(input: SessionCreateInput): Promise<SessionProfileSnapshot> {
-    const agent = await resolveAgent()
+    const agent = await resolveAgent(input.agentName)
     const defaultModel = agent.model ?? (await Provider.defaultModel())
     const resourceResolverEnabled = await RuntimeFeatureFlags.resourceResolverEnabled()
     return {
@@ -171,7 +172,7 @@ export namespace LegacyAgentRunSpecAdapter {
       ],
       agent: {
         name: agent.name,
-        source: "default-user-template",
+        source: input.agentName ? "session-choice" : "default-user-template",
       },
       defaultModel: {
         providerID: defaultModel.providerID,

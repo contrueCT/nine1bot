@@ -36,6 +36,31 @@ export namespace RuntimeResourceResolver {
     }),
   )
 
+  export const ResolvedEvent = BusEvent.define(
+    "runtime.resources.resolved",
+    z.object({
+      sessionID: z.string(),
+      turnSnapshotId: z.string().optional(),
+      declared: z.object({
+        mcp: z.array(z.string()),
+        skills: z.array(z.string()),
+      }),
+      resolved: z.object({
+        mcp: z.array(z.string()),
+        skills: z.array(z.string()),
+      }),
+      unavailable: z.array(
+        z.object({
+          type: z.enum(["mcp", "skill"]),
+          id: z.string(),
+          reason: z.string().optional(),
+          error: z.string().optional(),
+        }),
+      ),
+      failures: z.number(),
+    }),
+  )
+
   export type Resolved = {
     builtinTools: ResourceSpec["builtinTools"]
     mcp: {
@@ -145,6 +170,7 @@ export namespace RuntimeResourceResolver {
     turnSnapshotId?: string
     profile?: SessionProfileSnapshot
     emitFailures?: boolean
+    emitResolved?: boolean
   }): Promise<Resolved> {
     const resources = input.profile?.resources ?? (await compileProfileResources())
     const mcp = await resolveMcp(resources.mcp)
@@ -163,7 +189,7 @@ export namespace RuntimeResourceResolver {
       }
     }
 
-    return {
+    const result: Resolved = {
       builtinTools: resources.builtinTools,
       mcp: {
         declaredServers: mcp.declaredServers,
@@ -193,6 +219,21 @@ export namespace RuntimeResourceResolver {
         })),
       },
     }
+
+    if (input.emitResolved !== false) {
+      await Bus.publish(ResolvedEvent, {
+        sessionID: input.sessionID,
+        turnSnapshotId: input.turnSnapshotId,
+        declared: result.audit.declared,
+        resolved: result.audit.resolved,
+        unavailable: result.audit.unavailable,
+        failures: result.failures.length,
+      }).catch((error) => {
+        log.warn("failed to publish resources resolved event", { error })
+      })
+    }
+
+    return result
   }
 
   async function resolveMcp(spec: McpResourceSpec) {

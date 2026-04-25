@@ -56,6 +56,7 @@ import { RuntimeContextEvents } from "@/runtime/context/events"
 import { RuntimeContextLegacy } from "@/runtime/context/legacy"
 import { RuntimeContextPipeline } from "@/runtime/context/pipeline"
 import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
+import { RuntimeControllerEvents } from "@/runtime/controller/events"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -219,6 +220,7 @@ export namespace SessionPrompt {
       .optional(),
     runtimeModelSource: z.enum(["profile-snapshot", "session-choice"]).optional(),
     runtimeProfileSnapshot: z.custom<SessionProfileSnapshot>().optional(),
+    runtimeTurnSnapshotId: z.string().optional(),
     agent: z.string().optional(),
     noReply: z.boolean().optional(),
     tools: z
@@ -434,6 +436,16 @@ export namespace SessionPrompt {
     const blocks = input.context?.blocks ?? []
     if (blocks.length === 0) return input
     const compiled = await RuntimeContextPipeline.compile({ blocks })
+    await Bus.publish(RuntimeControllerEvents.ContextCompiled, {
+      sessionID: input.sessionID,
+      turnSnapshotId: input.runtimeTurnSnapshotId,
+      blockCount: blocks.length,
+      renderedCount: compiled.rendered.length,
+      droppedCount: compiled.dropped.length,
+      tokenEstimate: compiled.tokenEstimate,
+      audit: compiled.audit,
+      dropped: compiled.dropped,
+    }).catch((error) => log.warn("failed to publish context compiled event", { error }))
     timing?.mark("context.turn_blocks.compiled", {
       rendered: compiled.rendered.length,
       dropped: compiled.dropped.length,
@@ -454,7 +466,7 @@ export namespace SessionPrompt {
       return accepted.message
     }
 
-    return loopWithAbort(input.sessionID, accepted.abort, timing)
+    return loopWithAbort(input.sessionID, accepted.abort, timing, input.runtimeTurnSnapshotId)
   })
 
   export const promptAsync = fn(PromptInput, async (input) => {
@@ -470,7 +482,7 @@ export namespace SessionPrompt {
       return
     }
 
-    void loopWithAbort(input.sessionID, accepted.abort, timing).catch((error) =>
+    void loopWithAbort(input.sessionID, accepted.abort, timing, input.runtimeTurnSnapshotId).catch((error) =>
       log.error("prompt_async failed", { sessionID: input.sessionID, error }),
     )
   })
@@ -531,7 +543,12 @@ export namespace SessionPrompt {
     release(sessionID, { abort: true })
   }
 
-  async function loopWithAbort(sessionID: string, abort: AbortSignal, timing?: RuntimeTiming.Trace) {
+  async function loopWithAbort(
+    sessionID: string,
+    abort: AbortSignal,
+    timing?: RuntimeTiming.Trace,
+    runtimeTurnSnapshotId?: string,
+  ) {
     using _ = defer(() => release(sessionID))
 
     let step = 0
@@ -909,6 +926,7 @@ export namespace SessionPrompt {
               ? resourceCache.resolved
               : await RuntimeResourceResolver.resolve({
                   sessionID,
+                  turnSnapshotId: runtimeTurnSnapshotId,
                   profile: await SessionRuntimeProfile.read(session),
                 })
             : undefined
@@ -1298,7 +1316,12 @@ export namespace SessionPrompt {
         : undefined
     const resolvedResources =
       profile && (await RuntimeFeatureFlags.resourceResolverEnabled())
-        ? await RuntimeResourceResolver.resolve({ sessionID: session.id, profile, emitFailures: false })
+        ? await RuntimeResourceResolver.resolve({
+            sessionID: session.id,
+            profile,
+            emitFailures: false,
+            emitResolved: false,
+          })
         : undefined
     const availableSkills = resolvedResources
       ? new Set(resolvedResources.skills.availableSkills.map((skill) => skill.name))

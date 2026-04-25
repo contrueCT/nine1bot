@@ -47,6 +47,7 @@ export namespace RuntimeCompatibilityCompiler {
           ? snapshot.model.source
           : undefined,
       runtimeProfileSnapshot: snapshot.session.profileSnapshot,
+      runtimeTurnSnapshotId: snapshot.id,
       agent: snapshot.agent.name,
       noReply: snapshot.runtime.noReply,
       tools: compileTools(snapshot),
