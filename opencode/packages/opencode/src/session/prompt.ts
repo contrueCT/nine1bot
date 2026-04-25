@@ -49,8 +49,8 @@ import { Truncate } from "@/tool/truncation"
 import { ProjectEnvironment } from "@/project/environment"
 import { RuntimeTiming } from "./timing"
 import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
-import { LegacyAgentRunSpecAdapter } from "@/runtime/compat/legacy-agent-run-spec-adapter"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
+import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import type { SessionProfileSnapshot } from "@/runtime/protocol/agent-run-spec"
 import { RuntimeContextEvents } from "@/runtime/context/events"
 import { RuntimeContextLegacy } from "@/runtime/context/legacy"
@@ -379,7 +379,7 @@ export namespace SessionPrompt {
     if (!profile) {
       profile =
         input.runtimeProfileSnapshot ??
-        (await LegacyAgentRunSpecAdapter.fromSessionCreate({
+        (await SessionProfileCompiler.compile({
           session,
           directory: session.directory,
           permission: session.permission,

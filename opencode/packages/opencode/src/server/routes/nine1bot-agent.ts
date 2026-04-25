@@ -11,13 +11,13 @@ import { Question } from "@/question"
 import { Session } from "@/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionStatus } from "@/session/status"
-import { RuntimeCompatibilityCompiler } from "@/runtime/compat/runtime-compatibility-compiler"
-import { LegacyAgentRunSpecAdapter } from "@/runtime/compat/legacy-agent-run-spec-adapter"
+import { ControllerAgentRunCompiler } from "@/runtime/controller/agent-run-compiler"
 import { RuntimeControllerEvents } from "@/runtime/controller/events"
 import { RuntimeControllerProtocol } from "@/runtime/controller/protocol"
 import { RuntimeContextEvents } from "@/runtime/context/events"
 import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
 import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
+import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import { Log } from "@/util/log"
 import { lazy } from "@/util/lazy"
@@ -138,47 +138,11 @@ async function compileControllerPrompt(input: {
   }
 
   const session = await Session.get(input.sessionID)
-  const spec = await LegacyAgentRunSpecAdapter.fromSessionMessage({
+  return ControllerAgentRunCompiler.compilePrompt({
     session,
-    body: promptBody,
-    entry: {
-      source: body.entry?.source ?? "api",
-      platform: body.entry?.platform,
-      mode: body.entry?.mode ?? "controller-message",
-      templateIds: body.entry?.templateIds ?? ["default-user-template", "controller-message"],
-      traceId: body.entry?.traceId,
-    },
-  })
-  spec.capabilities = {
-    client: {
-      permissionAsk: body.clientCapabilities?.permissionRequests,
-      debugPanel: body.clientCapabilities?.debug,
-      pageContext: body.clientCapabilities?.pageContext,
-      resourceFailureEvents: body.clientCapabilities?.resourceFailures,
-    },
-    server: {
-      protocolVersions: [RuntimeControllerProtocol.VERSION],
-      contextEvents: true,
-      resourceHealthEvents: true,
-      sessionPermissionGrants: true,
-      profileSnapshots: await RuntimeFeatureFlags.profileSnapshotEnabled(),
-    },
-  }
-  spec.runtime = {
-    ...spec.runtime,
-    debug: body.runtimeOverride?.debug,
-    timing: body.runtimeOverride?.timing,
-    timeoutMs: body.runtimeOverride?.timeoutMs,
+    body,
     turnSnapshotId: input.turnSnapshotId,
-  }
-  const snapshot = RuntimeCompatibilityCompiler.compileTurnSnapshot(spec, {
-    messageID: promptBody.messageID,
-    tools: promptBody.tools,
-    system: promptBody.system,
-    variant: promptBody.variant,
-    context: promptBody.context,
   })
-  return RuntimeCompatibilityCompiler.compilePrompt(snapshot)
 }
 
 async function sendControllerMessage(sessionID: string, body: RuntimeControllerProtocol.MessageSendRequest) {
@@ -265,7 +229,7 @@ async function changeModel(sessionID: string, input: RuntimeControllerProtocol.M
   const session = await Session.get(sessionID)
   let profile = await SessionRuntimeProfile.read(session)
   if (!profile && (await RuntimeFeatureFlags.profileSnapshotEnabled())) {
-    profile = await LegacyAgentRunSpecAdapter.fromSessionCreate({
+    profile = await SessionProfileCompiler.compile({
       session,
       directory: session.directory,
       permission: session.permission,

@@ -19,6 +19,6 @@ describe("mcp turn preflight", () => {
     expect(mcpSource).not.toContain("isFeishuLikeServer")
     expect(promptSource).not.toContain("prepareServersForTurn")
     expect(promptSource).not.toContain("Feishu MCP authentication is in progress")
-    expect(mcpSource).toContain("export async function tools()")
+    expect(mcpSource).toMatch(/export async function tools\(/)
   })
 })

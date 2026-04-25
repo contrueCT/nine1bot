@@ -20,8 +20,8 @@ import { Agent } from "../../agent/agent"
 import { Snapshot } from "@/snapshot"
 import { Log } from "../../util/log"
 import { PermissionNext } from "@/permission/next"
+import { RuntimePromptBridgeCompiler } from "@/runtime/bridge/prompt-compiler"
 import { LegacyAgentRunSpecAdapter } from "@/runtime/compat/legacy-agent-run-spec-adapter"
-import { RuntimeCompatibilityCompiler } from "@/runtime/compat/runtime-compatibility-compiler"
 import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
 import { Filesystem } from "@/util/filesystem"
 import { errors } from "../error"
@@ -78,14 +78,14 @@ async function compileLegacySessionPrompt(
       mode,
     },
   })
-  const snapshot = RuntimeCompatibilityCompiler.compileTurnSnapshot(spec, {
+  const snapshot = RuntimePromptBridgeCompiler.compileTurnSnapshot(spec, {
     messageID: body.messageID,
     tools: body.tools,
     system: body.system,
     variant: body.variant,
     context: body.context,
   })
-  return RuntimeCompatibilityCompiler.compilePrompt(snapshot)
+  return RuntimePromptBridgeCompiler.compilePrompt(snapshot)
 }
 
 async function createUploadTarget(session: Pick<Session.Info, "id" | "directory">, originalFilename?: string) {

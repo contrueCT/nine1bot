@@ -24,7 +24,7 @@ import type { Provider } from "@/provider/provider"
 import { PermissionNext } from "@/permission/next"
 import { Global } from "@/global"
 import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
-import { LegacyAgentRunSpecAdapter } from "@/runtime/compat/legacy-agent-run-spec-adapter"
+import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import type { SessionProfileSnapshot } from "@/runtime/protocol/agent-run-spec"
 import { RuntimeContextEvents } from "@/runtime/context/events"
@@ -177,7 +177,7 @@ export namespace Session {
           runtimeProfile = forked.snapshot
           runtimeCurrentModel = forked.summary.currentModel
         } else {
-          runtimeProfile = await LegacyAgentRunSpecAdapter.fromSessionCreate({
+          runtimeProfile = await SessionProfileCompiler.compile({
             session: {
               ...parentSession,
               id: childID,
@@ -257,7 +257,7 @@ export namespace Session {
     if (await RuntimeFeatureFlags.profileSnapshotEnabled()) {
       const profile =
         input.runtimeProfile ??
-        (await LegacyAgentRunSpecAdapter.fromSessionCreate({
+        (await SessionProfileCompiler.compile({
           session: result,
           directory: result.directory,
           permission: result.permission,

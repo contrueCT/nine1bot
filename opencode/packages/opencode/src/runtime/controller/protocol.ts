@@ -115,6 +115,7 @@ export namespace RuntimeControllerProtocol {
     noReply: z.boolean().optional(),
     tools: z.record(z.string(), z.boolean()).optional(),
     model: ModelChoice.optional(),
+    agent: z.string().optional(),
     entry: Entry,
     runtimeOverride: RuntimeOverride,
     clientCapabilities: ClientCapabilities.optional(),

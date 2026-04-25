@@ -203,6 +203,10 @@ export type AuditSpec = {
   templates: string[]
   modelSource: string
   agentSource: string
+  agentOverrideIgnored?: {
+    requested: string
+    profile: string
+  }
   profileSnapshotId?: string
   turnSnapshotId?: string
   contextBlocks: Array<{ id: string; source: string; enabled: boolean }>

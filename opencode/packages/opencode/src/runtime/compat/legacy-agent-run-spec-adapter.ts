@@ -8,6 +8,7 @@ import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
 import { RuntimeContextEvents } from "@/runtime/context/events"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
+import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import { ulid } from "ulid"
 import {
   AGENT_RUNTIME_PROTOCOL_VERSION,
@@ -44,11 +45,12 @@ export namespace LegacyAgentRunSpecAdapter {
     const profile =
       storedProfile ??
       (profileSnapshotEnabled
-        ? await fromSessionCreate({
+        ? await SessionProfileCompiler.compile({
             session: input.session,
             directory: input.session.directory,
             permission: input.session.permission,
             source: "legacy-resumed",
+            templateIds: ["default-user-template", "legacy-session-create"],
           })
         : undefined)
     if (profile && body.agent && body.agent !== profile.agent.name) {
@@ -157,44 +159,10 @@ export namespace LegacyAgentRunSpecAdapter {
   }
 
   export async function fromSessionCreate(input: SessionCreateInput): Promise<SessionProfileSnapshot> {
-    const agent = await resolveAgent(input.agentName)
-    const defaultModel = agent.model ?? (await Provider.defaultModel())
-    const resourceResolverEnabled = await RuntimeFeatureFlags.resourceResolverEnabled()
-    return {
-      id: ulid(),
-      sessionId: input.session?.id,
-      createdAt: Date.now(),
-      source: input.source ?? (input.session ? "legacy-resumed" : "new-session"),
-      sourceTemplateIds: [
-        "default-user-template",
-        "legacy-session-create",
-        ...(resourceResolverEnabled ? [RuntimeResourceResolver.resourceTemplateId()] : []),
-      ],
-      agent: {
-        name: agent.name,
-        source: input.agentName ? "session-choice" : "default-user-template",
-      },
-      defaultModel: {
-        providerID: defaultModel.providerID,
-        modelID: defaultModel.modelID,
-        source: "default-user-template",
-      },
-      context: {
-        blocks: [],
-      },
-      resources: resourceResolverEnabled
-        ? await RuntimeResourceResolver.compileProfileResources()
-        : RuntimeResourceResolver.emptyResources(),
-      permissions: {
-        rules: input.permission && typeof input.permission === "object" ? (input.permission as Record<string, unknown>) : {},
-        source: ["legacy-session-create"],
-        mergeMode: "strict",
-      },
-      sessionPermissionGrants: [],
-      orchestration: {
-        mode: "single",
-      },
-    }
+    return SessionProfileCompiler.compile({
+      ...input,
+      templateIds: ["default-user-template", "legacy-session-create"],
+    })
   }
 
   async function resolveAgent(agentName?: string) {
