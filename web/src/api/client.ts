@@ -3,6 +3,7 @@ import {
   normalizeRuntimeEventEnvelope,
   type RuntimeEventEnvelope,
 } from './runtime-events'
+import type { RequestPagePayload } from './page-context'
 
 const BASE_URL = ''  // 使用相对路径，由 vite proxy 或同源处理
 
@@ -53,15 +54,15 @@ function normalizeSession(session: Session): Session {
   }
 }
 
-function webClientCapabilities() {
+function webClientCapabilities(page?: RequestPagePayload) {
   return {
     interactions: true,
     permissionRequests: true,
     questionRequests: true,
     artifacts: true,
     filePreview: true,
-    pageContext: false,
-    selectionContext: false,
+    pageContext: Boolean(page),
+    selectionContext: Boolean(page?.selection),
     debug: true,
     resourceFailures: true,
     contextAudit: true,
@@ -325,7 +326,8 @@ export const api = {
   async sendMessage(
     sessionId: string,
     content: string,
-    files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>
+    files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
+    pageContext?: RequestPagePayload
   ): Promise<{ accepted: boolean; sessionId: string; turnSnapshotId?: string; busy?: boolean }> {
     const parts: any[] = []
 
@@ -342,12 +344,20 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         parts,
-        entry: {
-          source: 'web',
-          mode: 'web-chat',
-          templateIds: ['default-user-template', 'web-chat'],
-        },
-        clientCapabilities: webClientCapabilities(),
+        entry: pageContext
+          ? {
+              source: 'browser-extension',
+              platform: pageContext.platform,
+              mode: 'browser-sidepanel',
+              templateIds: ['default-user-template', 'browser-sidepanel'],
+            }
+          : {
+              source: 'web',
+              mode: 'web-chat',
+              templateIds: ['default-user-template', 'web-chat'],
+            },
+        ...(pageContext ? { context: { page: pageContext } } : {}),
+        clientCapabilities: webClientCapabilities(pageContext),
       })
     })
 

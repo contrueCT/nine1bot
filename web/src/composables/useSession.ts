@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, type TodoItem, questionApi, permissionApi, SessionBusyError, setApiDirectory } from '../api/client'
+import { collectActivePageContext } from '../api/page-context'
 import { useParallelSessions, MAX_PARALLEL_AGENTS } from './useParallelSessions'
 
 export function useSession() {
@@ -283,7 +284,11 @@ export function useSession() {
       }
 
       subscribeToSessionRuntimeEvents(sessionId)
-      await api.sendMessage(sessionId, content, files)
+      const pageContext = await collectActivePageContext().catch((error) => {
+        console.warn('Failed to collect active page context:', error)
+        return undefined
+      })
+      await api.sendMessage(sessionId, content, files, pageContext)
     } catch (error: any) {
       // Ignore abort errors
       const errorMessage = error.message?.toLowerCase() || ''

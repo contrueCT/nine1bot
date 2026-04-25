@@ -2,6 +2,7 @@ import z from "zod"
 import { ulid } from "ulid"
 import { Instance } from "@/project/instance"
 import { Storage } from "@/storage/storage"
+import { RuntimeGitLabPageAdapter } from "@/runtime/context/adapters/gitlab"
 import { RuntimeContextPipeline } from "@/runtime/context/pipeline"
 import type { ContextBlock } from "@/runtime/protocol/agent-run-spec"
 
@@ -59,10 +60,11 @@ export namespace RuntimeContextEvents {
     page?: RequestPagePayload
   }): Promise<PreparedPageEvent | undefined> {
     if (!input.page) return undefined
+    const page = normalizePagePayload(input.page)
     const observedAt = Date.now()
-    const pageKey = pageKeyFor(input.page)
-    const digest = RuntimeContextPipeline.digest(pageDigestPayload(input.page))
-    const selectionDigest = input.page.selection ? RuntimeContextPipeline.textDigest(input.page.selection) : undefined
+    const pageKey = pageKeyFor(page)
+    const digest = RuntimeContextPipeline.digest(pageDigestPayload(page))
+    const selectionDigest = page.selection ? RuntimeContextPipeline.textDigest(page.selection) : undefined
     const state: PageContextState = {
       pageKey,
       digest,
@@ -70,7 +72,7 @@ export namespace RuntimeContextEvents {
       observedAt,
     }
     const previous = await readState(input)
-    const blocks = blocksFromPagePayload(input.page, observedAt)
+    const blocks = blocksFromPagePayload(page, observedAt)
     const type = eventType(previous, state)
     if (!type) {
       return {
@@ -88,8 +90,8 @@ export namespace RuntimeContextEvents {
         digest,
         selectionDigest,
         observedAt,
-        source: `page-context.${input.page.platform}`,
-        summary: summaryFor(input.page, type),
+        source: `page-context.${page.platform}`,
+        summary: summaryFor(page, type),
         blocks: type === "selection-update" ? blocks.filter((block) => block.id.includes("selection")) : blocks,
       },
     }
@@ -155,35 +157,46 @@ export namespace RuntimeContextEvents {
   }
 
   export function blocksFromPagePayload(page: RequestPagePayload, observedAt = Date.now()): ContextBlock[] {
+    const adapted = normalizePagePayload(page)
+    const adapterBlocks = RuntimeGitLabPageAdapter.blocksFromPage(adapted, observedAt)
+    if (adapterBlocks) return adapterBlocks
+
     const blocks: ContextBlock[] = [
       RuntimeContextPipeline.textBlock({
-        id: `platform:${page.platform}`,
+        id: `platform:${adapted.platform}`,
         layer: "platform",
-        source: `page-context.${page.platform}`,
-        content: renderPage(page),
+        source: `page-context.${adapted.platform}`,
+        content: renderPage(adapted),
         lifecycle: "turn",
         visibility: "developer-toggle",
         priority: 60,
-        mergeKey: pageKeyFor(page),
+        mergeKey: pageKeyFor(adapted),
         observedAt,
       }),
     ]
-    if (page.selection?.trim()) {
+    if (adapted.selection?.trim()) {
       blocks.push(
         RuntimeContextPipeline.textBlock({
-          id: `page:selection:${RuntimeContextPipeline.textDigest(page.selection).slice(0, 12)}`,
+          id: `page:selection:${RuntimeContextPipeline.textDigest(adapted.selection).slice(0, 12)}`,
           layer: "page",
-          source: `page-context.${page.platform}.selection`,
-          content: `Current page selection:\n${page.selection.trim()}`,
+          source: `page-context.${adapted.platform}.selection`,
+          content: `Current page selection:\n${adapted.selection.trim()}`,
           lifecycle: "turn",
           visibility: "developer-toggle",
           priority: 55,
-          mergeKey: `${pageKeyFor(page)}:selection`,
+          mergeKey: `${pageKeyFor(adapted)}:selection`,
           observedAt,
         }),
       )
     }
     return blocks
+  }
+
+  export function normalizePagePayload(page: RequestPagePayload): RequestPagePayload {
+    if (page.platform === "gitlab" || RuntimeGitLabPageAdapter.parseGitLabUrl(page.url)) {
+      return RuntimeGitLabPageAdapter.adapt({ ...page, platform: "gitlab" }) as RequestPagePayload
+    }
+    return page
   }
 
   function eventType(previous: PageContextState | undefined, next: PageContextState): ContextEvent["type"] | undefined {

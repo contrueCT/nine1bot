@@ -1,4 +1,5 @@
 const DEFAULT_SERVER_ORIGIN = 'http://127.0.0.1:4096'
+let currentFrameOrigin = DEFAULT_SERVER_ORIGIN
 
 function normalizeServerOrigin(serverOrigin: string): string {
   try {
@@ -76,6 +77,7 @@ async function mountFrame(): Promise<void> {
   const frame = document.getElementById('app-frame') as HTMLIFrameElement | null
   if (!frame) return
 
+  currentFrameOrigin = normalizeServerOrigin(targetUrl)
   showFallback(targetUrl, false)
   frame.src = targetUrl
 
@@ -93,9 +95,51 @@ async function mountFrame(): Promise<void> {
   }
 }
 
+async function handleFrameMessage(event: MessageEvent): Promise<void> {
+  const frame = document.getElementById('app-frame') as HTMLIFrameElement | null
+  if (!frame || event.source !== frame.contentWindow) return
+  if (event.origin !== currentFrameOrigin) return
+
+  const message = event.data as { type?: string; requestId?: unknown } | undefined
+  if (message?.type !== 'nine1bot.requestPageContext' || typeof message.requestId !== 'string') return
+
+  const payload = await collectActiveTabPageContext().catch((error) => {
+    console.warn('[SidePanel] Failed to collect page context:', error)
+    return undefined
+  })
+
+  frame.contentWindow?.postMessage(
+    {
+      type: 'nine1bot.pageContext',
+      requestId: message.requestId,
+      payload,
+    },
+    currentFrameOrigin,
+  )
+}
+
+async function collectActiveTabPageContext(): Promise<unknown | undefined> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  if (!tab?.id) return undefined
+
+  const response = await chrome.tabs.sendMessage(tab.id, {
+    type: 'nine1bot-content-request',
+    action: 'collectPageContext',
+    params: {},
+  }).catch(() => undefined)
+
+  if (!response?.success) return undefined
+  return response.result
+}
+
 async function init(): Promise<void> {
   const connected = await checkExtensionHealth()
   setStatus(connected)
+  window.addEventListener('message', (event) => {
+    handleFrameMessage(event).catch((error) => {
+      console.warn('[SidePanel] Failed to handle frame message:', error)
+    })
+  })
   await mountFrame()
 
   const reloadButton = document.getElementById('reload')

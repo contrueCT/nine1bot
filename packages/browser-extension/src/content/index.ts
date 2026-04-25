@@ -5,6 +5,8 @@
  * that need to run in the context of the page.
  */
 
+import { buildPageContextPayload } from '../page-context/gitlab'
+
 console.log('[Nine1Bot Content Script] Loaded on:', window.location.href)
 
 // Listen for messages from the background service worker
@@ -26,6 +28,9 @@ async function handleContentRequest(action: string, params: unknown): Promise<un
         title: document.title,
         readyState: document.readyState,
       }
+
+    case 'collectPageContext':
+      return collectPageContext()
 
     case 'scrollTo':
       const { x = 0, y = 0 } = params as { x?: number; y?: number }
@@ -81,6 +86,46 @@ async function handleContentRequest(action: string, params: unknown): Promise<un
     default:
       throw new Error(`Unknown action: ${action}`)
   }
+}
+
+function collectPageContext() {
+  return buildPageContextPayload({
+    url: window.location.href,
+    title: document.title,
+    selection: window.getSelection()?.toString(),
+    visibleSummary: collectVisibleTextSummary(),
+    raw: {
+      gitlab: collectGitLabDomHints(),
+    },
+  })
+}
+
+function collectVisibleTextSummary(maxLength = 2000): string | undefined {
+  const root =
+    document.querySelector<HTMLElement>('main') ||
+    document.querySelector<HTMLElement>('[role="main"]') ||
+    document.body
+  const text = root?.innerText || root?.textContent || ''
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (!normalized) return undefined
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength).trim()}...` : normalized
+}
+
+function collectGitLabDomHints(): Record<string, unknown> | undefined {
+  const projectName =
+    document.querySelector<HTMLElement>('[data-testid="breadcrumb-current-link"]')?.innerText?.trim() ||
+    document.querySelector<HTMLElement>('.breadcrumb-item-text')?.innerText?.trim()
+  const pageTitle =
+    document.querySelector<HTMLElement>('[data-testid="issuable-title"]')?.innerText?.trim() ||
+    document.querySelector<HTMLElement>('.merge-request-title')?.innerText?.trim()
+  const status =
+    document.querySelector<HTMLElement>('[data-testid="issuable-state"]')?.innerText?.trim() ||
+    document.querySelector<HTMLElement>('.issuable-status-box')?.innerText?.trim()
+  const hints: Record<string, unknown> = {}
+  if (projectName) hints.projectName = projectName
+  if (pageTitle) hints.pageTitle = pageTitle
+  if (status) hints.status = status
+  return Object.keys(hints).length ? hints : undefined
 }
 
 // Notify background that content script is ready
