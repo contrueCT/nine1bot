@@ -47,6 +47,7 @@ import { iife } from "@/util/iife"
 import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncation"
 import { ProjectEnvironment } from "@/project/environment"
+import { RuntimeTiming } from "./timing"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -294,14 +295,17 @@ export namespace SessionPrompt {
     release,
   }
 
-  async function acceptPrompt(input: PromptInput) {
+  async function acceptPrompt(input: PromptInput, timing?: RuntimeTiming.Trace) {
     const abort = reserve(input.sessionID)
+    timing?.mark("busy.reserved")
     const session = await Session.get(input.sessionID)
+    timing?.mark("session.loaded", { directory: session.directory })
     try {
-      await SessionRevert.cleanup(session)
+      await RuntimeTiming.measure(timing, "revert.cleanup", () => SessionRevert.cleanup(session))
 
-      const message = await createUserMessage(input, session)
+      const message = await RuntimeTiming.measure(timing, "user_message.create", () => createUserMessage(input, session))
       await Session.touch(input.sessionID)
+      timing?.mark("session.touched", { messageID: message.info.id })
 
       // this is backwards compatibility for allowing `tools` to be specified when
       // prompting
@@ -318,6 +322,7 @@ export namespace SessionPrompt {
         await Session.update(session.id, (draft) => {
           draft.permission = permissions
         })
+        timing?.mark("legacy_tools_permissions.applied", { count: permissions.length })
       }
 
       return {
@@ -331,23 +336,31 @@ export namespace SessionPrompt {
   }
 
   export const prompt = fn(PromptInput, async (input) => {
-    const accepted = await acceptPrompt(input)
+    const timing = RuntimeTiming.start({ sessionID: input.sessionID, operation: "prompt", source: "session.prompt" })
+    const accepted = await acceptPrompt(input, timing)
     if (input.noReply === true) {
       release(input.sessionID)
+      timing.mark("prompt.no_reply.completed")
       return accepted.message
     }
 
-    return loopWithAbort(input.sessionID, accepted.abort)
+    return loopWithAbort(input.sessionID, accepted.abort, timing)
   })
 
   export const promptAsync = fn(PromptInput, async (input) => {
-    const accepted = await acceptPrompt(input)
+    const timing = RuntimeTiming.start({
+      sessionID: input.sessionID,
+      operation: "prompt_async",
+      source: "session.prompt_async",
+    })
+    const accepted = await acceptPrompt(input, timing)
     if (input.noReply === true) {
       release(input.sessionID)
+      timing.mark("prompt_async.no_reply.completed")
       return
     }
 
-    void loopWithAbort(input.sessionID, accepted.abort).catch((error) =>
+    void loopWithAbort(input.sessionID, accepted.abort, timing).catch((error) =>
       log.error("prompt_async failed", { sessionID: input.sessionID, error }),
     )
   })
@@ -408,15 +421,23 @@ export namespace SessionPrompt {
     release(sessionID, { abort: true })
   }
 
-  async function loopWithAbort(sessionID: string, abort: AbortSignal) {
+  async function loopWithAbort(sessionID: string, abort: AbortSignal, timing?: RuntimeTiming.Trace) {
     using _ = defer(() => release(sessionID))
 
     let step = 0
     const session = await Session.get(sessionID)
+    timing?.mark("loop.session.loaded")
     while (true) {
       log.info("loop", { step, sessionID })
+      timing?.mark("loop.step.started", { step })
       if (abort.aborted) break
-      let msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
+      let msgs = await RuntimeTiming.measure(
+        timing,
+        "history.load",
+        () => MessageV2.filterCompacted(MessageV2.stream(sessionID)),
+        { step },
+      )
+      timing?.mark("history.loaded", { step, messageCount: msgs.length })
 
       let lastUser: MessageV2.User | undefined
       let lastAssistant: MessageV2.Assistant | undefined
@@ -457,7 +478,12 @@ export namespace SessionPrompt {
       // 获取模型，如果模型不存在则发布错误事件并退出循环（不崩溃）
       let model
       try {
-        model = await Provider.getModel(lastUser.model.providerID, lastUser.model.modelID)
+        model = await RuntimeTiming.measure(
+          timing,
+          "model.resolve",
+          () => Provider.getModel(lastUser.model.providerID, lastUser.model.modelID),
+          { step, providerID: lastUser.model.providerID, modelID: lastUser.model.modelID },
+        )
       } catch (e) {
         if (Provider.ModelNotFoundError.isInstance(e)) {
           const { providerID, modelID, suggestions } = e.data
@@ -678,7 +704,12 @@ export namespace SessionPrompt {
 
       // pre-flight context window check: estimate token count before sending
       if (model.limit.context > 0) {
-        const modelMessages = MessageV2.toModelMessages(clone(msgs), model)
+        const modelMessages = await RuntimeTiming.measure(
+          timing,
+          "messages.to_model.preflight",
+          () => MessageV2.toModelMessages(clone(msgs), model),
+          { step },
+        )
         let charCount = 0
         for (const msg of modelMessages) {
           if (typeof msg.content === "string") {
@@ -696,20 +727,31 @@ export namespace SessionPrompt {
         const usable = model.limit.input || model.limit.context - outputReserve
         if (estimatedTokens > usable) {
           log.info("pre-flight overflow detected", { estimatedTokens, usable, sessionID })
+          timing?.mark("context_window.overflow", { step, estimatedTokens, usable })
           await SessionCompaction.prune({ sessionID })
           msgs = await MessageV2.filterCompacted(MessageV2.stream(sessionID))
         }
+        timing?.mark("context_window.checked", { step, estimatedTokens, usable })
       }
 
       // normal processing
-      const agent = await Agent.get(lastUser.agent)
+      const agent = await RuntimeTiming.measure(timing, "agent.resolve", () => Agent.get(lastUser.agent), {
+        step,
+        agent: lastUser.agent,
+      })
       const maxSteps = agent.steps ?? Infinity
       const isLastStep = step >= maxSteps
-      msgs = await insertReminders({
-        messages: msgs,
-        agent,
-        session,
-      })
+      msgs = await RuntimeTiming.measure(
+        timing,
+        "reminders.insert",
+        () =>
+          insertReminders({
+            messages: msgs,
+            agent,
+            session,
+          }),
+        { step },
+      )
 
       const processor = SessionProcessor.create({
         assistantMessage: (await Session.updateMessage({
@@ -740,20 +782,28 @@ export namespace SessionPrompt {
         model,
         abort,
       })
+      timing?.mark("assistant_message.created", { step, messageID: processor.message.id })
 
       // Check if user explicitly invoked an agent via @ in this turn
       const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
       const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
 
-      const tools = await resolveTools({
-        agent,
-        session,
-        model,
-        tools: lastUser.tools,
-        processor,
-        bypassAgentCheck,
-        messages: msgs,
-      })
+      const tools = await RuntimeTiming.measure(
+        timing,
+        "resources.resolve",
+        () =>
+          resolveTools({
+            agent,
+            session,
+            model,
+            tools: lastUser.tools,
+            processor,
+            bypassAgentCheck,
+            messages: msgs,
+          }),
+        { step },
+      )
+      timing?.mark("resources.resolved", { step, toolCount: Object.keys(tools).length })
 
       if (step === 1) {
         SessionSummary.summarize({
@@ -763,19 +813,46 @@ export namespace SessionPrompt {
       }
 
       const sessionMessages = clone(msgs)
-      await Plugin.trigger("experimental.chat.messages.transform", {}, { messages: sessionMessages })
+      await RuntimeTiming.measure(
+        timing,
+        "messages.plugin_transform",
+        () => Plugin.trigger("experimental.chat.messages.transform", {}, { messages: sessionMessages }),
+        { step },
+      )
+
+      const environmentSystem = await RuntimeTiming.measure(
+        timing,
+        "system.environment",
+        () => SystemPrompt.environment(model, session.directory),
+        { step },
+      )
+      const instructionSystem = await RuntimeTiming.measure(
+        timing,
+        "system.instructions",
+        () => InstructionPrompt.system(),
+        { step },
+      )
+      const modelMessages = await RuntimeTiming.measure(
+        timing,
+        "messages.to_model",
+        () => MessageV2.toModelMessages(sessionMessages, model),
+        { step },
+      )
+      timing?.mark("llm.input.prepared", {
+        step,
+        systemBlocks: environmentSystem.length + instructionSystem.length,
+        messageCount: modelMessages.length,
+        toolCount: Object.keys(tools).length,
+      })
 
       const result = await processor.process({
         user: lastUser,
         agent,
         abort,
         sessionID,
-        system: [
-          ...(await SystemPrompt.environment(model, session.directory)),
-          ...(await InstructionPrompt.system()),
-        ],
+        system: [...environmentSystem, ...instructionSystem],
         messages: [
-          ...MessageV2.toModelMessages(sessionMessages, model),
+          ...modelMessages,
           ...(isLastStep
             ? [
                 {
@@ -787,7 +864,8 @@ export namespace SessionPrompt {
         ],
         tools,
         model,
-      })
+      }, { timing })
+      timing?.mark("processor.process.completed", { step, result })
       if (result === "stop") break
       if (result === "compact") {
         await SessionCompaction.create({

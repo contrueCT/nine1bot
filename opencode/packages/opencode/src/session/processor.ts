@@ -15,6 +15,7 @@ import { Config } from "@/config/config"
 import { SessionCompaction } from "./compaction"
 import { PermissionNext } from "@/permission/next"
 import { Question } from "@/question"
+import type { RuntimeTiming } from "./timing"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
@@ -76,20 +77,25 @@ export namespace SessionProcessor {
       partFromToolCall(toolCallID: string) {
         return toolcalls[toolCallID]
       },
-      async process(streamInput: LLM.StreamInput) {
+      async process(streamInput: LLM.StreamInput, options?: { timing?: RuntimeTiming.Trace }) {
         log.info("process")
+        const timing = options?.timing
+        timing?.mark("processor.process.started")
         needsCompaction = false
         const shouldBreak = (await Config.get()).experimental?.continue_loop_on_deny !== true
         while (true) {
           try {
             let currentText: MessageV2.TextPart | undefined
             let reasoningMap: Record<string, MessageV2.ReasoningPart> = {}
+            timing?.mark("llm.stream.call.started", { attempt })
             const stream = await LLM.stream(streamInput)
+            timing?.mark("llm.stream.call.completed", { attempt })
 
             for await (const value of stream.fullStream) {
               input.abort.throwIfAborted()
               switch (value.type) {
                 case "start":
+                  timing?.mark("llm.stream.first_event", { attempt })
                   SessionStatus.set(input.sessionID, { type: "busy" })
                   break
 
