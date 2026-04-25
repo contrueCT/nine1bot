@@ -15,4 +15,9 @@ export namespace RuntimeFeatureFlags {
     const config = await Config.get()
     return config.runtime?.contextPipeline?.enabled ?? true
   }
+
+  export async function resourceResolverEnabled() {
+    const config = await Config.get()
+    return config.runtime?.resourceResolver?.enabled ?? true
+  }
 }

@@ -11,6 +11,11 @@ export namespace Tool {
 
   export interface InitContext {
     agent?: Agent.Info
+    skills?: Array<{
+      name: string
+      description: string
+      location: string
+    }>
   }
 
   export type Context<M extends Metadata = Metadata> = {

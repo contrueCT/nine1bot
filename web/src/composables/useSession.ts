@@ -509,6 +509,16 @@ export function useSession() {
         }
         break
 
+      case 'runtime.resource.failed':
+        if (properties?.sessionID && currentSession.value && properties.sessionID !== currentSession.value.id) {
+          break
+        }
+        sessionError.value = {
+          message: properties?.message || '资源不可用，请检查当前配置',
+          dismissable: true
+        }
+        break
+
       case 'session.idle':
         // Note: session running state is handled by handleGlobalSSEEvent
         if (properties?.sessionID && currentSession.value && properties.sessionID !== currentSession.value.id) {

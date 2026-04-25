@@ -160,6 +160,7 @@ export type SkillResourceSpec = {
 export type ResourceAvailability = {
   declared: boolean
   status: "unknown" | "available" | "degraded" | "unavailable" | "auth-required"
+  reason?: string
   checkedAt?: number
   error?: string
 }

@@ -55,6 +55,7 @@ import type { SessionProfileSnapshot } from "@/runtime/protocol/agent-run-spec"
 import { RuntimeContextEvents } from "@/runtime/context/events"
 import { RuntimeContextLegacy } from "@/runtime/context/legacy"
 import { RuntimeContextPipeline } from "@/runtime/context/pipeline"
+import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -72,10 +73,10 @@ export namespace SessionPrompt {
     "application/vnd.ms-excel": { type: "Excel spreadsheet (legacy)", skill: "xlsx" },
   }
 
-  function describeUploadedFile(mime: string) {
+  function describeUploadedFile(mime: string, availableSkills?: Set<string>) {
     const fileInfo = uploadedFileTypeMap[mime]
     const fileTypeDesc = fileInfo ? `a ${fileInfo.type}` : mime.startsWith("image/") ? "an image" : "a file"
-    const skillHint = fileInfo?.skill
+    const skillHint = fileInfo?.skill && (availableSkills === undefined || availableSkills.has(fileInfo.skill))
       ? `, or invoke the appropriate skill (e.g., /${fileInfo.skill}) for advanced operations`
       : ""
     return {
@@ -165,8 +166,9 @@ export namespace SessionPrompt {
     },
     uploadFilePath: string,
     filename?: string,
+    availableSkills?: Set<string>,
   ) {
-    const { fileTypeDesc, skillHint } = describeUploadedFile(part.mime)
+    const { fileTypeDesc, skillHint } = describeUploadedFile(part.mime, availableSkills)
     const displayName = filename || part.filename || path.basename(uploadFilePath)
 
     return [
@@ -396,6 +398,15 @@ export namespace SessionPrompt {
       timing?.mark("runtime_profile.legacy_resumed", { profileSnapshotID: profile.id })
     }
 
+    if (await RuntimeFeatureFlags.resourceResolverEnabled()) {
+      const resourceProfile = await RuntimeResourceResolver.withProfileResources(profile)
+      if (resourceProfile !== profile) {
+        profile = resourceProfile
+        await SessionRuntimeProfile.write(current, profile)
+        timing?.mark("runtime_profile.resources.backfilled", { profileSnapshotID: profile.id })
+      }
+    }
+
     if (input.model && input.runtimeModelSource === "session-choice") {
       const runtimeModel = SessionRuntimeProfile.currentModel(input.model, "session-choice")
       const runtime = SessionRuntimeProfile.withCurrentModel(
@@ -526,6 +537,7 @@ export namespace SessionPrompt {
     let step = 0
     const session = await Session.get(sessionID)
     let contextCache: { userMessageID: string; compiled: RuntimeContextPipeline.CompiledContext } | undefined
+    let resourceCache: { userMessageID: string; resolved: RuntimeResourceResolver.Resolved } | undefined
     timing?.mark("loop.session.loaded")
     while (true) {
       log.info("loop", { step, sessionID })
@@ -891,8 +903,22 @@ export namespace SessionPrompt {
       const tools = await RuntimeTiming.measure(
         timing,
         "resources.resolve",
-        () =>
-          resolveTools({
+        async () => {
+          const resolvedResources = (await RuntimeFeatureFlags.resourceResolverEnabled())
+            ? resourceCache?.userMessageID === lastUser.id
+              ? resourceCache.resolved
+              : await RuntimeResourceResolver.resolve({
+                  sessionID,
+                  profile: await SessionRuntimeProfile.read(session),
+                })
+            : undefined
+          if (resolvedResources) {
+            resourceCache = {
+              userMessageID: lastUser.id,
+              resolved: resolvedResources,
+            }
+          }
+          return resolveTools({
             agent,
             session,
             model,
@@ -900,10 +926,18 @@ export namespace SessionPrompt {
             processor,
             bypassAgentCheck,
             messages: msgs,
-          }),
+            resources: resolvedResources,
+          })
+        },
         { step },
       )
-      timing?.mark("resources.resolved", { step, toolCount: Object.keys(tools).length })
+      timing?.mark("resources.resolved", {
+        step,
+        toolCount: Object.keys(tools).length,
+        mcpServers: resourceCache?.resolved.mcp.availableServers.length,
+        skills: resourceCache?.resolved.skills.availableSkills.length,
+        failures: resourceCache?.resolved.failures.length,
+      })
 
       if (step === 1) {
         SessionSummary.summarize({
@@ -1054,6 +1088,7 @@ export namespace SessionPrompt {
     processor: SessionProcessor.Info
     bypassAgentCheck: boolean
     messages: MessageV2.WithParts[]
+    resources?: RuntimeResourceResolver.Resolved
   }) {
     using _ = log.time("resolveTools")
     const tools: Record<string, AITool> = {}
@@ -1097,6 +1132,7 @@ export namespace SessionPrompt {
     for (const item of await ToolRegistry.tools(
       { modelID: input.model.api.id, providerID: input.model.providerID },
       input.agent,
+      { skills: input.resources?.skills.availableSkills },
     )) {
       const schema = ProviderTransform.schema(input.model, z.toJSONSchema(item.parameters))
       tools[item.id] = tool({
@@ -1135,7 +1171,26 @@ export namespace SessionPrompt {
     // This ensures local MCP processes use session directory as cwd
     const mcpTools = await Instance.provide({
       directory: input.session.directory,
-      fn: () => MCP.tools(),
+      fn: () =>
+        MCP.tools({
+          servers: input.resources?.mcp.availableServers,
+          onFailure: async (failure) => {
+            await Bus.publish(RuntimeResourceResolver.Failed, {
+              sessionID: input.session.id,
+              resourceType: "mcp",
+              resourceID: failure.server,
+              status: failure.stage === "auth" ? "auth-required" : "unavailable",
+              stage: failure.stage,
+              reason: failure.reason,
+              message: failure.message,
+              recoverable: true,
+              action: {
+                type: "retry",
+                label: "Retry MCP connection",
+              },
+            })
+          },
+        }),
     })
 
     for (const [key, item] of Object.entries(mcpTools)) {
@@ -1234,6 +1289,20 @@ export namespace SessionPrompt {
 
   async function createUserMessage(input: PromptInput, session: Session.Info) {
     const agent = await Agent.get(input.agent ?? (await Agent.defaultAgent()))
+    const needsSkillHint = input.parts.some(
+      (part) => part.type === "file" && uploadedFileTypeMap[part.mime]?.skill,
+    )
+    const profile =
+      needsSkillHint && (await RuntimeFeatureFlags.resourceResolverEnabled())
+        ? await SessionRuntimeProfile.read(session)
+        : undefined
+    const resolvedResources =
+      profile && (await RuntimeFeatureFlags.resourceResolverEnabled())
+        ? await RuntimeResourceResolver.resolve({ sessionID: session.id, profile, emitFailures: false })
+        : undefined
+    const availableSkills = resolvedResources
+      ? new Set(resolvedResources.skills.availableSkills.map((skill) => skill.name))
+      : undefined
     const info: MessageV2.Info = {
       id: input.messageID ?? Identifier.ascending("message"),
       role: "user",
@@ -1332,7 +1401,7 @@ export namespace SessionPrompt {
 
                 log.info("saved uploaded file", { path: saved.uploadFilePath, mime: part.mime })
 
-                return createManagedUploadParts(input, info, part, saved.uploadFilePath, saved.filename)
+                return createManagedUploadParts(input, info, part, saved.uploadFilePath, saved.filename, availableSkills)
               }
             case "file:":
               log.info("file", { mime: part.mime })
@@ -1386,7 +1455,14 @@ export namespace SessionPrompt {
               }
 
               FileTime.read(input.sessionID, filepath)
-              return createManagedUploadParts(input, info, part, filepath, part.filename ?? path.basename(filepath))
+              return createManagedUploadParts(
+                input,
+                info,
+                part,
+                filepath,
+                part.filename ?? path.basename(filepath),
+                availableSkills,
+              )
           }
         }
 

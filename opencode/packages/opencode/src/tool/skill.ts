@@ -6,7 +6,7 @@ import { ConfigMarkdown } from "../config/markdown"
 import { PermissionNext } from "../permission/next"
 
 export const SkillTool = Tool.define("skill", async (ctx) => {
-  const skills = await Skill.all()
+  const skills = ctx?.skills ?? (await Skill.all())
 
   // Filter skills by agent permissions if agent provided
   const agent = ctx?.agent
@@ -49,10 +49,10 @@ export const SkillTool = Tool.define("skill", async (ctx) => {
     description,
     parameters,
     async execute(params: z.infer<typeof parameters>, ctx) {
-      const skill = await Skill.get(params.name)
+      const skill = accessibleSkills.find((item) => item.name === params.name)
 
       if (!skill) {
-        const available = await Skill.all().then((x) => Object.keys(x).join(", "))
+        const available = accessibleSkills.map((item) => item.name).join(", ")
         throw new Error(`Skill "${params.name}" not found. Available skills: ${available || "none"}`)
       }
 

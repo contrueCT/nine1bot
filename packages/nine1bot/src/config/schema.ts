@@ -71,6 +71,7 @@ export const RuntimeConfigSchema = z.object({
   agentRunSpec: RuntimeFeatureFlagSchema.default({}),
   profileSnapshot: RuntimeFeatureFlagSchema.default({}),
   contextPipeline: RuntimeFeatureFlagSchema.default({}),
+  resourceResolver: RuntimeFeatureFlagSchema.default({}),
 })
 
 export const FeishuConfigSchema = z

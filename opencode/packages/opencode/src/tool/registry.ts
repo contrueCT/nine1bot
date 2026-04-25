@@ -180,6 +180,7 @@ export namespace ToolRegistry {
       modelID: string
     },
     agent?: Agent.Info,
+    options?: Pick<Tool.InitContext, "skills">,
   ) {
     const tools = await all()
     const result = await Promise.all(
@@ -202,7 +203,7 @@ export namespace ToolRegistry {
           using _ = log.time(t.id)
           return {
             id: t.id,
-            ...(await t.init({ agent })),
+            ...(await t.init({ agent, skills: options?.skills })),
           }
         }),
     )

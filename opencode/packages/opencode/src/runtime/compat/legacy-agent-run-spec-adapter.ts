@@ -7,6 +7,7 @@ import { Log } from "@/util/log"
 import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
 import { RuntimeContextEvents } from "@/runtime/context/events"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
+import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 import { ulid } from "ulid"
 import {
   AGENT_RUNTIME_PROTOCOL_VERSION,
@@ -66,7 +67,7 @@ export namespace LegacyAgentRunSpecAdapter {
       allowLegacyHistoryModel: !!profile && !storedProfile,
     })
     const contextBlocks = legacyContextBlocks(body)
-    const resources = legacyResources(body.tools)
+    const resources = profile?.resources ?? legacyResources(body.tools)
     const templateIds = input.entry?.templateIds ?? ["legacy-session-message"]
     const now = Date.now()
 
@@ -126,8 +127,8 @@ export namespace LegacyAgentRunSpecAdapter {
           enabled: block.enabled,
         })),
         resources: {
-          mcp: [],
-          skills: [],
+          mcp: resources.mcp.servers,
+          skills: resources.skills.skills,
           builtinTools: Object.keys(body.tools ?? {}),
         },
         permissionSources: profile ? ["legacy-session", "profile-snapshot"] : ["legacy-session"],
@@ -157,12 +158,17 @@ export namespace LegacyAgentRunSpecAdapter {
   export async function fromSessionCreate(input: SessionCreateInput): Promise<SessionProfileSnapshot> {
     const agent = await resolveAgent()
     const defaultModel = agent.model ?? (await Provider.defaultModel())
+    const resourceResolverEnabled = await RuntimeFeatureFlags.resourceResolverEnabled()
     return {
       id: ulid(),
       sessionId: input.session?.id,
       createdAt: Date.now(),
       source: input.source ?? (input.session ? "legacy-resumed" : "new-session"),
-      sourceTemplateIds: ["default-user-template", "legacy-session-create"],
+      sourceTemplateIds: [
+        "default-user-template",
+        "legacy-session-create",
+        ...(resourceResolverEnabled ? [RuntimeResourceResolver.resourceTemplateId()] : []),
+      ],
       agent: {
         name: agent.name,
         source: "default-user-template",
@@ -175,7 +181,9 @@ export namespace LegacyAgentRunSpecAdapter {
       context: {
         blocks: [],
       },
-      resources: emptyResources(),
+      resources: resourceResolverEnabled
+        ? await RuntimeResourceResolver.compileProfileResources()
+        : RuntimeResourceResolver.emptyResources(),
       permissions: {
         rules: input.permission && typeof input.permission === "object" ? (input.permission as Record<string, unknown>) : {},
         source: ["legacy-session-create"],
@@ -299,18 +307,6 @@ export namespace LegacyAgentRunSpecAdapter {
   }
 
   function emptyResources(): ResourceSpec {
-    return {
-      builtinTools: {},
-      mcp: {
-        servers: [],
-        lifecycle: "session",
-        mergeMode: "additive-only",
-      },
-      skills: {
-        skills: [],
-        lifecycle: "session",
-        mergeMode: "additive-only",
-      },
-    }
+    return RuntimeResourceResolver.emptyResources()
   }
 }

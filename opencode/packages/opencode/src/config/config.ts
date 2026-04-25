@@ -917,6 +917,7 @@ export namespace Config {
       agentRunSpec: RuntimeFeatureFlag.optional().describe("Enable AgentRunSpec compatibility compilation"),
       profileSnapshot: RuntimeFeatureFlag.optional().describe("Enable session runtime profile snapshots"),
       contextPipeline: RuntimeFeatureFlag.optional().describe("Enable structured runtime context pipeline"),
+      resourceResolver: RuntimeFeatureFlag.optional().describe("Enable session runtime resource resolver"),
     })
     .strict()
     .meta({

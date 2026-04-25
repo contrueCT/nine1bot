@@ -1442,16 +1442,51 @@ export namespace MCP {
     log.info("removed MCP server", { name })
   }
 
-  export async function tools() {
+  export async function tools(options?: {
+    servers?: string[]
+    onFailure?: (failure: {
+      server: string
+      stage: "resolve" | "connect" | "auth"
+      message: string
+      reason?: string
+    }) => void | Promise<void>
+  }) {
+    if (options?.servers && options.servers.length === 0) return {}
+    await checkAndReloadMcpConfig()
     const cfg = await Config.get()
     const config = cfg.mcp ?? {}
     const s = await state()
     const defaultTimeout = cfg.experimental?.mcp_timeout
     const result: Record<string, Tool> = {}
+    const allowedServers = options?.servers ? new Set(options.servers) : undefined
 
     const clientsSnapshot = await clients()
+    if (allowedServers) {
+      for (const server of allowedServers) {
+        const entry = config[server]
+        if (!isMcpConfigured(entry) || entry.enabled === false) continue
+        const status = s.status[server]
+        if (!status || status.status === "connected") continue
+        const authRequired = status.status === "needs_auth" || status.status === "needs_client_registration"
+        await options?.onFailure?.({
+          server,
+          stage: authRequired ? "auth" : "connect",
+          reason: status.status,
+          message:
+            status.status === "failed" || status.status === "needs_client_registration"
+              ? status.error
+              : authRequired
+                ? `MCP server "${server}" requires authentication.`
+                : `MCP server "${server}" is not connected.`,
+        })
+      }
+    }
 
     for (const [clientName, client] of Object.entries(clientsSnapshot)) {
+      if (allowedServers && !allowedServers.has(clientName)) continue
+      const mcpConfig = config[clientName]
+      const entry = isMcpConfigured(mcpConfig) ? mcpConfig : undefined
+      if (!entry || entry.enabled === false) continue
       // Only include tools from connected MCPs (skip disabled ones)
       if (s.status[clientName]?.status !== "connected") {
         continue
@@ -1461,6 +1496,12 @@ export namespace MCP {
         log.error("failed to get tools", { clientName, error: e.message })
         const message = e instanceof Error ? e.message : String(e)
         void markFailed(clientName, message)
+        void options?.onFailure?.({
+          server: clientName,
+          stage: "resolve",
+          reason: "list-tools-failed",
+          message,
+        })
         return undefined
       })
       if (!toolsResult) {
@@ -1472,8 +1513,6 @@ export namespace MCP {
         checkedAt: new Date().toISOString(),
         tools: toolsResult.tools.length,
       }
-      const mcpConfig = config[clientName]
-      const entry = isMcpConfigured(mcpConfig) ? mcpConfig : undefined
       const timeout = entry?.timeout ?? defaultTimeout
       for (const mcpTool of toolsResult.tools) {
         const sanitizedClientName = clientName.replace(/[^a-zA-Z0-9_-]/g, "_")

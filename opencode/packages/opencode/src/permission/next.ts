@@ -141,7 +141,7 @@ export namespace PermissionNext {
       const runtimeRuleset = PermissionNext.merge(ruleset, profileRuleset)
 
       for (const pattern of request.patterns ?? []) {
-        const rule = evaluate(request.permission, pattern, runtimeRuleset)
+        const rule = evaluateWithSessionGrants(request.permission, pattern, ruleset, profileRuleset)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
 
         if (rule.action === "deny")
@@ -251,7 +251,8 @@ export namespace PermissionNext {
           if (pending.info.sessionID !== sessionID) continue
           const ok = pending.info.patterns.every(
             (pattern) =>
-              evaluate(pending.info.permission, pattern, pending.ruleset, sessionGrantRuleset).action === "allow",
+              evaluateWithSessionGrants(pending.info.permission, pattern, pending.ruleset, sessionGrantRuleset).action ===
+              "allow",
           )
           if (!ok) continue
           delete s.pending[id]
@@ -274,6 +275,20 @@ export namespace PermissionNext {
       (rule) => Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern),
     )
     return match ?? { action: "ask", permission, pattern: "*" }
+  }
+
+  export function evaluateWithSessionGrants(
+    permission: string,
+    pattern: string,
+    ruleset: Ruleset,
+    sessionGrants: Ruleset,
+  ): Rule {
+    const baseDeny = merge(ruleset).findLast(
+      (rule) =>
+        rule.action === "deny" && Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern),
+    )
+    if (baseDeny) return baseDeny
+    return evaluate(permission, pattern, ruleset, sessionGrants)
   }
 
   const EDIT_TOOLS = ["edit", "write", "patch", "multiedit"]
