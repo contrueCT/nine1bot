@@ -10,4 +10,9 @@ export namespace RuntimeFeatureFlags {
     const config = await Config.get()
     return config.runtime?.profileSnapshot?.enabled ?? true
   }
+
+  export async function contextPipelineEnabled() {
+    const config = await Config.get()
+    return config.runtime?.contextPipeline?.enabled ?? true
+  }
 }

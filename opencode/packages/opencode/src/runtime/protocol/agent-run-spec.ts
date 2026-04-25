@@ -113,7 +113,7 @@ export type ContextSpec = {
 
 export type ContextBlock = {
   id: string
-  layer: "base" | "project" | "user" | "business" | "platform" | "page" | "runtime" | "turn"
+  layer: "base" | "project" | "user" | "business" | "platform" | "page" | "runtime" | "turn" | "loop"
   source: string
   enabled: boolean
   priority: number
@@ -237,5 +237,18 @@ export type TurnRuntimeSnapshot = {
     tools?: Record<string, boolean>
     system?: string
     variant?: string
+    context?: {
+      blocks?: ContextBlock[]
+      page?: {
+        platform: "gitlab" | "generic-browser" | "feishu"
+        url?: string
+        pageType?: string
+        title?: string
+        objectKey?: string
+        selection?: string
+        visibleSummary?: string
+        raw?: Record<string, unknown>
+      }
+    }
   }
 }

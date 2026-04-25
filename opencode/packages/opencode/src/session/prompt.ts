@@ -52,6 +52,9 @@ import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
 import { LegacyAgentRunSpecAdapter } from "@/runtime/compat/legacy-agent-run-spec-adapter"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import type { SessionProfileSnapshot } from "@/runtime/protocol/agent-run-spec"
+import { RuntimeContextEvents } from "@/runtime/context/events"
+import { RuntimeContextLegacy } from "@/runtime/context/legacy"
+import { RuntimeContextPipeline } from "@/runtime/context/pipeline"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -222,6 +225,7 @@ export namespace SessionPrompt {
       .describe(
         "@deprecated tools and permissions have been merged, you can set permissions on the session itself now",
       ),
+    context: RuntimeContextEvents.Input,
     system: z.string().optional(),
     variant: z.string().optional(),
     parts: z.array(
@@ -308,9 +312,26 @@ export namespace SessionPrompt {
     timing?.mark("session.loaded", { directory: session.directory })
     try {
       session = await ensureRuntimeProfile(input, session, timing)
+      const preparedContextEvent = await RuntimeContextEvents.preparePageEvent({
+        sessionID: session.id,
+        projectID: session.projectID,
+        page: input.context?.page,
+      })
+      const promptInput = await prepareRuntimeContextInput(input, timing)
       await RuntimeTiming.measure(timing, "revert.cleanup", () => SessionRevert.cleanup(session))
 
-      const message = await RuntimeTiming.measure(timing, "user_message.create", () => createUserMessage(input, session))
+      const message = await RuntimeTiming.measure(timing, "user_message.create", () => createUserMessage(promptInput, session))
+      if (preparedContextEvent) {
+        await RuntimeContextEvents.commitPageEvent({
+          sessionID: session.id,
+          projectID: session.projectID,
+          prepared: preparedContextEvent,
+        })
+        timing?.mark("context_event.page.committed", {
+          eventID: preparedContextEvent.event?.id,
+          deduped: preparedContextEvent.deduped,
+        })
+      }
       await Session.touch(input.sessionID)
       timing?.mark("session.touched", { messageID: message.info.id })
 
@@ -395,6 +416,22 @@ export namespace SessionPrompt {
     }
 
     return current
+  }
+
+  async function prepareRuntimeContextInput(input: PromptInput, timing?: RuntimeTiming.Trace): Promise<PromptInput> {
+    if (!(await RuntimeFeatureFlags.contextPipelineEnabled())) return input
+    const blocks = input.context?.blocks ?? []
+    if (blocks.length === 0) return input
+    const compiled = await RuntimeContextPipeline.compile({ blocks })
+    timing?.mark("context.turn_blocks.compiled", {
+      rendered: compiled.rendered.length,
+      dropped: compiled.dropped.length,
+    })
+    if (compiled.rendered.length === 0) return input
+    return {
+      ...input,
+      system: [input.system, ...compiled.rendered].filter(Boolean).join("\n\n"),
+    }
   }
 
   export const prompt = fn(PromptInput, async (input) => {
@@ -488,6 +525,7 @@ export namespace SessionPrompt {
 
     let step = 0
     const session = await Session.get(sessionID)
+    let contextCache: { userMessageID: string; compiled: RuntimeContextPipeline.CompiledContext } | undefined
     timing?.mark("loop.session.loaded")
     while (true) {
       log.info("loop", { step, sessionID })
@@ -882,16 +920,47 @@ export namespace SessionPrompt {
         { step },
       )
 
-      const environmentSystem = await RuntimeTiming.measure(
+      const compiledContext = await RuntimeTiming.measure(
         timing,
-        "system.environment",
-        () => SystemPrompt.environment(model, session.directory),
-        { step },
-      )
-      const instructionSystem = await RuntimeTiming.measure(
-        timing,
-        "system.instructions",
-        () => InstructionPrompt.system(),
+        "context.compile",
+        async () => {
+          if (!(await RuntimeFeatureFlags.contextPipelineEnabled())) {
+            const environmentSystem = await SystemPrompt.environment(model, session.directory)
+            const instructionSystem = await InstructionPrompt.system()
+            return {
+              blocks: [],
+              rendered: [...environmentSystem, ...instructionSystem],
+              dropped: [],
+              audit: [],
+              tokenEstimate: 0,
+            } satisfies RuntimeContextPipeline.CompiledContext
+          }
+          if (contextCache?.userMessageID === lastUser.id) return contextCache.compiled
+          const profile = await SessionRuntimeProfile.read(session)
+          const environmentSystem = await SystemPrompt.environment(model, session.directory)
+          const instructionSystem = await InstructionPrompt.system()
+          const contextEvents = await RuntimeContextEvents.list({
+            sessionID,
+            projectID: session.projectID,
+            limit: 8,
+          })
+          const blocks = [
+            ...(profile?.context.blocks ?? []),
+            ...RuntimeContextLegacy.environmentBlocks(environmentSystem),
+            ...RuntimeContextLegacy.instructionBlocks(instructionSystem),
+            ...RuntimeContextEvents.blocksFromEvents(contextEvents),
+            ...(lastUser.system ? [RuntimeContextLegacy.turnSystemBlock(lastUser.system)] : []),
+          ]
+          const compiled = await RuntimeContextPipeline.compile({
+            blocks,
+            policy: profile?.context.policy,
+          })
+          contextCache = {
+            userMessageID: lastUser.id,
+            compiled,
+          }
+          return compiled
+        },
         { step },
       )
       const modelMessages = await RuntimeTiming.measure(
@@ -900,19 +969,37 @@ export namespace SessionPrompt {
         () => MessageV2.toModelMessages(sessionMessages, model),
         { step },
       )
+      timing?.mark("context.compile.audit", {
+        step,
+        renderedContextBlocks: compiledContext.blocks.map((block) => ({
+          id: block.id,
+          layer: block.layer,
+          source: block.source,
+        })),
+        droppedContextBlocks: compiledContext.dropped,
+        tokenEstimate: compiledContext.tokenEstimate,
+      })
       timing?.mark("llm.input.prepared", {
         step,
-        systemBlocks: environmentSystem.length + instructionSystem.length,
+        systemBlocks: compiledContext.rendered.length,
+        contextBlocks: compiledContext.blocks.length,
+        droppedContextBlocks: compiledContext.dropped.length,
         messageCount: modelMessages.length,
         toolCount: Object.keys(tools).length,
       })
 
+      const runtimeUser: MessageV2.User = (await RuntimeFeatureFlags.contextPipelineEnabled())
+        ? {
+            ...lastUser,
+            system: undefined,
+          }
+        : lastUser
       const result = await processor.process({
-        user: lastUser,
+        user: runtimeUser,
         agent,
         abort,
         sessionID,
-        system: [...environmentSystem, ...instructionSystem],
+        system: compiledContext.rendered,
         messages: [
           ...modelMessages,
           ...(isLastStep

@@ -27,6 +27,7 @@ import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
 import { LegacyAgentRunSpecAdapter } from "@/runtime/compat/legacy-agent-run-spec-adapter"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import type { SessionProfileSnapshot } from "@/runtime/protocol/agent-run-spec"
+import { RuntimeContextEvents } from "@/runtime/context/events"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
@@ -414,6 +415,7 @@ export namespace Session {
       }
       await Storage.remove(["session", project.id, sessionID])
       await SessionRuntimeProfile.remove(session)
+      await RuntimeContextEvents.removeAll({ sessionID, projectID: project.id })
       Bus.publish(Event.Deleted, {
         info: session,
       })

@@ -63,6 +63,8 @@ async function compileLegacySessionPrompt(
   body: LegacySessionPromptBody,
   mode: string,
 ) {
+  SessionPrompt.assertNotBusy(sessionID)
+
   if (!(await RuntimeFeatureFlags.agentRunSpecEnabled())) {
     return { ...body, sessionID }
   }
@@ -81,6 +83,7 @@ async function compileLegacySessionPrompt(
     tools: body.tools,
     system: body.system,
     variant: body.variant,
+    context: body.context,
   })
   return RuntimeCompatibilityCompiler.compilePrompt(snapshot)
 }
@@ -1026,12 +1029,13 @@ export const SessionRoutes = lazy(() =>
         SessionPrompt.PromptInput.omit({ sessionID: true, runtimeModelSource: true, runtimeProfileSnapshot: true }),
       ),
       async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        const body = c.req.valid("json")
+        const prompt = await compileLegacySessionPrompt(sessionID, body, "legacy-session-message")
+
         c.status(200)
         c.header("Content-Type", "application/json")
         return stream(c, async (stream) => {
-          const sessionID = c.req.valid("param").sessionID
-          const body = c.req.valid("json")
-          const prompt = await compileLegacySessionPrompt(sessionID, body, "legacy-session-message")
           const msg = await SessionPrompt.prompt(prompt)
           stream.write(JSON.stringify(msg))
         })

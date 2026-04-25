@@ -5,6 +5,7 @@ import type { Session } from "@/session"
 import type { SessionPrompt } from "@/session/prompt"
 import { Log } from "@/util/log"
 import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
+import { RuntimeContextEvents } from "@/runtime/context/events"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import { ulid } from "ulid"
 import {
@@ -267,9 +268,12 @@ export namespace LegacyAgentRunSpecAdapter {
   }
 
   function legacyContextBlocks(input: Omit<SessionPrompt.PromptInput, "sessionID">): ContextBlock[] {
-    if (!input.system) return []
-    return [
-      {
+    const blocks = [...(input.context?.blocks ?? [])]
+    if (input.context?.page) {
+      blocks.push(...RuntimeContextEvents.blocksFromPagePayload(input.context.page))
+    }
+    if (input.system) {
+      blocks.push({
         id: "runtime:legacy-system",
         layer: "runtime",
         source: "legacy-session-message.system",
@@ -278,8 +282,9 @@ export namespace LegacyAgentRunSpecAdapter {
         lifecycle: "turn",
         visibility: "system-required",
         content: input.system,
-      },
-    ]
+      })
+    }
+    return blocks
   }
 
   function legacyResources(tools?: Record<string, boolean>): ResourceSpec {

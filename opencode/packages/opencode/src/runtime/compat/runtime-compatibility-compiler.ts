@@ -3,7 +3,7 @@ import type { SessionPrompt } from "@/session/prompt"
 import type { AgentRunSpec, TurnRuntimeSnapshot } from "@/runtime/protocol/agent-run-spec"
 
 export namespace RuntimeCompatibilityCompiler {
-  export type LegacyPromptBridge = Pick<SessionPrompt.PromptInput, "messageID" | "tools" | "system" | "variant">
+  export type LegacyPromptBridge = Pick<SessionPrompt.PromptInput, "messageID" | "tools" | "system" | "variant" | "context">
 
   export function compileTurnSnapshot(spec: AgentRunSpec, legacy?: LegacyPromptBridge): TurnRuntimeSnapshot {
     const turnSnapshotId = spec.runtime.turnSnapshotId ?? ulid()
@@ -51,6 +51,7 @@ export namespace RuntimeCompatibilityCompiler {
       noReply: snapshot.runtime.noReply,
       tools: compileTools(snapshot),
       system: snapshot.legacy?.system,
+      context: snapshot.legacy?.context,
       variant: snapshot.legacy?.variant,
       parts: snapshot.input.parts as SessionPrompt.PromptInput["parts"],
     }
