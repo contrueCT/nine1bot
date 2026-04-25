@@ -3,6 +3,29 @@ import { UI } from '../ui'
 import { loadConfig, findConfigPath, getDefaultConfigPath, saveConfig } from '../../config/loader'
 import type { Nine1BotConfig } from '../../config/schema'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function hasProviderApiKey(providerConfig: unknown): boolean {
+  if (!isRecord(providerConfig) || !isRecord(providerConfig.options)) {
+    return false
+  }
+
+  return typeof providerConfig.options.apiKey === 'string' && providerConfig.options.apiKey.length > 0
+}
+
+function getMcpDisplayInfo(mcpConfig: unknown): { type: string; enabled: boolean } {
+  if (!isRecord(mcpConfig)) {
+    return { type: 'unknown', enabled: true }
+  }
+
+  return {
+    type: typeof mcpConfig.type === 'string' ? mcpConfig.type : 'unknown',
+    enabled: typeof mcpConfig.enabled === 'boolean' ? mcpConfig.enabled : true,
+  }
+}
+
 /**
  * 显示配置
  */
@@ -57,7 +80,7 @@ async function showConfig(): Promise<void> {
   if (config.provider && Object.keys(config.provider).length > 0) {
     UI.println('Providers:')
     for (const [name, providerConfig] of Object.entries(config.provider)) {
-      const hasApiKey = providerConfig.options?.apiKey ? ' (configured)' : ''
+      const hasApiKey = hasProviderApiKey(providerConfig) ? ' (configured)' : ''
       UI.println(`  ${name}${hasApiKey}`)
     }
     UI.empty()
@@ -67,8 +90,7 @@ async function showConfig(): Promise<void> {
   if (config.mcp && Object.keys(config.mcp).length > 0) {
     UI.println('MCP Servers:')
     for (const [name, mcpConfig] of Object.entries(config.mcp)) {
-      const type = 'type' in mcpConfig ? mcpConfig.type : 'unknown'
-      const enabled = 'enabled' in mcpConfig ? mcpConfig.enabled : true
+      const { type, enabled } = getMcpDisplayInfo(mcpConfig)
       UI.println(`  ${name}: ${type} (${enabled ? 'enabled' : 'disabled'})`)
     }
     UI.empty()

@@ -7,6 +7,7 @@ import { getGlobalPreferencesPath } from '../preferences'
 // 静态导入 OpenCode 服务器（编译时打包）
 import { Server as OpencodeServer } from '../../../../opencode/packages/opencode/src/server/server'
 import { BridgeServer } from '../../../browser-mcp-server/src/bridge/server'
+import type { BridgeServer as OpencodeBridgeServer } from '../../../../opencode/packages/opencode/src/browser/bridge'
 import { setBridgeServer } from '../../../../opencode/packages/opencode/src/browser/bridge'
 
 /**
@@ -65,6 +66,10 @@ function getBrowserServerOrigin(hostname: string, port: number): string {
   url.hostname = normalizedHostname
   url.port = String(port)
   return url.toString().replace(/\/$/, '')
+}
+
+function toOpencodeBridgeServer(bridge: BridgeServer): OpencodeBridgeServer {
+  return bridge as unknown as OpencodeBridgeServer
 }
 
 /**
@@ -264,7 +269,7 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
         instanceId: generateBrowserInstanceId(),
       })
       await bridgeServer.start()
-      setBridgeServer(bridgeServer)
+      setBridgeServer(toOpencodeBridgeServer(bridgeServer))
       console.log(`[Nine1Bot] Browser control enabled at ${serverOrigin}/browser/`)
     } catch (error: any) {
       console.warn(`[Nine1Bot] Failed to initialize browser bridge: ${error.message}`)

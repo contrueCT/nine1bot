@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "esModuleInterop": true,
@@ -9,6 +10,11 @@
     "declaration": true,
     "outDir": "./dist",
     "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../../opencode/packages/opencode/src/*"],
+      "@tui/*": ["../../opencode/packages/opencode/src/cli/cmd/tui/*"]
+    },
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "types": ["bun-types", "node"]
