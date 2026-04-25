@@ -22,6 +22,8 @@ natapp.exe
 # Build artifacts
 build/
 runtime/
+!opencode/packages/opencode/src/runtime/
+!opencode/packages/opencode/src/runtime/**
 web/tsconfig.tsbuildinfo
 packages/nine1bot/config.json
 CLAUDE.md

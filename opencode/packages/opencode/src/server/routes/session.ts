@@ -20,6 +20,9 @@ import { Agent } from "../../agent/agent"
 import { Snapshot } from "@/snapshot"
 import { Log } from "../../util/log"
 import { PermissionNext } from "@/permission/next"
+import { LegacyAgentRunSpecAdapter } from "@/runtime/compat/legacy-agent-run-spec-adapter"
+import { RuntimeCompatibilityCompiler } from "@/runtime/compat/runtime-compatibility-compiler"
+import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
 import { Filesystem } from "@/util/filesystem"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
@@ -49,6 +52,33 @@ async function pathExists(target: string) {
   } catch {
     return false
   }
+}
+
+async function compileLegacySessionPrompt(
+  sessionID: string,
+  body: Omit<SessionPrompt.PromptInput, "sessionID">,
+  mode: string,
+) {
+  if (!(await RuntimeFeatureFlags.agentRunSpecEnabled())) {
+    return { ...body, sessionID }
+  }
+
+  const session = await Session.get(sessionID)
+  const spec = await LegacyAgentRunSpecAdapter.fromSessionMessage({
+    session,
+    body,
+    entry: {
+      source: "api",
+      mode,
+    },
+  })
+  const snapshot = RuntimeCompatibilityCompiler.compileTurnSnapshot(spec, {
+    messageID: body.messageID,
+    tools: body.tools,
+    system: body.system,
+    variant: body.variant,
+  })
+  return RuntimeCompatibilityCompiler.compilePrompt(snapshot)
 }
 
 async function createUploadTarget(session: Pick<Session.Info, "id" | "directory">, originalFilename?: string) {
@@ -994,7 +1024,8 @@ export const SessionRoutes = lazy(() =>
         return stream(c, async (stream) => {
           const sessionID = c.req.valid("param").sessionID
           const body = c.req.valid("json")
-          const msg = await SessionPrompt.prompt({ ...body, sessionID })
+          const prompt = await compileLegacySessionPrompt(sessionID, body, "legacy-session-message")
+          const msg = await SessionPrompt.prompt(prompt)
           stream.write(JSON.stringify(msg))
         })
       },
@@ -1023,7 +1054,8 @@ export const SessionRoutes = lazy(() =>
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
         const body = c.req.valid("json")
-        await SessionPrompt.promptAsync({ ...body, sessionID })
+        const prompt = await compileLegacySessionPrompt(sessionID, body, "legacy-session-prompt-async")
+        await SessionPrompt.promptAsync(prompt)
         return new Response(null, { status: 204 })
       },
     )

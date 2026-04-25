@@ -903,6 +903,25 @@ export namespace Config {
     })
   export type Provider = z.infer<typeof Provider>
 
+  export const RuntimeFeatureFlag = z
+    .object({
+      enabled: z.boolean().default(true).describe("Enable this runtime feature"),
+    })
+    .strict()
+    .meta({
+      ref: "RuntimeFeatureFlagConfig",
+    })
+
+  export const Runtime = z
+    .object({
+      agentRunSpec: RuntimeFeatureFlag.optional().describe("Enable AgentRunSpec compatibility compilation"),
+    })
+    .strict()
+    .meta({
+      ref: "RuntimeConfig",
+    })
+  export type Runtime = z.infer<typeof Runtime>
+
   export const Info = z
     .object({
       $schema: z.string().optional().describe("JSON schema reference for configuration validation"),
@@ -910,6 +929,7 @@ export namespace Config {
       keybinds: Keybinds.optional().describe("Custom keybind configurations"),
       logLevel: Log.Level.optional().describe("Log level"),
       tui: TUI.optional().describe("TUI specific settings"),
+      runtime: Runtime.optional().describe("Nine1Bot runtime feature flags"),
       server: Server.optional().describe("Server configuration for opencode serve and web commands"),
       command: z
         .record(z.string(), Command)

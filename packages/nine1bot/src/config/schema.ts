@@ -63,6 +63,14 @@ export const BrowserConfigSchema = z.object({
   headless: z.boolean().default(false),
 })
 
+export const RuntimeFeatureFlagSchema = z.object({
+  enabled: z.boolean().default(true),
+})
+
+export const RuntimeConfigSchema = z.object({
+  agentRunSpec: RuntimeFeatureFlagSchema.default({}),
+})
+
 export const FeishuConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -216,6 +224,7 @@ export const Nine1BotConfigSchema = z.object({
   isolation: IsolationConfigSchema.default({}),
   skills: SkillsConfigSchema.default({}),
   browser: BrowserConfigSchema.default({}),
+  runtime: RuntimeConfigSchema.default({}),
   feishu: FeishuConfigSchema.default({}),
 
 
@@ -288,6 +297,7 @@ export type NatappConfig = z.infer<typeof NatappConfigSchema>
 export type IsolationConfig = z.infer<typeof IsolationConfigSchema>
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>
 export type BrowserConfig = z.infer<typeof BrowserConfigSchema>
+export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>
 export type CustomProvider = z.infer<typeof CustomProviderSchema>
 export type CustomProviderModel = z.infer<typeof CustomProviderModelSchema>
