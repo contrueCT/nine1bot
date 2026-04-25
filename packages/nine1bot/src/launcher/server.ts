@@ -175,6 +175,7 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
 
   // 设置环境变量
   process.env.OPENCODE_CONFIG = opencodeConfigPath
+  process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL = 'true'
 
   // 配置隔离：禁用全局或项目配置
   const isolation = fullConfig.isolation || {}

@@ -18,6 +18,48 @@ test("loads config with defaults when no files exist", async () => {
   })
 })
 
+test("skips plugin dependency install when disabled", async () => {
+  const originalDisableGlobal = process.env.OPENCODE_DISABLE_GLOBAL_CONFIG
+  const originalDisableProject = process.env.OPENCODE_DISABLE_PROJECT_CONFIG
+  const originalDisablePluginInstall = process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL
+  const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const configDir = path.join(dir, ".opencode")
+      await fs.mkdir(configDir, { recursive: true })
+      await Bun.write(path.join(configDir, "opencode.json"), JSON.stringify({ $schema: "https://opencode.ai/config.json" }))
+    },
+  })
+  const configDir = path.join(tmp.path, ".opencode")
+
+  try {
+    process.env.OPENCODE_DISABLE_GLOBAL_CONFIG = "true"
+    process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "true"
+    process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL = "true"
+    process.env.OPENCODE_CONFIG_DIR = configDir
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await Config.get()
+        expect(await Bun.file(path.join(configDir, "package.json")).exists()).toBe(false)
+        expect(await Bun.file(path.join(configDir, "bun.lock")).exists()).toBe(false)
+        expect(await Bun.file(path.join(configDir, "node_modules")).exists()).toBe(false)
+      },
+    })
+  } finally {
+    if (originalDisableGlobal === undefined) delete process.env.OPENCODE_DISABLE_GLOBAL_CONFIG
+    else process.env.OPENCODE_DISABLE_GLOBAL_CONFIG = originalDisableGlobal
+    if (originalDisableProject === undefined) delete process.env.OPENCODE_DISABLE_PROJECT_CONFIG
+    else process.env.OPENCODE_DISABLE_PROJECT_CONFIG = originalDisableProject
+    if (originalDisablePluginInstall === undefined) delete process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL
+    else process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL = originalDisablePluginInstall
+    if (originalConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+    else process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+  }
+})
+
 test("loads JSON config file", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

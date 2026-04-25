@@ -46,6 +46,9 @@ describe('loadConfig remote MCP oauth support', () => {
         scope: 'read write',
       },
     })
+  })
+})
+
 describe('loadConfig browser migration guards', () => {
   it('rejects deprecated mcp.browser config', async () => {
     const configPath = await writeConfig({

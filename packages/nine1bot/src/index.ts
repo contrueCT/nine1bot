@@ -8,6 +8,8 @@ if (!process.env.NINE1BOT_PROJECT_DIR) {
 // 禁用 OpenCode 默认插件（必须在导入 OpenCode 模块之前设置）
 // 这些插件依赖 @openauthjs/openauth，在编译后的二进制中无法正确解析
 process.env.OPENCODE_DISABLE_DEFAULT_PLUGINS = 'true'
+// Nine1Bot 使用自己的资源解析链路，不需要 OpenCode 在运行时为插件目录执行 bun add/install
+process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL = 'true'
 
 // 全局错误兜底：防止未捕获的 Promise rejection 导致服务崩溃
 process.on("unhandledRejection", (e) => {

@@ -28,6 +28,7 @@ export namespace Flag {
   export const OPENCODE_DISABLE_CLAUDE_CODE_MCP =
     OPENCODE_DISABLE_CLAUDE_CODE || truthy("OPENCODE_DISABLE_CLAUDE_CODE_MCP")
   export const OPENCODE_DISABLE_OPENCODE_AUTH = truthy("OPENCODE_DISABLE_OPENCODE_AUTH")
+  export declare const OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL: boolean
   export declare const OPENCODE_DISABLE_PROJECT_CONFIG: boolean
   export declare const OPENCODE_DISABLE_GLOBAL_CONFIG: boolean
   export const OPENCODE_FAKE_VCS = process.env["OPENCODE_FAKE_VCS"]
@@ -112,6 +113,17 @@ Object.defineProperty(Flag, "OPENCODE_CONFIG_DIR", {
 Object.defineProperty(Flag, "OPENCODE_DISABLE_DEFAULT_PLUGINS", {
   get() {
     return truthy("OPENCODE_DISABLE_DEFAULT_PLUGINS")
+  },
+  enumerable: true,
+  configurable: false,
+})
+
+// Dynamic getter for OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL
+// This keeps embedded runtimes from running package manager installs while
+// still allowing them to read compatible opencode config files.
+Object.defineProperty(Flag, "OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL", {
+  get() {
+    return truthy("OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL")
   },
   enumerable: true,
   configurable: false,
