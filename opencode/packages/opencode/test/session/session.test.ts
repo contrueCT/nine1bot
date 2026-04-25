@@ -4,11 +4,34 @@ import { Session } from "../../src/session"
 import { Bus } from "../../src/bus"
 import { Log } from "../../src/util/log"
 import { Instance } from "../../src/project/instance"
+import { SessionRuntimeProfile } from "../../src/runtime/session/profile"
 
 const projectRoot = path.join(__dirname, "../..")
 Log.init({ print: false })
 
 describe("session.started event", () => {
+  test("creates a runtime profile snapshot and exposes only the summary", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const session = await Session.create({})
+
+        expect(session.runtime?.protocolVersion).toBe("agent-runtime/v1")
+        expect(session.runtime?.profileSnapshotId).toBeString()
+        expect(session.runtime?.profileSource).toBe("new-session")
+        expect((session as Record<string, unknown>).profileSnapshot).toBeUndefined()
+
+        const profile = await SessionRuntimeProfile.read(session)
+        expect(profile?.id).toBe(session.runtime?.profileSnapshotId)
+        expect(profile?.sessionId).toBe(session.id)
+        expect(profile?.agent.name).toBe(session.runtime?.agent)
+
+        await Session.remove(session.id)
+        expect(await SessionRuntimeProfile.read(session)).toBeUndefined()
+      },
+    })
+  })
+
   test("should emit session.started event when session is created", async () => {
     await Instance.provide({
       directory: projectRoot,

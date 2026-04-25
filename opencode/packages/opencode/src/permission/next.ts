@@ -3,7 +3,8 @@ import { BusEvent } from "@/bus/bus-event"
 import { Config } from "@/config/config"
 import { Identifier } from "@/id/id"
 import { Instance } from "@/project/instance"
-import { Storage } from "@/storage/storage"
+import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
+import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import { fn } from "@/util/fn"
 import { Log } from "@/util/log"
 import { Wildcard } from "@/util/wildcard"
@@ -106,13 +107,11 @@ export namespace PermissionNext {
   }
 
   const state = Instance.state(async () => {
-    const projectID = Instance.project.id
-    const stored = await Storage.read<Ruleset>(["permission", projectID]).catch(() => [] as Ruleset)
-
     const pending: Record<
       string,
       {
         info: Request
+        ruleset: Ruleset
         resolve: () => void
         reject: (e: any) => void
       }
@@ -120,7 +119,6 @@ export namespace PermissionNext {
 
     return {
       pending,
-      approved: stored,
     }
   })
 
@@ -137,13 +135,17 @@ export namespace PermissionNext {
       const config = await Config.get()
       const isAutonomous = config.autonomous?.enabled !== false
       const { ruleset, ...request } = input
+      const profileRuleset = (await RuntimeFeatureFlags.profileSnapshotEnabled())
+        ? ((await SessionRuntimeProfile.grantRuleset(request.sessionID)) as Ruleset)
+        : []
+      const runtimeRuleset = PermissionNext.merge(ruleset, profileRuleset)
 
       for (const pattern of request.patterns ?? []) {
-        const rule = evaluate(request.permission, pattern, ruleset, s.approved)
+        const rule = evaluate(request.permission, pattern, runtimeRuleset)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
 
         if (rule.action === "deny")
-          throw new DeniedError(ruleset.filter((r) => Wildcard.match(request.permission, r.permission)))
+          throw new DeniedError(runtimeRuleset.filter((r) => Wildcard.match(request.permission, r.permission)))
 
         if (rule.action === "ask") {
           // In autonomous mode, auto-allow certain permissions to reduce human intervention
@@ -173,6 +175,7 @@ export namespace PermissionNext {
 
             s.pending[id] = {
               info,
+              ruleset: runtimeRuleset,
               resolve: () => {
                 clearTimeout(timeout)
                 resolve()
@@ -228,21 +231,27 @@ export namespace PermissionNext {
         return
       }
       if (input.reply === "always") {
-        for (const pattern of existing.info.always) {
-          s.approved.push({
+        const profileSnapshotEnabled = await RuntimeFeatureFlags.profileSnapshotEnabled()
+        if (profileSnapshotEnabled) {
+          await SessionRuntimeProfile.addPermissionGrant({
+            sessionID: existing.info.sessionID,
             permission: existing.info.permission,
-            pattern,
-            action: "allow",
+            patterns: existing.info.always,
+            metadata: existing.info.metadata,
           })
         }
 
         existing.resolve()
 
         const sessionID = existing.info.sessionID
+        const sessionGrantRuleset = profileSnapshotEnabled
+          ? ((await SessionRuntimeProfile.grantRuleset(sessionID)) as Ruleset)
+          : []
         for (const [id, pending] of Object.entries(s.pending)) {
           if (pending.info.sessionID !== sessionID) continue
           const ok = pending.info.patterns.every(
-            (pattern) => evaluate(pending.info.permission, pattern, s.approved).action === "allow",
+            (pattern) =>
+              evaluate(pending.info.permission, pattern, pending.ruleset, sessionGrantRuleset).action === "allow",
           )
           if (!ok) continue
           delete s.pending[id]
@@ -253,10 +262,6 @@ export namespace PermissionNext {
           })
           pending.resolve()
         }
-
-        // TODO: we don't save the permission ruleset to disk yet until there's
-        // UI to manage it
-        // await Storage.write(["permission", Instance.project.id], s.approved)
         return
       }
     },

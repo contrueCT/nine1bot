@@ -4,6 +4,8 @@ import { MessageV2 } from "@/session/message-v2"
 import type { Session } from "@/session"
 import type { SessionPrompt } from "@/session/prompt"
 import { Log } from "@/util/log"
+import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
+import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import { ulid } from "ulid"
 import {
   AGENT_RUNTIME_PROTOCOL_VERSION,
@@ -29,15 +31,38 @@ export namespace LegacyAgentRunSpecAdapter {
     session?: Session.Info
     directory?: string
     permission?: unknown
+    source?: SessionProfileSnapshot["source"]
   }
 
   export async function fromSessionMessage(input: SessionMessageInput): Promise<AgentRunSpec> {
     const body = input.body
-    const agent = await resolveAgent(body.agent)
+    const profileSnapshotEnabled = await RuntimeFeatureFlags.profileSnapshotEnabled()
+    const storedProfile = profileSnapshotEnabled ? await SessionRuntimeProfile.read(input.session) : undefined
+    const profile =
+      storedProfile ??
+      (profileSnapshotEnabled
+        ? await fromSessionCreate({
+            session: input.session,
+            directory: input.session.directory,
+            permission: input.session.permission,
+            source: "legacy-resumed",
+          })
+        : undefined)
+    if (profile && body.agent && body.agent !== profile.agent.name) {
+      log.warn("ignoring per-turn agent override for profiled session", {
+        sessionID: input.session.id,
+        requestedAgent: body.agent,
+        profileAgent: profile.agent.name,
+        profileSnapshotID: profile.id,
+      })
+    }
+    const agent = await resolveAgent(profile?.agent.name ?? body.agent)
     const model = await resolveModel({
-      sessionID: input.session.id,
+      session: input.session,
       requestedModel: body.model,
       agent,
+      profile,
+      allowLegacyHistoryModel: !!profile && !storedProfile,
     })
     const contextBlocks = legacyContextBlocks(body)
     const resources = legacyResources(body.tools)
@@ -51,6 +76,7 @@ export namespace LegacyAgentRunSpecAdapter {
         directory: input.session.directory,
         projectId: input.session.projectID,
         lifecycle: "existing",
+        profileSnapshot: profile,
       },
       entry: {
         source: input.entry?.source ?? "api",
@@ -69,7 +95,7 @@ export namespace LegacyAgentRunSpecAdapter {
       },
       agent: {
         name: agent.name,
-        source: body.agent ? "session-choice" : "default-user-template",
+        source: profile?.agent.source ?? (body.agent ? "session-choice" : "default-user-template"),
       },
       context: {
         blocks: contextBlocks,
@@ -77,8 +103,9 @@ export namespace LegacyAgentRunSpecAdapter {
       resources,
       permissions: {
         rules: {},
-        source: ["legacy-session"],
+        source: profile ? ["legacy-session", "profile-snapshot"] : ["legacy-session"],
         mergeMode: "strict",
+        sessionGrants: profile?.sessionPermissionGrants,
       },
       orchestration: {
         mode: "single",
@@ -89,8 +116,9 @@ export namespace LegacyAgentRunSpecAdapter {
       audit: {
         protocolVersion: AGENT_RUNTIME_PROTOCOL_VERSION,
         templates: templateIds,
+        profileSnapshotId: profile?.id,
         modelSource: model.auditSource,
-        agentSource: body.agent ? "session-choice" : "legacy-adapter",
+        agentSource: profile ? "profile-snapshot" : body.agent ? "session-choice" : "legacy-adapter",
         contextBlocks: contextBlocks.map((block) => ({
           id: block.id,
           source: block.source,
@@ -101,7 +129,7 @@ export namespace LegacyAgentRunSpecAdapter {
           skills: [],
           builtinTools: Object.keys(body.tools ?? {}),
         },
-        permissionSources: ["legacy-session"],
+        permissionSources: profile ? ["legacy-session", "profile-snapshot"] : ["legacy-session"],
         legacy: {
           adapter: "LegacyAgentRunSpecAdapter.fromSessionMessage",
           promptFields: Object.keys(body).filter((key) => (body as Record<string, unknown>)[key] !== undefined),
@@ -115,6 +143,7 @@ export namespace LegacyAgentRunSpecAdapter {
       agent: spec.agent.name,
       providerID: spec.model.providerID,
       modelID: spec.model.modelID,
+      profileSnapshotID: profile?.id,
       contextBlocks: contextBlocks.length,
       toolOverrides: Object.keys(body.tools ?? {}).length,
       createdAt: now,
@@ -131,7 +160,7 @@ export namespace LegacyAgentRunSpecAdapter {
       id: ulid(),
       sessionId: input.session?.id,
       createdAt: Date.now(),
-      source: input.session ? "legacy-resumed" : "new-session",
+      source: input.source ?? (input.session ? "legacy-resumed" : "new-session"),
       sourceTemplateIds: ["default-user-template", "legacy-session-create"],
       agent: {
         name: agent.name,
@@ -166,16 +195,38 @@ export namespace LegacyAgentRunSpecAdapter {
   }
 
   async function resolveModel(input: {
-    sessionID: string
+    session: Session.Info
     requestedModel?: { providerID: string; modelID: string }
     agent: Agent.Info
+    profile?: SessionProfileSnapshot
+    allowLegacyHistoryModel?: boolean
   }): Promise<ModelSpec & { auditSource: string }> {
     if (input.requestedModel) {
       return {
         providerID: input.requestedModel.providerID,
         modelID: input.requestedModel.modelID,
-        source: "runtime-override",
-        auditSource: "runtime-override",
+        source: "session-choice",
+        auditSource: "session-choice",
+      }
+    }
+    if (input.profile && input.session.runtime?.currentModel) {
+      return {
+        providerID: input.session.runtime.currentModel.providerID,
+        modelID: input.session.runtime.currentModel.modelID,
+        source: input.session.runtime.currentModel.source,
+        auditSource: input.session.runtime.currentModel.source,
+      }
+    }
+    if (input.allowLegacyHistoryModel) {
+      const historyModel = await lastModel(input.session.id, { fallback: false })
+      if (historyModel) return historyModel
+    }
+    if (input.profile) {
+      return {
+        providerID: input.profile.defaultModel.providerID,
+        modelID: input.profile.defaultModel.modelID,
+        source: "profile-snapshot",
+        auditSource: "profile-snapshot",
       }
     }
     if (input.agent.model) {
@@ -186,10 +237,15 @@ export namespace LegacyAgentRunSpecAdapter {
         auditSource: "legacy-adapter",
       }
     }
-    return lastModel(input.sessionID)
+    const model = await lastModel(input.session.id)
+    if (model) return model
+    throw new Error("Unable to resolve session model")
   }
 
-  async function lastModel(sessionID: string): Promise<ModelSpec & { auditSource: string }> {
+  async function lastModel(
+    sessionID: string,
+    options?: { fallback?: boolean },
+  ): Promise<(ModelSpec & { auditSource: string }) | undefined> {
     for await (const item of MessageV2.stream(sessionID)) {
       if (item.info.role === "user" && item.info.model) {
         return {
@@ -200,6 +256,7 @@ export namespace LegacyAgentRunSpecAdapter {
         }
       }
     }
+    if (options?.fallback === false) return undefined
     const model = await Provider.defaultModel()
     return {
       providerID: model.providerID,

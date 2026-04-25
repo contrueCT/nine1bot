@@ -48,6 +48,10 @@ import { Shell } from "@/shell/shell"
 import { Truncate } from "@/tool/truncation"
 import { ProjectEnvironment } from "@/project/environment"
 import { RuntimeTiming } from "./timing"
+import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
+import { LegacyAgentRunSpecAdapter } from "@/runtime/compat/legacy-agent-run-spec-adapter"
+import { SessionRuntimeProfile } from "@/runtime/session/profile"
+import type { SessionProfileSnapshot } from "@/runtime/protocol/agent-run-spec"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -208,6 +212,8 @@ export namespace SessionPrompt {
         modelID: z.string(),
       })
       .optional(),
+    runtimeModelSource: z.enum(["profile-snapshot", "session-choice"]).optional(),
+    runtimeProfileSnapshot: z.custom<SessionProfileSnapshot>().optional(),
     agent: z.string().optional(),
     noReply: z.boolean().optional(),
     tools: z
@@ -298,9 +304,10 @@ export namespace SessionPrompt {
   async function acceptPrompt(input: PromptInput, timing?: RuntimeTiming.Trace) {
     const abort = reserve(input.sessionID)
     timing?.mark("busy.reserved")
-    const session = await Session.get(input.sessionID)
+    let session = await Session.get(input.sessionID)
     timing?.mark("session.loaded", { directory: session.directory })
     try {
+      session = await ensureRuntimeProfile(input, session, timing)
       await RuntimeTiming.measure(timing, "revert.cleanup", () => SessionRevert.cleanup(session))
 
       const message = await RuntimeTiming.measure(timing, "user_message.create", () => createUserMessage(input, session))
@@ -333,6 +340,61 @@ export namespace SessionPrompt {
       release(input.sessionID)
       throw error
     }
+  }
+
+  async function ensureRuntimeProfile(
+    input: PromptInput,
+    session: Session.Info,
+    timing?: RuntimeTiming.Trace,
+  ): Promise<Session.Info> {
+    if (!(await RuntimeFeatureFlags.profileSnapshotEnabled())) return session
+
+    let profile = await SessionRuntimeProfile.read(session)
+    let current = session
+    if (!profile) {
+      profile =
+        input.runtimeProfileSnapshot ??
+        (await LegacyAgentRunSpecAdapter.fromSessionCreate({
+          session,
+          directory: session.directory,
+          permission: session.permission,
+          source: "legacy-resumed",
+        }))
+      const currentModel =
+        input.model && input.runtimeModelSource === "session-choice"
+          ? SessionRuntimeProfile.currentModel(input.model, "session-choice")
+          : undefined
+      const runtime = await SessionRuntimeProfile.initialize(session, profile, { currentModel })
+      current = await Session.update(
+        session.id,
+        (draft) => {
+          draft.runtime = runtime
+        },
+        { touch: false },
+      )
+      timing?.mark("runtime_profile.legacy_resumed", { profileSnapshotID: profile.id })
+    }
+
+    if (input.model && input.runtimeModelSource === "session-choice") {
+      const runtimeModel = SessionRuntimeProfile.currentModel(input.model, "session-choice")
+      const runtime = SessionRuntimeProfile.withCurrentModel(
+        current.runtime ?? SessionRuntimeProfile.summarize(profile, runtimeModel),
+        runtimeModel,
+      )
+      current = await Session.update(
+        current.id,
+        (draft) => {
+          draft.runtime = runtime
+        },
+        { touch: false },
+      )
+      timing?.mark("runtime_profile.current_model.updated", {
+        providerID: runtimeModel.providerID,
+        modelID: runtimeModel.modelID,
+      })
+    }
+
+    return current
   }
 
   export const prompt = fn(PromptInput, async (input) => {

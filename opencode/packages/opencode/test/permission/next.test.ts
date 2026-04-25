@@ -2,8 +2,62 @@ import { test, expect } from "bun:test"
 import os from "os"
 import { PermissionNext } from "../../src/permission/next"
 import { Instance } from "../../src/project/instance"
-import { Storage } from "../../src/storage/storage"
+import { SessionRuntimeProfile } from "../../src/runtime/session/profile"
+import type { SessionProfileSnapshot } from "../../src/runtime/protocol/agent-run-spec"
 import { tmpdir } from "../fixture/fixture"
+
+function testProfile(sessionID: string): SessionProfileSnapshot {
+  return {
+    id: `profile_${sessionID}`,
+    sessionId: sessionID,
+    createdAt: Date.now(),
+    source: "new-session",
+    sourceTemplateIds: ["test"],
+    agent: {
+      name: "build",
+      source: "default-user-template",
+    },
+    defaultModel: {
+      providerID: "test",
+      modelID: "test",
+      source: "default-user-template",
+    },
+    context: {
+      blocks: [],
+    },
+    resources: {
+      builtinTools: {},
+      mcp: {
+        servers: [],
+        lifecycle: "session",
+        mergeMode: "additive-only",
+      },
+      skills: {
+        skills: [],
+        lifecycle: "session",
+        mergeMode: "additive-only",
+      },
+    },
+    permissions: {
+      rules: {},
+      source: ["test"],
+      mergeMode: "strict",
+    },
+    sessionPermissionGrants: [],
+    orchestration: {
+      mode: "single",
+    },
+  }
+}
+
+async function waitForPendingPermission(requestID: string) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const pending = await PermissionNext.list()
+    if (pending.some((item) => item.id === requestID)) return
+    await Bun.sleep(5)
+  }
+  throw new Error(`Permission request was not queued: ${requestID}`)
+}
 
 // fromConfig tests
 
@@ -566,20 +620,24 @@ test("reply - reject throws RejectedError", async () => {
   })
 })
 
-test("reply - always persists approval and resolves", async () => {
+test("reply - always stores a session profile grant only", async () => {
   await using tmp = await tmpdir({ git: true })
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
+      await SessionRuntimeProfile.initialize({ id: "session_test" }, testProfile("session_test"))
+      await SessionRuntimeProfile.initialize({ id: "session_test2" }, testProfile("session_test2"))
+
       const askPromise = PermissionNext.ask({
         id: "permission_test3",
         sessionID: "session_test",
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "external_directory",
+        patterns: ["/tmp/project"],
         metadata: {},
-        always: ["ls"],
+        always: ["/tmp/project"],
         ruleset: [],
       })
+      await waitForPendingPermission("permission_test3")
 
       await PermissionNext.reply({
         requestID: "permission_test3",
@@ -587,22 +645,32 @@ test("reply - always persists approval and resolves", async () => {
       })
 
       await expect(askPromise).resolves.toBeUndefined()
-    },
-  })
-  // Re-provide to reload state with stored permissions
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      // Stored approval should allow without asking
-      const result = await PermissionNext.ask({
-        sessionID: "session_test2",
-        permission: "bash",
-        patterns: ["ls"],
+
+      const sameSessionResult = await PermissionNext.ask({
+        sessionID: "session_test",
+        permission: "external_directory",
+        patterns: ["/tmp/project"],
         metadata: {},
         always: [],
         ruleset: [],
       })
-      expect(result).toBeUndefined()
+      expect(sameSessionResult).toBeUndefined()
+
+      const otherSessionPromise = PermissionNext.ask({
+        id: "permission_test3_other_session",
+        sessionID: "session_test2",
+        permission: "external_directory",
+        patterns: ["/tmp/project"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      })
+      await waitForPendingPermission("permission_test3_other_session")
+      await PermissionNext.reply({
+        requestID: "permission_test3_other_session",
+        reply: "reject",
+      })
+      await expect(otherSessionPromise).rejects.toBeInstanceOf(PermissionNext.RejectedError)
     },
   })
 })

@@ -5,4 +5,9 @@ export namespace RuntimeFeatureFlags {
     const config = await Config.get()
     return config.runtime?.agentRunSpec?.enabled ?? true
   }
+
+  export async function profileSnapshotEnabled() {
+    const config = await Config.get()
+    return config.runtime?.profileSnapshot?.enabled ?? true
+  }
 }

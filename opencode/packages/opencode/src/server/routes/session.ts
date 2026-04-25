@@ -36,6 +36,10 @@ const SessionUploadResponse = z.object({
   url: z.string(),
   size: z.number(),
 })
+type LegacySessionPromptBody = Omit<
+  SessionPrompt.PromptInput,
+  "sessionID" | "runtimeModelSource" | "runtimeProfileSnapshot"
+>
 
 function sanitizeUploadFilename(filename?: string) {
   const basename = path.basename((filename || "").replace(/\0/g, "")).trim()
@@ -56,7 +60,7 @@ async function pathExists(target: string) {
 
 async function compileLegacySessionPrompt(
   sessionID: string,
-  body: Omit<SessionPrompt.PromptInput, "sessionID">,
+  body: LegacySessionPromptBody,
   mode: string,
 ) {
   if (!(await RuntimeFeatureFlags.agentRunSpecEnabled())) {
@@ -1017,7 +1021,10 @@ export const SessionRoutes = lazy(() =>
           sessionID: z.string().meta({ description: "Session ID" }),
         }),
       ),
-      validator("json", SessionPrompt.PromptInput.omit({ sessionID: true })),
+      validator(
+        "json",
+        SessionPrompt.PromptInput.omit({ sessionID: true, runtimeModelSource: true, runtimeProfileSnapshot: true }),
+      ),
       async (c) => {
         c.status(200)
         c.header("Content-Type", "application/json")
@@ -1050,7 +1057,10 @@ export const SessionRoutes = lazy(() =>
           sessionID: z.string().meta({ description: "Session ID" }),
         }),
       ),
-      validator("json", SessionPrompt.PromptInput.omit({ sessionID: true })),
+      validator(
+        "json",
+        SessionPrompt.PromptInput.omit({ sessionID: true, runtimeModelSource: true, runtimeProfileSnapshot: true }),
+      ),
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
         const body = c.req.valid("json")

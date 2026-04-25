@@ -69,6 +69,7 @@ export const RuntimeFeatureFlagSchema = z.object({
 
 export const RuntimeConfigSchema = z.object({
   agentRunSpec: RuntimeFeatureFlagSchema.default({}),
+  profileSnapshot: RuntimeFeatureFlagSchema.default({}),
 })
 
 export const FeishuConfigSchema = z

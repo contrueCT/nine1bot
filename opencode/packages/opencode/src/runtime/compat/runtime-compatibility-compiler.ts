@@ -42,6 +42,11 @@ export namespace RuntimeCompatibilityCompiler {
         providerID: snapshot.model.providerID,
         modelID: snapshot.model.modelID,
       },
+      runtimeModelSource:
+        snapshot.model.source === "profile-snapshot" || snapshot.model.source === "session-choice"
+          ? snapshot.model.source
+          : undefined,
+      runtimeProfileSnapshot: snapshot.session.profileSnapshot,
       agent: snapshot.agent.name,
       noReply: snapshot.runtime.noReply,
       tools: compileTools(snapshot),

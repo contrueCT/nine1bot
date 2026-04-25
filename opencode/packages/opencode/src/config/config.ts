@@ -915,6 +915,7 @@ export namespace Config {
   export const Runtime = z
     .object({
       agentRunSpec: RuntimeFeatureFlag.optional().describe("Enable AgentRunSpec compatibility compilation"),
+      profileSnapshot: RuntimeFeatureFlag.optional().describe("Enable session runtime profile snapshots"),
     })
     .strict()
     .meta({
