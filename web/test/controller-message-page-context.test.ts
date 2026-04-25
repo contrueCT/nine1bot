@@ -74,7 +74,7 @@ describe('Controller message page context', () => {
         source: 'browser-extension',
         platform: 'gitlab',
         mode: 'browser-sidepanel',
-        templateIds: ['default-user-template', 'browser-sidepanel'],
+        templateIds: ['default-user-template', 'browser-generic', 'browser-gitlab', 'gitlab-mr'],
       },
       context: {
         page,
@@ -101,5 +101,37 @@ describe('Controller message page context', () => {
     })
     expect(calls[0]?.body.clientCapabilities.pageContext).toBe(false)
     expect(calls[0]?.body.clientCapabilities.selectionContext).toBe(false)
+  })
+
+  it('creates browser-extension sessions with page context when available', async () => {
+    const page: RequestPagePayload = {
+      platform: 'gitlab',
+      url: 'https://gitlab.com/nine1/nine1bot/-/issues/7',
+      title: 'Issue 7',
+      pageType: 'gitlab-issue',
+      objectKey: 'gitlab.com:nine1/nine1bot:issue:7',
+    }
+
+    await api.createSession('C:/code/nine1bot', page)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      url: '/nine1bot/agent/sessions',
+    })
+    expect(calls[0]?.body).toMatchObject({
+      directory: 'C:/code/nine1bot',
+      page,
+      entry: {
+        source: 'browser-extension',
+        platform: 'gitlab',
+        mode: 'browser-sidepanel',
+        templateIds: ['default-user-template', 'browser-generic', 'browser-gitlab', 'gitlab-issue'],
+      },
+      clientCapabilities: {
+        pageContext: true,
+        selectionContext: false,
+      },
+    })
   })
 })

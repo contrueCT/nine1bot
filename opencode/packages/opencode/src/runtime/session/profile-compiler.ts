@@ -4,9 +4,25 @@ import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
 import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 import type { Session } from "@/session"
 import { ulid } from "ulid"
-import type { SessionProfileSnapshot } from "@/runtime/protocol/agent-run-spec"
+import type {
+  ContextSpec,
+  OrchestrationSpec,
+  ResourceSpec,
+  SessionProfileSnapshot,
+} from "@/runtime/protocol/agent-run-spec"
 
 export namespace SessionProfileCompiler {
+  export type ProfileTemplate = {
+    templateIds?: string[]
+    context?: Pick<ContextSpec, "blocks" | "policy">
+    resources?: ResourceSpec
+    permissions?: {
+      rules?: Record<string, unknown>
+      source?: string[]
+    }
+    orchestration?: OrchestrationSpec
+  }
+
   export type Input = {
     session?: Session.Info
     directory?: string
@@ -14,16 +30,25 @@ export namespace SessionProfileCompiler {
     source?: SessionProfileSnapshot["source"]
     agentName?: string
     templateIds?: string[]
+    profileTemplate?: ProfileTemplate
   }
 
   export async function compile(input: Input): Promise<SessionProfileSnapshot> {
     const agent = await resolveAgent(input.agentName)
     const defaultModel = agent.model ?? (await Provider.defaultModel())
     const resourceResolverEnabled = await RuntimeFeatureFlags.resourceResolverEnabled()
-    const templateIds = input.templateIds ?? [
+    const templateIds = input.templateIds ?? input.profileTemplate?.templateIds ?? [
       "default-user-template",
       input.source === "legacy-resumed" ? "legacy-resumed-session" : "session-profile-compiler",
     ]
+    const permissionRules = {
+      ...(input.profileTemplate?.permissions?.rules ?? {}),
+      ...(input.permission && typeof input.permission === "object" ? (input.permission as Record<string, unknown>) : {}),
+    }
+    const permissionSource = unique([
+      ...(input.profileTemplate?.permissions?.source ?? []),
+      "session-profile-compiler",
+    ])
 
     return {
       id: ulid(),
@@ -44,18 +69,19 @@ export namespace SessionProfileCompiler {
         source: "default-user-template",
       },
       context: {
-        blocks: [],
+        blocks: input.profileTemplate?.context?.blocks ?? [],
+        policy: input.profileTemplate?.context?.policy,
       },
       resources: resourceResolverEnabled
-        ? await RuntimeResourceResolver.compileProfileResources()
+        ? input.profileTemplate?.resources ?? (await RuntimeResourceResolver.compileProfileResources())
         : RuntimeResourceResolver.emptyResources(),
       permissions: {
-        rules: input.permission && typeof input.permission === "object" ? (input.permission as Record<string, unknown>) : {},
-        source: ["session-profile-compiler"],
+        rules: permissionRules,
+        source: permissionSource,
         mergeMode: "strict",
       },
       sessionPermissionGrants: [],
-      orchestration: {
+      orchestration: input.profileTemplate?.orchestration ?? {
         mode: "single",
       },
     }
@@ -66,5 +92,9 @@ export namespace SessionProfileCompiler {
     const agent = await Agent.get(name)
     if (!agent) throw new Error(`Agent not found: ${name}`)
     return agent
+  }
+
+  function unique(values: string[]) {
+    return [...new Set(values)]
   }
 }

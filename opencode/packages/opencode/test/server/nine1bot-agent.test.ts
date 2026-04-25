@@ -81,6 +81,55 @@ describe("nine1bot controller api", () => {
     })
   })
 
+  test("creates controller sessions with entry template profile blocks", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const app = Server.App()
+
+        const created = await app.request("/nine1bot/agent/sessions", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            title: "Feishu template session",
+            debug: {
+              profileSnapshot: true,
+            },
+            entry: {
+              source: "feishu",
+              platform: "feishu",
+              mode: "feishu-private-chat",
+              templateIds: ["default-user-template", "feishu-chat"],
+            },
+            clientCapabilities: {
+              interactions: false,
+              permissionRequests: false,
+              questionRequests: false,
+            },
+          }),
+        })
+        expect(created.status).toBe(200)
+        const body = (await created.json()) as {
+          sessionId: string
+          templateIds?: string[]
+          profileSnapshot?: {
+            sourceTemplateIds: string[]
+            context: {
+              blocks: Array<{ source: string; content: string }>
+            }
+          }
+        }
+
+        expect(body.templateIds).toContain("feishu-chat")
+        expect(body.profileSnapshot?.sourceTemplateIds).toContain("feishu-chat")
+        expect(body.profileSnapshot?.context.blocks.some((block) => block.source === "template.feishu-chat")).toBe(true)
+        expect(JSON.stringify(body.profileSnapshot)).not.toContain("profileSnapshotId")
+
+        await Session.remove(body.sessionId)
+      },
+    })
+  })
+
   test("busy controller message returns 409 before writing user message or page context", async () => {
     await Instance.provide({
       directory: projectRoot,

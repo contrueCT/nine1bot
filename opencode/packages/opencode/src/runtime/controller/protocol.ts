@@ -28,10 +28,34 @@ export namespace RuntimeControllerProtocol {
   })
   export type ModelChoice = z.infer<typeof ModelChoice>
 
+  export const ResourceSelection = z
+    .object({
+      builtinTools: z
+        .object({
+          enabledGroups: z.array(z.string()).optional(),
+          enabledTools: z.array(z.string()).optional(),
+        })
+        .optional(),
+      mcp: z
+        .object({
+          servers: z.array(z.string()).optional(),
+          tools: z.record(z.string(), z.array(z.string())).optional(),
+        })
+        .optional(),
+      skills: z
+        .object({
+          skills: z.array(z.string()).optional(),
+        })
+        .optional(),
+    })
+    .optional()
+  export type ResourceSelection = z.infer<typeof ResourceSelection>
+
   export const SessionChoice = z
     .object({
       agent: z.string().optional(),
       model: ModelChoice.optional(),
+      resources: ResourceSelection,
     })
     .optional()
   export type SessionChoice = z.infer<typeof SessionChoice>
@@ -80,6 +104,7 @@ export namespace RuntimeControllerProtocol {
       entry: Entry,
       sessionChoice: SessionChoice,
       clientCapabilities: ClientCapabilities.optional(),
+      page: z.any().optional(),
     })
     .optional()
   export type TemplateResolveRequest = z.infer<typeof TemplateResolveRequest>
@@ -92,6 +117,7 @@ export namespace RuntimeControllerProtocol {
       entry: Entry,
       sessionChoice: SessionChoice,
       clientCapabilities: ClientCapabilities.optional(),
+      page: z.any().optional(),
       debug: z
         .object({
           profileSnapshot: z.boolean().optional(),

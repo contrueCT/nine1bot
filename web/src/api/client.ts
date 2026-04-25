@@ -71,6 +71,31 @@ function webClientCapabilities(page?: RequestPagePayload) {
   }
 }
 
+function controllerEntry(page?: RequestPagePayload) {
+  if (!page) {
+    return {
+      source: 'web',
+      mode: 'web-chat',
+      templateIds: ['default-user-template', 'web-chat'],
+    }
+  }
+
+  const templateIds = ['default-user-template', 'browser-generic']
+  if (page.platform === 'gitlab') {
+    templateIds.push('browser-gitlab')
+    if (page.pageType?.startsWith('gitlab-')) {
+      templateIds.push(page.pageType)
+    }
+  }
+
+  return {
+    source: 'browser-extension',
+    platform: page.platform,
+    mode: 'browser-sidepanel',
+    templateIds,
+  }
+}
+
 // 带超时的 fetch 封装
 async function fetchWithTimeout(
   url: string,
@@ -291,18 +316,15 @@ export const api = {
   },
 
   // 创建会话
-  async createSession(directory?: string): Promise<Session> {
+  async createSession(directory?: string, pageContext?: RequestPagePayload): Promise<Session> {
     const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/agent/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...(directory ? { directory } : {}),
-        entry: {
-          source: 'web',
-          mode: 'web-chat',
-          templateIds: ['default-user-template', 'web-chat'],
-        },
-        clientCapabilities: webClientCapabilities(),
+        entry: controllerEntry(pageContext),
+        ...(pageContext ? { page: pageContext } : {}),
+        clientCapabilities: webClientCapabilities(pageContext),
       })
     })
     const data = await res.json()
@@ -344,18 +366,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         parts,
-        entry: pageContext
-          ? {
-              source: 'browser-extension',
-              platform: pageContext.platform,
-              mode: 'browser-sidepanel',
-              templateIds: ['default-user-template', 'browser-sidepanel'],
-            }
-          : {
-              source: 'web',
-              mode: 'web-chat',
-              templateIds: ['default-user-template', 'web-chat'],
-            },
+        entry: controllerEntry(pageContext),
         ...(pageContext ? { context: { page: pageContext } } : {}),
         clientCapabilities: webClientCapabilities(pageContext),
       })

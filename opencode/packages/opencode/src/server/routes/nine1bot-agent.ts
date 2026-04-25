@@ -3,8 +3,6 @@ import { streamSSE } from "hono/streaming"
 import { describeRoute, resolver, validator } from "hono-openapi"
 import z from "zod"
 import { Bus } from "@/bus"
-import { Agent } from "@/agent/agent"
-import { Provider } from "@/provider/provider"
 import { Instance } from "@/project/instance"
 import { PermissionNext } from "@/permission/next"
 import { Question } from "@/question"
@@ -17,6 +15,7 @@ import { RuntimeControllerProtocol } from "@/runtime/controller/protocol"
 import { RuntimeContextEvents } from "@/runtime/context/events"
 import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
 import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
+import { ControllerTemplateResolver } from "@/runtime/controller/template-resolver"
 import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import { Log } from "@/util/log"
@@ -51,34 +50,33 @@ async function capabilities(): Promise<RuntimeControllerProtocol.CapabilitiesRes
 }
 
 async function resolveTemplate(input?: RuntimeControllerProtocol.TemplateResolveRequest) {
-  const agentName = input?.sessionChoice?.agent ?? (await Agent.defaultAgent())
-  const agent = await Agent.get(agentName)
-  if (!agent) throw new Error(`Agent not found: ${agentName}`)
-  const defaultModel = agent.model ?? (await Provider.defaultModel())
-  const resources = (await RuntimeFeatureFlags.resourceResolverEnabled())
-    ? await RuntimeResourceResolver.compileProfileResources()
-    : RuntimeResourceResolver.emptyResources()
+  const resolved = await ControllerTemplateResolver.resolve({
+    entry: input?.entry,
+    sessionChoice: input?.sessionChoice,
+    clientCapabilities: input?.clientCapabilities,
+    page: parsePage(input?.page),
+  })
 
   return {
     version: RuntimeControllerProtocol.VERSION,
+    templateIds: resolved.templateIds,
     template: {
-      id: "default-user-template",
+      id: resolved.templateIds.at(-1) ?? "default-user-template",
       source: "user-config",
       protocolVersion: RuntimeControllerProtocol.VERSION,
     },
-    recommendedAgent: agent.name,
+    defaultAgent: resolved.defaultAgent,
+    recommendedAgent: resolved.recommendedAgent,
+    defaultModel: resolved.defaultModel,
     sessionChoice: input?.sessionChoice,
+    contextPreview: resolved.contextPreview,
+    resourcesPreview: resolved.resourcesPreview,
+    orchestration: resolved.orchestration,
+    audit: resolved.audit,
     defaultUserTemplate: {
-      agent: {
-        name: agent.name,
-        source: input?.sessionChoice?.agent ? "session-choice" : "default-user-template",
-      },
-      defaultModel: {
-        providerID: defaultModel.providerID,
-        modelID: defaultModel.modelID,
-        source: "default-user-template",
-      },
-      resources,
+      agent: resolved.defaultAgent,
+      defaultModel: resolved.defaultModel,
+      resources: resolved.profileTemplate.resources,
     },
     capabilities: await capabilities(),
   }
@@ -89,13 +87,32 @@ function parsePermission(input: unknown) {
   return parsed.success ? parsed.data : undefined
 }
 
+function parsePage(input: unknown) {
+  const parsed = RuntimeContextEvents.RequestPagePayload.safeParse(input)
+  return parsed.success ? parsed.data : undefined
+}
+
 async function createControllerSession(input?: RuntimeControllerProtocol.SessionCreateRequest) {
   const model = input?.sessionChoice?.model
+  const permission = parsePermission(input?.permission)
+  const template = await ControllerTemplateResolver.resolve({
+    entry: input?.entry,
+    sessionChoice: input?.sessionChoice,
+    clientCapabilities: input?.clientCapabilities,
+    page: parsePage(input?.page),
+  })
+  const compiledProfile = await SessionProfileCompiler.compile({
+    directory: input?.directory ?? Instance.directory,
+    permission,
+    source: "new-session",
+    agentName: input?.sessionChoice?.agent,
+    profileTemplate: template.profileTemplate,
+  })
   const session = await Session.createNext({
     title: input?.title,
     directory: input?.directory ?? Instance.directory,
-    permission: parsePermission(input?.permission),
-    runtimeAgentName: input?.sessionChoice?.agent,
+    permission,
+    runtimeProfile: compiledProfile,
     runtimeCurrentModel: model ? SessionRuntimeProfile.currentModel(model, "session-choice") : undefined,
   })
   const profile = input?.debug?.profileSnapshot ? await SessionRuntimeProfile.read(session) : undefined
@@ -106,6 +123,10 @@ async function createControllerSession(input?: RuntimeControllerProtocol.Session
     profileSnapshotId: session.runtime?.profileSnapshotId,
     agent: session.runtime?.agent,
     currentModel: session.runtime?.currentModel,
+    templateIds: template.templateIds,
+    contextPreview: template.contextPreview,
+    resourcesPreview: template.resourcesPreview,
+    audit: template.audit,
     profileSnapshot: profile,
   }
 }

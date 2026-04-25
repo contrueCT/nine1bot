@@ -157,12 +157,15 @@ export function useSession() {
   /**
    * 实际创建会话（内部方法，发送消息时调用）
    */
-  async function _createSessionInternal(directory: string): Promise<Session> {
+  async function _createSessionInternal(
+    directory: string,
+    pageContext?: Awaited<ReturnType<typeof collectActivePageContext>>
+  ): Promise<Session> {
     try {
       isLoading.value = true
       setApiDirectory(directory)
       reconnectEventsForDirectory()
-      const session = await api.createSession(directory)
+      const session = await api.createSession(directory, pageContext)
       currentSession.value = session
       // 使用服务器返回的实际目录，而不是传入的参数
       currentDirectory.value = session.directory
@@ -246,8 +249,15 @@ export function useSession() {
     model?: { providerID: string; modelID: string },
     files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>
   ) {
+    const draftPageContext =
+      isDraftSession.value || !currentSession.value
+        ? await collectActivePageContext().catch((error) => {
+            console.warn('Failed to collect active page context:', error)
+            return undefined
+          })
+        : undefined
     // 如果是草稿模式或没有当前会话，先创建会话
-    const ensuredSession = await ensureSession()
+    const ensuredSession = await ensureSession(draftPageContext)
     if (!ensuredSession) {
       return
     }
@@ -284,10 +294,12 @@ export function useSession() {
       }
 
       subscribeToSessionRuntimeEvents(sessionId)
-      const pageContext = await collectActivePageContext().catch((error) => {
-        console.warn('Failed to collect active page context:', error)
-        return undefined
-      })
+      const pageContext =
+        draftPageContext ??
+        (await collectActivePageContext().catch((error) => {
+          console.warn('Failed to collect active page context:', error)
+          return undefined
+        }))
       await api.sendMessage(sessionId, content, files, pageContext)
     } catch (error: any) {
       // Ignore abort errors
@@ -320,13 +332,15 @@ export function useSession() {
     }
   }
 
-  async function ensureSession(): Promise<Session | null> {
+  async function ensureSession(
+    pageContext?: Awaited<ReturnType<typeof collectActivePageContext>>
+  ): Promise<Session | null> {
     if (!isDraftSession.value && currentSession.value) {
       return currentSession.value
     }
 
     try {
-      return await _createSessionInternal(currentDirectory.value || '.')
+      return await _createSessionInternal(currentDirectory.value || '.', pageContext)
     } catch (error) {
       console.error('Failed to ensure session:', error)
       sessionError.value = {

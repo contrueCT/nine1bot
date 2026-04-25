@@ -30,12 +30,6 @@ const PROJECT_COMMAND_TEXT = [
   '/project list 查看可切换的项目',
   '/project <id或名称> 切换项目并新建会话',
 ].join('\n')
-const FEISHU_SYSTEM_PROMPT = [
-  'You are replying inside a Feishu private chat.',
-  'Keep replies plain text, concise, and easy to read in chat.',
-  'Do not use markdown in this chat, and do not include code blocks.',
-  'If a permission request or follow-up question is rejected, clearly tell the user that they need to continue in the web UI.',
-].join('\n')
 const IMAGE_LIMIT_BYTES = 20 * 1024 * 1024
 const FILE_LIMIT_BYTES = 10 * 1024 * 1024
 const DEDUP_TTL_MS = 10 * 60 * 1000
@@ -474,19 +468,19 @@ export class FeishuService implements FeishuServiceHandle {
     sessionId: string,
     parts: Array<{ type: 'text'; text: string } | { type: 'file'; filename: string; mime: string; url: string }>,
     directory: string,
-    system = FEISHU_SYSTEM_PROMPT,
+    system?: string,
   ): Promise<ControllerMessageResponse> {
     return this.requestJson<ControllerMessageResponse>(`/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: 'POST',
       directory,
       body: {
         parts,
-        system,
+        ...(system ? { system } : {}),
         entry: {
           source: 'feishu',
           platform: 'feishu',
           mode: 'feishu-private-chat',
-          templateIds: ['default-user-template', 'feishu-private-chat'],
+          templateIds: ['default-user-template', 'feishu-chat'],
         },
         clientCapabilities: FEISHU_CONTROLLER_CAPABILITIES,
       },
@@ -988,7 +982,7 @@ export class FeishuService implements FeishuServiceHandle {
           source: 'feishu',
           platform: 'feishu',
           mode: 'feishu-private-chat',
-          templateIds: ['default-user-template', 'feishu-private-chat'],
+          templateIds: ['default-user-template', 'feishu-chat'],
         },
         clientCapabilities: FEISHU_CONTROLLER_CAPABILITIES,
       },
