@@ -42,6 +42,16 @@ const DEDUP_TTL_MS = 10 * 60 * 1000
 const PROGRESS_FLUSH_MS = 2500
 const EVENT_RETRY_DELAY_MS = 1000
 const PROJECT_LIST_LIMIT = 12
+const SESSION_COMPLETION_TIMEOUT_MS = 10 * 60 * 1000
+const FEISHU_CONTROLLER_CAPABILITIES = {
+  interactions: false,
+  permissionRequests: false,
+  questionRequests: false,
+  artifacts: false,
+  filePreview: false,
+  resourceFailures: true,
+  continueInWeb: true,
+}
 
 type FeishuMessageEvent = {
   event_id?: string
@@ -92,12 +102,28 @@ type ActiveSessionContext = FeishuMessageLockState & {
   assistantMessageIds: Set<string>
   partLengths: Map<string, number>
   needsWebContinuation: boolean
+  completion: Promise<void>
+  resolveCompletion: () => void
+  rejectCompletion: (error: Error) => void
+  completed: boolean
+  turnSnapshotId?: string
 }
 
 type LocalSessionInfo = {
   id: string
-  projectID: string
+  projectID?: string
   directory: string
+}
+
+type ControllerSessionCreateResponse = {
+  sessionId: string
+  session: LocalSessionInfo
+  profileSnapshotId?: string
+  agent?: string
+  currentModel?: {
+    providerID: string
+    modelID: string
+  }
 }
 
 type LocalProjectInfo = {
@@ -116,6 +142,21 @@ type AssistantResult = {
     text?: string
     synthetic?: boolean
   }>
+}
+
+type LocalMessage = AssistantResult & {
+  info: {
+    id: string
+    role: 'user' | 'assistant'
+    sessionID: string
+  }
+}
+
+type ControllerMessageResponse = {
+  accepted: boolean
+  sessionId: string
+  turnSnapshotId?: string
+  busy?: boolean
 }
 
 type SessionPartPayload = {
@@ -434,15 +475,22 @@ export class FeishuService implements FeishuServiceHandle {
     parts: Array<{ type: 'text'; text: string } | { type: 'file'; filename: string; mime: string; url: string }>,
     directory: string,
     system = FEISHU_SYSTEM_PROMPT,
-  ): Promise<AssistantResult> {
-    return this.requestJson<AssistantResult>(`/session/${sessionId}/message`, {
+  ): Promise<ControllerMessageResponse> {
+    return this.requestJson<ControllerMessageResponse>(`/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: 'POST',
       directory,
       body: {
         parts,
         system,
+        entry: {
+          source: 'feishu',
+          platform: 'feishu',
+          mode: 'feishu-private-chat',
+          templateIds: ['default-user-template', 'feishu-private-chat'],
+        },
+        clientCapabilities: FEISHU_CONTROLLER_CAPABILITIES,
       },
-      timeoutMs: 10 * 60 * 1000,
+      timeoutMs: 30000,
     })
   }
 
@@ -456,11 +504,12 @@ export class FeishuService implements FeishuServiceHandle {
       if (permission.sessionID !== sessionId) {
         continue
       }
-      await this.requestJson<boolean>(`/permission/${permission.id}/reply`, {
+      await this.requestJson<boolean>(`/nine1bot/agent/interactions/${encodeURIComponent(permission.id)}/answer`, {
         method: 'POST',
         directory,
         body: {
-          reply: 'reject',
+          kind: 'permission',
+          answer: 'deny',
           message: WEB_CONTINUE_TEXT,
         },
         timeoutMs: 10000,
@@ -476,9 +525,13 @@ export class FeishuService implements FeishuServiceHandle {
       if (question.sessionID !== sessionId) {
         continue
       }
-      await this.requestJson<boolean>(`/question/${question.id}/reject`, {
+      await this.requestJson<boolean>(`/nine1bot/agent/interactions/${encodeURIComponent(question.id)}/answer`, {
         method: 'POST',
         directory,
+        body: {
+          kind: 'question',
+          answer: 'deny',
+        },
         timeoutMs: 10000,
       }).catch(() => false)
     }
@@ -809,6 +862,12 @@ export class FeishuService implements FeishuServiceHandle {
 
   private async handleConversation(message: NormalizedMessage): Promise<void> {
     let binding = await this.resolveBinding(message.openId)
+    let resolveCompletion!: () => void
+    let rejectCompletion!: (error: Error) => void
+    const completion = new Promise<void>((resolve, reject) => {
+      resolveCompletion = resolve
+      rejectCompletion = reject
+    })
 
     const context: ActiveSessionContext = {
       openId: message.openId,
@@ -821,6 +880,10 @@ export class FeishuService implements FeishuServiceHandle {
       assistantMessageIds: new Set<string>(),
       partLengths: new Map<string, number>(),
       needsWebContinuation: false,
+      completion,
+      resolveCompletion,
+      rejectCompletion,
+      completed: false,
     }
 
     this.activeByOpenId.set(message.openId, context)
@@ -847,10 +910,16 @@ export class FeishuService implements FeishuServiceHandle {
         return
       }
 
-      const result = await this.sendSessionPrompt(binding.sessionId, parts, binding.directory)
+      const accepted = await this.sendSessionPrompt(binding.sessionId, parts, binding.directory)
+      context.turnSnapshotId = accepted.turnSnapshotId
+      if (!accepted.accepted || accepted.busy) {
+        throw new Error('当前会话正在处理中，请稍后再试')
+      }
+
+      await this.waitForSessionCompletion(context)
       await this.flushProgress(context, true)
 
-      let finalText = getFinalAssistantText(result)
+      let finalText = await this.getLatestAssistantText(binding.sessionId, binding.directory, context.assistantMessageIds)
       if (!finalText) {
         finalText = '处理完成，但这次没有生成可发送到飞书的文本结果。'
       }
@@ -879,23 +948,60 @@ export class FeishuService implements FeishuServiceHandle {
     }
   }
 
+  private async waitForSessionCompletion(context: ActiveSessionContext): Promise<void> {
+    await Promise.race([
+      context.completion,
+      sleep(SESSION_COMPLETION_TIMEOUT_MS).then(() => {
+        throw new Error('等待 agent 完成超时，请稍后到 web 端查看结果')
+      }),
+    ])
+  }
+
+  private async getLatestAssistantText(
+    sessionId: string,
+    directory: string,
+    assistantMessageIds: Set<string>,
+  ): Promise<string> {
+    const messages = await this.requestJson<LocalMessage[]>(`/session/${encodeURIComponent(sessionId)}/message`, {
+      directory,
+      timeoutMs: 30000,
+    }).catch(() => [])
+
+    const assistantMessages = messages.filter((message) => {
+      if (message.info.role !== 'assistant') {
+        return false
+      }
+      return assistantMessageIds.size === 0 || assistantMessageIds.has(message.info.id)
+    })
+    const latest = assistantMessages.at(-1)
+    return latest ? getFinalAssistantText(latest) : ''
+  }
+
   private async createAndBindSession(openId: string, directory: string): Promise<FeishuConversationBinding> {
     const normalizedDirectory = await ensureDirectoryExists(resolve(directory))
-    const session = await this.requestJson<LocalSessionInfo>('/session', {
+    const created = await this.requestJson<ControllerSessionCreateResponse>('/nine1bot/agent/sessions', {
       method: 'POST',
       directory: normalizedDirectory,
       body: {
         directory: normalizedDirectory,
+        entry: {
+          source: 'feishu',
+          platform: 'feishu',
+          mode: 'feishu-private-chat',
+          templateIds: ['default-user-template', 'feishu-private-chat'],
+        },
+        clientCapabilities: FEISHU_CONTROLLER_CAPABILITIES,
       },
       timeoutMs: 30000,
     })
+    const session = created.session
 
     const binding: FeishuConversationBinding = {
       bindingKey: toBindingKey(openId),
       openId,
       sessionId: session.id,
       directory: normalizedDirectory,
-      projectId: session.projectID,
+      projectId: session.projectID || '',
       updatedAt: Date.now(),
     }
 
@@ -1010,7 +1116,10 @@ export class FeishuService implements FeishuServiceHandle {
   private async handleServerEvent(event: GlobalEventEnvelope): Promise<void> {
     const sessionId =
       event.payload?.properties?.sessionID ||
-      event.payload?.properties?.part?.sessionID
+      event.payload?.properties?.part?.sessionID ||
+      event.payload?.properties?.info?.sessionID ||
+      event.payload?.properties?.status?.sessionID ||
+      event.payload?.properties?.error?.sessionID
 
     if (!sessionId) {
       return
@@ -1025,7 +1134,33 @@ export class FeishuService implements FeishuServiceHandle {
       context.directory = event.directory
     }
 
-    if (event.payload.type === 'message.updated') {
+    if (event.payload.type === 'session.idle') {
+      this.resolveContextCompletion(context)
+      return
+    }
+
+    if (event.payload.type === 'session.status') {
+      const statusType = event.payload.properties?.status?.type
+      if (statusType === 'idle') {
+        this.resolveContextCompletion(context)
+      }
+      return
+    }
+
+    if (event.payload.type === 'session.error') {
+      const message = event.payload.properties?.error?.data?.message ||
+        event.payload.properties?.error?.message ||
+        'Agent failed'
+      this.rejectContextCompletion(context, new Error(message))
+      return
+    }
+
+    if (event.payload.type === 'runtime.resource.failed') {
+      context.needsWebContinuation = true
+      return
+    }
+
+    if (event.payload.type === 'message.created' || event.payload.type === 'message.updated') {
       if (event.payload.properties?.info?.role === 'assistant') {
         context.assistantMessageIds.add(event.payload.properties.info.id)
       }
@@ -1045,6 +1180,22 @@ export class FeishuService implements FeishuServiceHandle {
     if (event.payload.type === 'question.asked') {
       await this.handleQuestionAsked(context, event.payload.properties as { id: string })
     }
+  }
+
+  private resolveContextCompletion(context: ActiveSessionContext): void {
+    if (context.completed) {
+      return
+    }
+    context.completed = true
+    context.resolveCompletion()
+  }
+
+  private rejectContextCompletion(context: ActiveSessionContext, error: Error): void {
+    if (context.completed) {
+      return
+    }
+    context.completed = true
+    context.rejectCompletion(error)
   }
 
   private async handlePartUpdated(
@@ -1109,11 +1260,12 @@ export class FeishuService implements FeishuServiceHandle {
     },
   ): Promise<void> {
     context.needsWebContinuation = true
-    await this.requestJson<boolean>(`/permission/${properties.id}/reply`, {
+    await this.requestJson<boolean>(`/nine1bot/agent/interactions/${encodeURIComponent(properties.id)}/answer`, {
       method: 'POST',
       directory: context.directory,
       body: {
-        reply: 'reject',
+        kind: 'permission',
+        answer: 'deny',
         message: WEB_CONTINUE_TEXT,
       },
       timeoutMs: 10000,
@@ -1127,9 +1279,13 @@ export class FeishuService implements FeishuServiceHandle {
     },
   ): Promise<void> {
     context.needsWebContinuation = true
-    await this.requestJson<boolean>(`/question/${properties.id}/reject`, {
+    await this.requestJson<boolean>(`/nine1bot/agent/interactions/${encodeURIComponent(properties.id)}/answer`, {
       method: 'POST',
       directory: context.directory,
+      body: {
+        kind: 'question',
+        answer: 'deny',
+      },
       timeoutMs: 10000,
     }).catch(() => false)
   }

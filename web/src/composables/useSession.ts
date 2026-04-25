@@ -51,10 +51,16 @@ export function useSession() {
 
   // 事件源订阅
   let eventSource: EventSource | null = null
+  let sessionEventSource: EventSource | null = null
+  let subscribedRuntimeSessionId: string | null = null
 
   function reconnectEventsForDirectory() {
-    if (!eventSource) return
-    subscribeToEvents()
+    if (eventSource) {
+      subscribeToEvents()
+    }
+    if (currentSession.value) {
+      subscribeToSessionRuntimeEvents(currentSession.value.id)
+    }
   }
 
   // 通知定时器追踪（用于清理）
@@ -101,6 +107,7 @@ export function useSession() {
     retryInfo.value = null
     todoItems.value = []
     seenUserMessageIds.clear()
+    unsubscribeSessionRuntimeEvents()
   }
 
   /**
@@ -160,6 +167,7 @@ export function useSession() {
       currentDirectory.value = session.directory
       setApiDirectory(currentDirectory.value)
       reconnectEventsForDirectory()
+      subscribeToSessionRuntimeEvents(session.id)
       isDraftSession.value = false
       // 重新加载所有会话，不过滤目录
       await loadSessions()
@@ -189,6 +197,7 @@ export function useSession() {
       currentDirectory.value = session.directory
       setApiDirectory(currentDirectory.value)
       reconnectEventsForDirectory()
+      subscribeToSessionRuntimeEvents(session.id)
       messages.value = []  // Clear immediately to avoid flash of old content
       messages.value = await api.getMessages(session.id)
     } catch (error) {
@@ -200,6 +209,36 @@ export function useSession() {
 
   // 用于防止用户消息重复
   const seenUserMessageIds = new Set<string>()
+
+  function isSameModel(
+    current: { providerID: string; modelID: string } | undefined,
+    next: { providerID: string; modelID: string }
+  ): boolean {
+    return current?.providerID === next.providerID && current?.modelID === next.modelID
+  }
+
+  function applyCurrentSessionRuntime(update: {
+    currentModel?: { providerID: string; modelID: string; source?: string }
+    profileSnapshotId?: string
+  }) {
+    if (!currentSession.value) return
+
+    const runtime = {
+      ...(currentSession.value.runtime || {}),
+      ...(update.profileSnapshotId ? { profileSnapshotId: update.profileSnapshotId } : {}),
+      ...(update.currentModel ? { currentModel: update.currentModel } : {}),
+    }
+    const updated = {
+      ...currentSession.value,
+      runtime,
+    }
+    currentSession.value = updated
+
+    const index = sessions.value.findIndex(s => s.id === updated.id)
+    if (index !== -1) {
+      sessions.value[index] = updated
+    }
+  }
 
   async function sendMessage(
     content: string,
@@ -235,28 +274,16 @@ export function useSession() {
     const sessionId = currentSession.value.id
 
     try {
-      await api.sendMessage(
-        sessionId,
-        content,
-        handleSSEEvent,
-        (error) => {
-          // Ignore abort errors - these are normal when session completes or user cancels
-          const errorMessage = error.message?.toLowerCase() || ''
-          if (errorMessage.includes('aborted') || errorMessage.includes('abort') || error.name === 'AbortError') {
-            console.log('Stream ended (aborted)')
-            return
-          }
-          console.error('Stream error:', error)
-          sessionError.value = {
-            message: `网络错误: ${error.message || '连接中断'}`,
-            dismissable: true
-          }
-          // Mark session as stopped on error
-          setSessionRunning(sessionId, false)
-        },
-        model,
-        files
-      )
+      if (model && !isSameModel(currentSession.value.runtime?.currentModel, model)) {
+        const modelResult = await api.changeSessionModel(sessionId, model)
+        applyCurrentSessionRuntime({
+          currentModel: modelResult.currentModel,
+          profileSnapshotId: modelResult.profileSnapshotId,
+        })
+      }
+
+      subscribeToSessionRuntimeEvents(sessionId)
+      await api.sendMessage(sessionId, content, files)
     } catch (error: any) {
       // Ignore abort errors
       const errorMessage = error.message?.toLowerCase() || ''
@@ -625,12 +652,43 @@ export function useSession() {
     })
   }
 
+  function subscribeToSessionRuntimeEvents(sessionId: string) {
+    if (sessionEventSource && subscribedRuntimeSessionId === sessionId) {
+      return
+    }
+
+    unsubscribeSessionRuntimeEvents()
+    subscribedRuntimeSessionId = sessionId
+    sessionEventSource = api.subscribeSessionRuntimeEvents(sessionId, (event: SSEEvent) => {
+      handleGlobalSSEEvent(event)
+
+      for (const handler of externalEventHandlers) {
+        try {
+          handler(event)
+        } catch (e) {
+          console.error('External event handler error:', e)
+        }
+      }
+
+      handleSSEEvent(event)
+    })
+  }
+
+  function unsubscribeSessionRuntimeEvents() {
+    if (sessionEventSource) {
+      sessionEventSource.close()
+      sessionEventSource = null
+    }
+    subscribedRuntimeSessionId = null
+  }
+
   // 取消订阅
   function unsubscribe() {
     if (eventSource) {
       eventSource.close()
       eventSource = null
     }
+    unsubscribeSessionRuntimeEvents()
     // 清理所有通知定时器
     for (const timerId of notificationTimers.values()) {
       clearTimeout(timerId)
@@ -726,6 +784,7 @@ export function useSession() {
         } else {
           currentSession.value = null
           messages.value = []
+          unsubscribeSessionRuntimeEvents()
         }
       }
     } catch (error) {

@@ -1,3 +1,9 @@
+import {
+  RUNTIME_EVENT_TYPES,
+  normalizeRuntimeEventEnvelope,
+  type RuntimeEventEnvelope,
+} from './runtime-events'
+
 const BASE_URL = ''  // 使用相对路径，由 vite proxy 或同源处理
 
 // 默认请求超时时间 (30秒)
@@ -40,6 +46,30 @@ function fetchWithDirectory(url: string, options: RequestInit = {}) {
   return fetch(applyDirectoryToUrl(url), applyDirectoryHeaders(options))
 }
 
+function normalizeSession(session: Session): Session {
+  return {
+    ...session,
+    createdAt: session.time ? new Date(session.time.created).toISOString() : undefined
+  }
+}
+
+function webClientCapabilities() {
+  return {
+    interactions: true,
+    permissionRequests: true,
+    questionRequests: true,
+    artifacts: true,
+    filePreview: true,
+    pageContext: false,
+    selectionContext: false,
+    debug: true,
+    resourceFailures: true,
+    contextAudit: true,
+    turnSnapshots: true,
+    continueInWeb: true,
+  }
+}
+
 // 带超时的 fetch 封装
 async function fetchWithTimeout(
   url: string,
@@ -77,6 +107,7 @@ export interface Session {
   directory: string
   projectID?: string
   parentID?: string
+  runtime?: SessionRuntimeSummary
   time: {
     created: number
     updated: number
@@ -84,6 +115,18 @@ export interface Session {
   }
   // Computed field for display
   createdAt?: string
+}
+
+export interface SessionRuntimeSummary {
+  protocolVersion?: string
+  profileSnapshotId?: string
+  profileSource?: string
+  agent?: string
+  currentModel?: {
+    providerID: string
+    modelID: string
+    source?: string
+  }
 }
 
 export interface Project {
@@ -243,25 +286,27 @@ export const api = {
     const data = await res.json()
     const sessions = Array.isArray(data) ? data : (data.data || [])
     // 添加 createdAt 字段用于显示
-    return sessions.map((s: Session) => ({
-      ...s,
-      createdAt: s.time ? new Date(s.time.created).toISOString() : undefined
-    }))
+    return sessions.map((s: Session) => normalizeSession(s))
   },
 
   // 创建会话
   async createSession(directory?: string): Promise<Session> {
-    const res = await fetchWithDirectory(`${BASE_URL}/session`, {
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/agent/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(directory ? { directory } : {})
+      body: JSON.stringify({
+        ...(directory ? { directory } : {}),
+        entry: {
+          source: 'web',
+          mode: 'web-chat',
+          templateIds: ['default-user-template', 'web-chat'],
+        },
+        clientCapabilities: webClientCapabilities(),
+      })
     })
     const data = await res.json()
-    const session = data.data || data
-    return {
-      ...session,
-      createdAt: session.time ? new Date(session.time.created).toISOString() : undefined
-    }
+    const session = data.session || data.data || data
+    return normalizeSession(session)
   },
 
   // 获取消息历史
@@ -276,91 +321,60 @@ export const api = {
     return Array.isArray(data) ? data : (data.data || [])
   },
 
-  // 发送消息 (支持 SSE 流式响应和普通 JSON 响应)
+  // 发送消息。消息流通过 per-session runtime event stream 返回。
   async sendMessage(
     sessionId: string,
     content: string,
-    onEvent: (event: SSEEvent) => void,
-    onError?: (error: Error) => void,
-    model?: { providerID: string; modelID: string },
     files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>
-  ): Promise<void> {
-    try {
-      const parts: any[] = []
+  ): Promise<{ accepted: boolean; sessionId: string; turnSnapshotId?: string; busy?: boolean }> {
+    const parts: any[] = []
 
-      // Add text content if not empty
-      if (content.trim()) {
-        parts.push({ type: 'text', text: content })
-      }
-
-      // Add file parts
-      if (files && files.length > 0) {
-        parts.push(...files)
-      }
-
-      const body: Record<string, any> = { parts }
-
-      // 如果指定了模型，添加到请求体
-      if (model) {
-        body.model = model
-      }
-      const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      })
-
-      if (!res.ok) {
-        // Handle session busy error (409 Conflict)
-        if (res.status === 409) {
-          const error = await res.json().catch(() => ({}))
-          throw new SessionBusyError(error.data?.sessionID || sessionId)
-        }
-        throw new Error(`HTTP error! status: ${res.status}`)
-      }
-
-      const contentType = res.headers.get('content-type') || ''
-
-      // 处理 SSE 流式响应
-      if (contentType.includes('text/event-stream')) {
-        const reader = res.body!.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const event = JSON.parse(line.slice(6))
-                onEvent(event)
-              } catch (e) {
-                console.warn('Failed to parse SSE event:', line)
-              }
-            }
-          }
-        }
-      } else {
-        // 处理普通 JSON 响应 - 后端返回 { info, parts }
-        const data = await res.json()
-        if (data.info) {
-          const message: Message = {
-            info: data.info,
-            parts: data.parts || []
-          }
-          onEvent({ type: 'message.created', properties: { message } })
-          onEvent({ type: 'message.completed', properties: { message } })
-        }
-      }
-    } catch (error) {
-      onError?.(error as Error)
+    if (content.trim()) {
+      parts.push({ type: 'text', text: content })
     }
+
+    if (files && files.length > 0) {
+      parts.push(...files)
+    }
+
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parts,
+        entry: {
+          source: 'web',
+          mode: 'web-chat',
+          templateIds: ['default-user-template', 'web-chat'],
+        },
+        clientCapabilities: webClientCapabilities(),
+      })
+    })
+
+    if (!res.ok) {
+      if (res.status === 409) {
+        const error = await res.json().catch(() => ({}))
+        throw new SessionBusyError(error.sessionId || error.data?.sessionID || sessionId)
+      }
+      throw new Error(`HTTP error! status: ${res.status}`)
+    }
+
+    return res.json()
+  },
+
+  async changeSessionModel(
+    sessionId: string,
+    model: { providerID: string; modelID: string }
+  ): Promise<{ sessionId: string; currentModel?: SessionRuntimeSummary['currentModel']; profileSnapshotId?: string }> {
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/model`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model })
+    })
+    if (!res.ok) {
+      throw new Error(`Failed to change session model: ${res.status}`)
+    }
+    return res.json()
   },
 
   async uploadSessionFile(
@@ -481,10 +495,7 @@ export const api = {
     }
     const data = await res.json()
     const session = data.data || data
-    return {
-      ...session,
-      createdAt: session.time ? new Date(session.time.created).toISOString() : undefined
-    }
+    return normalizeSession(session)
   },
 
   // 删除消息部分
@@ -579,10 +590,7 @@ export const api = {
     const res = await fetchWithTimeout(`${BASE_URL}/session?${params}`)
     const data = await res.json()
     const sessions = Array.isArray(data) ? data : (data.data || [])
-    return sessions.map((s: Session) => ({
-      ...s,
-      createdAt: s.time ? new Date(s.time.created).toISOString() : undefined
-    }))
+    return sessions.map((s: Session) => normalizeSession(s))
   },
 
   // 浏览目录（用于目录选择器）
@@ -651,6 +659,66 @@ export const api = {
             }, delay)
           } else {
             console.error('EventSource max reconnect attempts reached')
+          }
+        }
+      }
+
+      return eventSource
+    }
+
+    return connect()
+  },
+
+  subscribeSessionRuntimeEvents(sessionId: string, onEvent: (event: SSEEvent) => void): EventSource {
+    let eventSource: EventSource
+    let reconnectAttempts = 0
+    const maxReconnectAttempts = 5
+    const baseReconnectDelay = 1000
+
+    function dispatchEnvelope(raw: string) {
+      try {
+        const envelope = JSON.parse(raw) as RuntimeEventEnvelope
+        for (const event of normalizeRuntimeEventEnvelope(envelope)) {
+          onEvent(event)
+        }
+      } catch {
+        console.warn('Failed to parse runtime event:', raw)
+      }
+    }
+
+    function connect(): EventSource {
+      eventSource = new EventSource(
+        applyDirectoryToUrl(`${BASE_URL}/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/events`)
+      )
+
+      eventSource.onopen = () => {
+        reconnectAttempts = 0
+      }
+
+      eventSource.onmessage = (e) => {
+        dispatchEnvelope(e.data)
+      }
+
+      for (const eventType of RUNTIME_EVENT_TYPES) {
+        eventSource.addEventListener(eventType, (e) => {
+          dispatchEnvelope((e as MessageEvent).data)
+        })
+      }
+
+      eventSource.onerror = (e) => {
+        console.error('Runtime EventSource error:', e)
+
+        if (eventSource.readyState === EventSource.CLOSED) {
+          if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++
+            const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts - 1)
+            setTimeout(() => {
+              if (eventSource.readyState === EventSource.CLOSED) {
+                connect()
+              }
+            }, delay)
+          } else {
+            console.error('Runtime EventSource max reconnect attempts reached')
           }
         }
       }
@@ -777,10 +845,7 @@ export const projectApi = {
       throw new Error(`Failed to list project sessions: ${res.status}`)
     }
     const sessions = await res.json()
-    return (sessions || []).map((s: Session) => ({
-      ...s,
-      createdAt: s.time ? new Date(s.time.created).toISOString() : undefined
-    }))
+    return (sessions || []).map((s: Session) => normalizeSession(s))
   },
 
   async getEnvironment(projectID: string): Promise<ProjectEnvironmentResponse> {
@@ -1313,18 +1378,32 @@ export const questionApi = {
   // 回复问题
   // answers 是二维数组: 每个问题对应一个选中的答案数组
   async reply(requestId: string, answers: string[][]): Promise<void> {
-    await fetch(`${BASE_URL}/question/${encodeURIComponent(requestId)}/reply`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/nine1bot/agent/interactions/${encodeURIComponent(requestId)}/answer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ answers })
+      body: JSON.stringify({
+        kind: 'question',
+        answer: { answers }
+      })
     })
+    if (!res.ok) {
+      throw new Error(`Question reply failed: ${res.status}`)
+    }
   },
 
   // 拒绝问题
   async reject(requestId: string): Promise<void> {
-    await fetch(`${BASE_URL}/question/${encodeURIComponent(requestId)}/reject`, {
-      method: 'POST'
+    const res = await fetchWithTimeout(`${BASE_URL}/nine1bot/agent/interactions/${encodeURIComponent(requestId)}/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'question',
+        answer: 'deny'
+      })
     })
+    if (!res.ok) {
+      throw new Error(`Question reject failed: ${res.status}`)
+    }
   }
 }
 
@@ -1343,12 +1422,22 @@ export const permissionApi = {
   // 回复权限请求
   // reply: 'once' | 'always' | 'reject'
   async reply(requestId: string, reply: 'once' | 'always' | 'reject', message?: string): Promise<void> {
+    const answer =
+      reply === 'once'
+        ? 'allow-once'
+        : reply === 'always'
+          ? 'allow-session'
+          : 'deny'
     const res = await fetchWithTimeout(
-      `${BASE_URL}/permission/${encodeURIComponent(requestId)}/reply`,
+      `${BASE_URL}/nine1bot/agent/interactions/${encodeURIComponent(requestId)}/answer`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reply, message })
+        body: JSON.stringify({
+          kind: 'permission',
+          answer,
+          message,
+        })
       },
       10000  // 10秒超时
     )
