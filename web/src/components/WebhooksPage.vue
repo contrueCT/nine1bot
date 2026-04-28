@@ -195,8 +195,8 @@ async function loadAll() {
       webhookApi.status(),
       webhookApi.sources(),
       webhookApi.runs({ limit: 100 }),
-      providerApi.list(),
-      mcpApi.list(),
+      providerApi.list().catch(() => ({ providers: [], defaults: {}, connected: [] })),
+      mcpApi.list().catch(() => []),
       nine1botConfigApi.get().catch(() => ({ model: '' })),
     ])
     status.value = nextStatus
@@ -215,10 +215,18 @@ async function loadAll() {
       loadFormFromSource(selectedSource.value)
     }
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = friendlyError(err)
   } finally {
     isLoading.value = false
   }
+}
+
+function friendlyError(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err)
+  if (/signal is aborted|aborterror|aborted/i.test(message)) {
+    return 'Request was cancelled or timed out. Refresh to retry.'
+  }
+  return message
 }
 
 function defaultModelFromConfig(model: string | undefined, providerData: { providers: Provider[]; defaults: Record<string, string>; connected: string[] }) {
@@ -919,10 +927,14 @@ onUnmounted(() => {
 
 <style scoped>
 .webhooks-page {
-  min-height: 100%;
-  padding: var(--space-xl);
-  background: var(--bg-secondary);
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  padding: var(--space-lg);
+  background: var(--bg-primary);
   color: var(--text-primary);
+  font-family: var(--font-sans);
+  line-height: 1.45;
   overflow: auto;
 }
 
@@ -949,6 +961,17 @@ onUnmounted(() => {
 .webhooks-header h1,
 .detail-header h2 {
   margin: 0;
+  font-family: var(--font-sans);
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.webhooks-header h1 {
+  font-size: 30px;
+}
+
+.detail-header h2 {
+  font-size: 22px;
 }
 
 .header-meta {
@@ -970,8 +993,8 @@ onUnmounted(() => {
 
 .btn,
 .icon-btn {
-  border: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  border: 0.5px solid var(--border-default);
+  background: var(--bg-elevated);
   color: var(--text-primary);
   border-radius: var(--radius-md);
   display: inline-flex;
@@ -979,6 +1002,10 @@ onUnmounted(() => {
   justify-content: center;
   gap: var(--space-xs);
   cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
 .btn {
@@ -993,9 +1020,20 @@ onUnmounted(() => {
 }
 
 .btn.primary {
-  background: var(--text-primary);
-  border-color: var(--text-primary);
-  color: var(--bg-primary);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.btn:hover:not(:disabled),
+.icon-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  border-color: var(--border-hover);
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .btn.danger,
@@ -1013,18 +1051,19 @@ onUnmounted(() => {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: var(--space-md);
   padding: var(--space-md);
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
   margin-bottom: var(--space-lg);
+  box-shadow: var(--shadow-sm);
 }
 
 .address-card,
 .panel,
 .sources-column,
 .detail-column {
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-lg);
 }
 
@@ -1063,12 +1102,14 @@ code {
   grid-template-columns: 330px minmax(0, 1fr);
   gap: var(--space-lg);
   min-height: 620px;
+  align-items: start;
 }
 
 .sources-column,
 .detail-column {
   min-width: 0;
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 
 .column-header {
@@ -1076,13 +1117,15 @@ code {
   justify-content: space-between;
   align-items: center;
   padding: var(--space-md);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 0.5px solid var(--border-default);
 }
 
 .column-header h2,
 .panel h3 {
   margin: 0;
   font-size: 15px;
+  font-family: var(--font-sans);
+  font-weight: 650;
 }
 
 .panel h3 {
@@ -1107,7 +1150,7 @@ code {
 
 .source-item.active {
   background: var(--bg-secondary);
-  border-color: var(--border-color);
+  border-color: var(--border-default);
 }
 
 .source-icon {
@@ -1149,7 +1192,7 @@ code {
   justify-content: space-between;
   gap: var(--space-md);
   padding: var(--space-lg);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 0.5px solid var(--border-default);
 }
 
 .detail-header p {
@@ -1197,10 +1240,19 @@ select,
 textarea,
 .endpoint-row {
   width: 100%;
-  border: 1px solid var(--border-color);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-primary);
   color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 input,
@@ -1265,7 +1317,7 @@ textarea {
 .preset-card,
 .preview-card,
 .run-detail {
-  border: 1px solid var(--border-color);
+  border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   padding: var(--space-md);
 }
@@ -1319,7 +1371,7 @@ textarea {
 }
 
 .chip {
-  border: 1px solid var(--border-color);
+  border: 0.5px solid var(--border-default);
   border-radius: 999px;
   padding: 4px 9px;
   background: var(--bg-secondary);
@@ -1349,7 +1401,7 @@ textarea {
   gap: var(--space-sm);
   align-items: center;
   min-height: 42px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 0.5px solid var(--border-default);
   font-size: 13px;
   cursor: pointer;
 }
@@ -1401,7 +1453,8 @@ textarea {
   border-radius: 999px;
   padding: 0 9px;
   font-size: 12px;
-  border: 1px solid var(--border-color);
+  font-family: var(--font-sans);
+  border: 0.5px solid var(--border-default);
 }
 
 .pill.ok {

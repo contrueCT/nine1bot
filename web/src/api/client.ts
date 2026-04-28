@@ -99,7 +99,11 @@ async function fetchWithTimeout(
   timeout: number = DEFAULT_TIMEOUT
 ): Promise<Response> {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeout)
+  let timedOut = false
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeout)
   const preparedUrl = applyDirectoryToUrl(url)
   const preparedOptions = applyDirectoryHeaders(options)
 
@@ -109,6 +113,11 @@ async function fetchWithTimeout(
       signal: controller.signal
     })
     return response
+  } catch (error) {
+    if (timedOut || controller.signal.aborted) {
+      throw new Error(`Request timed out after ${Math.round(timeout / 1000)}s: ${preparedUrl}`)
+    }
+    throw error
   } finally {
     clearTimeout(timeoutId)
   }
