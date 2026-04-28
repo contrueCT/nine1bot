@@ -4,6 +4,7 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  CircleQuestionMark,
   Copy,
   Plus,
   RefreshCw,
@@ -47,6 +48,19 @@ const emit = defineEmits<{
 }>()
 
 const DEFAULT_PRESET = webhookPresetById('generic')
+const helpText = {
+  guards: 'Guards reject noisy, duplicate, or stale webhook requests before they create an agent session.',
+  rateLimit: 'Limits how many requests this source accepts within one time window.',
+  cooldown: 'After a request is accepted, this source waits before accepting another one.',
+  dedupe: 'Rejects requests that render the same dedupe key during the TTL.',
+  dedupeKey: 'Build a stable key from mapped fields, body, headers, query, source, or project values.',
+  replayProtection: 'Requires a timestamp header and rejects requests outside the allowed time skew.',
+  timestampHeader: 'The external service must send this header with a Unix seconds, Unix milliseconds, or ISO timestamp.',
+  requestMapping: 'Map JSON paths from body, headers, or query into fields. These fields are available as {{fields.name}} in templates.',
+  promptTemplate: 'This becomes the first user message sent to the agent when a webhook event is accepted.',
+  samplePayload: 'Paste an example JSON payload to preview fields, prompt rendering, and dedupe key without creating a run.',
+  preview: 'Preview updates locally in the browser. It does not call the webhook endpoint or start an agent.',
+}
 
 const status = ref<WebhookStatus | null>(null)
 const sources = ref<WebhookSource[]>([])
@@ -84,6 +98,18 @@ const selectedProviderModels = computed(() => selectedProvider.value?.models || 
 const defaultMcpServers = computed(() => mcpServers.value.filter((server) => server.status !== 'disabled').map((server) => server.name))
 const addedMcpServers = computed(() => form.value.mcpServers.filter((server) => server.trim()))
 const availableMcpServers = computed(() => mcpServers.value.filter((server) => server.status !== 'disabled'))
+const effectiveMcpServers = computed(() => {
+  if (form.value.resourcesMode === 'default') {
+    return defaultMcpServers.value
+  }
+  return [...new Set([...defaultMcpServers.value, ...addedMcpServers.value])]
+})
+const mcpModeDescription = computed(() => {
+  if (form.value.resourcesMode === 'default') {
+    return 'Webhook sessions inherit only the default MCP configuration.'
+  }
+  return 'Webhook sessions inherit default MCP and add the selected MCP servers.'
+})
 const selectedPreset = computed(() => webhookPresetById(form.value.presetID))
 const configPreview = computed(() => previewWebhookConfig({
   sourceName: form.value.name,
@@ -186,6 +212,15 @@ watch(selectedProviderModels, (models) => {
     form.value.modelID = models[0].id
   }
 })
+
+watch(
+  () => form.value.resourcesMode,
+  (mode) => {
+    if (mode === 'default') {
+      showMcpPicker.value = false
+    }
+  },
+)
 
 async function loadAll() {
   isLoading.value = true
@@ -757,10 +792,32 @@ onUnmounted(() => {
 
               <div class="runtime-card">
                 <div class="section-title">MCP Servers</div>
-                <div class="segmented">
-                  <label><input v-model="form.resourcesMode" type="radio" value="default" /> default</label>
-                  <label><input v-model="form.resourcesMode" type="radio" value="default-plus-selected" /> add</label>
+                <div class="mode-options">
+                  <label class="mode-option" :class="{ active: form.resourcesMode === 'default' }">
+                    <input v-model="form.resourcesMode" type="radio" value="default" />
+                    <span>
+                      <strong>default</strong>
+                      <small>Use only default MCP</small>
+                    </span>
+                  </label>
+                  <label class="mode-option" :class="{ active: form.resourcesMode === 'default-plus-selected' }">
+                    <input v-model="form.resourcesMode" type="radio" value="default-plus-selected" />
+                    <span>
+                      <strong>add</strong>
+                      <small>Default MCP plus selected MCP</small>
+                    </span>
+                  </label>
                 </div>
+                <p class="hint">{{ mcpModeDescription }}</p>
+
+                <div class="mcp-group current">
+                  <span>Current MCP available to agent</span>
+                  <div class="chips">
+                    <span v-for="server in effectiveMcpServers" :key="server" class="chip strong">{{ server }}</span>
+                    <span v-if="effectiveMcpServers.length === 0" class="chip muted">No MCP available</span>
+                  </div>
+                </div>
+
                 <div class="mcp-group">
                   <span>Default MCP</span>
                   <div class="chips">
@@ -768,17 +825,31 @@ onUnmounted(() => {
                     <span v-if="defaultMcpServers.length === 0" class="chip muted">No default MCP</span>
                   </div>
                 </div>
+
                 <div class="mcp-group">
-                  <span>Added MCP</span>
+                  <span>{{ form.resourcesMode === 'default' ? 'Added MCP not used in default mode' : 'Added MCP' }}</span>
                   <div class="chips">
-                    <button v-for="server in addedMcpServers" :key="server" class="chip removable" @click="removeMcp(server)">
+                    <button
+                      v-for="server in addedMcpServers"
+                      :key="server"
+                      class="chip removable"
+                      :class="{ inactive: form.resourcesMode === 'default' }"
+                      @click="removeMcp(server)"
+                    >
                       {{ server }}
                     </button>
                     <span v-if="addedMcpServers.length === 0" class="chip muted">No additional MCP</span>
                   </div>
                 </div>
-                <button class="btn" @click="openMcpPicker">Add MCP</button>
-                <div v-if="showMcpPicker" class="picker">
+                <button
+                  class="btn"
+                  @click="openMcpPicker"
+                  :disabled="form.resourcesMode === 'default'"
+                  :title="form.resourcesMode === 'default' ? 'Switch to add mode before selecting MCP servers.' : 'Add MCP servers'"
+                >
+                  Add MCP
+                </button>
+                <div v-if="showMcpPicker && form.resourcesMode === 'default-plus-selected'" class="picker">
                   <label v-for="server in availableMcpServers" :key="server.name" class="check">
                     <input v-model="pendingMcpServers" type="checkbox" :value="server.name" />
                     {{ server.name }}
@@ -793,50 +864,165 @@ onUnmounted(() => {
           </section>
 
           <section class="panel wide">
-            <h3>Guards</h3>
-            <div class="guard-grid">
-              <label class="check">
-                <input v-model="form.guards.rateLimit.enabled" type="checkbox" />
-                Rate limit
-              </label>
-              <label><span>Max requests</span><input v-model.number="form.guards.rateLimit.maxRequests" type="number" min="1" /></label>
-              <label><span>Window seconds</span><input v-model.number="form.guards.rateLimit.windowSeconds" type="number" min="1" /></label>
+            <div class="section-heading">
+              <h3>Guards</h3>
+              <span class="help-tip" tabindex="0" :aria-label="helpText.guards">
+                <CircleQuestionMark :size="15" />
+                <span class="tooltip">{{ helpText.guards }}</span>
+              </span>
+            </div>
+            <p class="section-description">Keep this source from creating too many sessions or replaying stale events.</p>
+            <div class="guard-cards">
+              <section class="guard-card" :class="{ enabled: form.guards.rateLimit.enabled }">
+                <div class="guard-card-head">
+                  <label class="check">
+                    <input v-model="form.guards.rateLimit.enabled" type="checkbox" />
+                    <strong>Rate limit</strong>
+                  </label>
+                  <span class="help-tip" tabindex="0" :aria-label="helpText.rateLimit">
+                    <CircleQuestionMark :size="14" />
+                    <span class="tooltip">{{ helpText.rateLimit }}</span>
+                  </span>
+                </div>
+                <p class="setting-help">
+                  Accept up to {{ form.guards.rateLimit.maxRequests || 0 }} requests every
+                  {{ form.guards.rateLimit.windowSeconds || 0 }} seconds.
+                </p>
+                <div class="guard-fields">
+                  <label>
+                    <span>Max requests</span>
+                    <input v-model.number="form.guards.rateLimit.maxRequests" type="number" min="1" />
+                  </label>
+                  <label>
+                    <span>Window seconds</span>
+                    <input v-model.number="form.guards.rateLimit.windowSeconds" type="number" min="1" />
+                  </label>
+                </div>
+              </section>
 
-              <label class="check">
-                <input v-model="form.guards.cooldown.enabled" type="checkbox" />
-                Cooldown
-              </label>
-              <label><span>Cooldown seconds</span><input v-model.number="form.guards.cooldown.seconds" type="number" min="0" /></label>
+              <section class="guard-card" :class="{ enabled: form.guards.cooldown.enabled }">
+                <div class="guard-card-head">
+                  <label class="check">
+                    <input v-model="form.guards.cooldown.enabled" type="checkbox" />
+                    <strong>Cooldown</strong>
+                  </label>
+                  <span class="help-tip" tabindex="0" :aria-label="helpText.cooldown">
+                    <CircleQuestionMark :size="14" />
+                    <span class="tooltip">{{ helpText.cooldown }}</span>
+                  </span>
+                </div>
+                <p class="setting-help">Useful when one incident can send repeated notifications in a short burst.</p>
+                <div class="guard-fields single">
+                  <label>
+                    <span>Cooldown seconds</span>
+                    <input v-model.number="form.guards.cooldown.seconds" type="number" min="0" />
+                  </label>
+                </div>
+              </section>
 
-              <label class="check">
-                <input v-model="form.guards.dedupe.enabled" type="checkbox" />
-                Dedupe
-              </label>
-              <label><span>Key template</span><input v-model="form.guards.dedupe.keyTemplate" placeholder="{{fields.service}}:{{fields.status}}" /></label>
-              <label><span>TTL seconds</span><input v-model.number="form.guards.dedupe.ttlSeconds" type="number" min="1" /></label>
+              <section class="guard-card" :class="{ enabled: form.guards.dedupe.enabled }">
+                <div class="guard-card-head">
+                  <label class="check">
+                    <input v-model="form.guards.dedupe.enabled" type="checkbox" />
+                    <strong>Dedupe</strong>
+                  </label>
+                  <span class="help-tip" tabindex="0" :aria-label="helpText.dedupe">
+                    <CircleQuestionMark :size="14" />
+                    <span class="tooltip">{{ helpText.dedupe }}</span>
+                  </span>
+                </div>
+                <p class="setting-help">Reject events with the same rendered key until the TTL expires.</p>
+                <div class="guard-fields">
+                  <label>
+                    <span class="field-label-row">
+                      Key template
+                      <span class="help-tip" tabindex="0" :aria-label="helpText.dedupeKey">
+                        <CircleQuestionMark :size="13" />
+                        <span class="tooltip">{{ helpText.dedupeKey }}</span>
+                      </span>
+                    </span>
+                    <input v-model="form.guards.dedupe.keyTemplate" placeholder="{{fields.service}}:{{fields.status}}" />
+                  </label>
+                  <label>
+                    <span>TTL seconds</span>
+                    <input v-model.number="form.guards.dedupe.ttlSeconds" type="number" min="1" />
+                  </label>
+                </div>
+              </section>
 
-              <label class="check">
-                <input v-model="form.guards.replayProtection.enabled" type="checkbox" />
-                Timestamp replay check
-              </label>
-              <label><span>Timestamp header</span><input v-model="form.guards.replayProtection.timestampHeader" placeholder="x-nine1bot-timestamp" /></label>
-              <label><span>Max skew seconds</span><input v-model.number="form.guards.replayProtection.maxSkewSeconds" type="number" min="1" /></label>
+              <section class="guard-card" :class="{ enabled: form.guards.replayProtection.enabled }">
+                <div class="guard-card-head">
+                  <label class="check">
+                    <input v-model="form.guards.replayProtection.enabled" type="checkbox" />
+                    <strong>Timestamp replay check</strong>
+                  </label>
+                  <span class="help-tip" tabindex="0" :aria-label="helpText.replayProtection">
+                    <CircleQuestionMark :size="14" />
+                    <span class="tooltip">{{ helpText.replayProtection }}</span>
+                  </span>
+                </div>
+                <p class="setting-help">Use when the external service can send a request timestamp header.</p>
+                <div class="guard-fields">
+                  <label>
+                    <span class="field-label-row">
+                      Timestamp header
+                      <span class="help-tip" tabindex="0" :aria-label="helpText.timestampHeader">
+                        <CircleQuestionMark :size="13" />
+                        <span class="tooltip">{{ helpText.timestampHeader }}</span>
+                      </span>
+                    </span>
+                    <input v-model="form.guards.replayProtection.timestampHeader" placeholder="x-nine1bot-timestamp" />
+                  </label>
+                  <label>
+                    <span>Max skew seconds</span>
+                    <input v-model.number="form.guards.replayProtection.maxSkewSeconds" type="number" min="1" />
+                  </label>
+                </div>
+              </section>
             </div>
           </section>
 
           <section class="panel wide">
-            <h3>Request Mapping</h3>
+            <div class="section-heading">
+              <h3>Request Mapping</h3>
+              <span class="help-tip" tabindex="0" :aria-label="helpText.requestMapping">
+                <CircleQuestionMark :size="15" />
+                <span class="tooltip">{{ helpText.requestMapping }}</span>
+              </span>
+            </div>
+            <p class="section-description">Pick the important values out of the incoming webhook JSON.</p>
             <textarea v-model="form.requestMappingText" spellcheck="false" />
           </section>
 
           <section class="panel wide">
-            <h3>Prompt Template</h3>
+            <div class="section-heading">
+              <h3>Prompt Template</h3>
+              <span class="help-tip" tabindex="0" :aria-label="helpText.promptTemplate">
+                <CircleQuestionMark :size="15" />
+                <span class="tooltip">{{ helpText.promptTemplate }}</span>
+              </span>
+            </div>
+            <p class="section-description">Describe what the agent should do with the mapped event data.</p>
             <textarea v-model="form.promptTemplate" class="prompt-template" spellcheck="false" />
           </section>
 
           <section class="panel wide">
-            <h3>Sample Payload</h3>
+            <div class="section-heading">
+              <h3>Sample Payload</h3>
+              <span class="help-tip" tabindex="0" :aria-label="helpText.samplePayload">
+                <CircleQuestionMark :size="15" />
+                <span class="tooltip">{{ helpText.samplePayload }}</span>
+              </span>
+            </div>
+            <p class="section-description">Use a real-looking event here so the preview matches production requests.</p>
             <textarea v-model="form.samplePayloadText" class="sample-payload" spellcheck="false" />
+            <div class="preview-heading">
+              <span>Preview</span>
+              <span class="help-tip" tabindex="0" :aria-label="helpText.preview">
+                <CircleQuestionMark :size="14" />
+                <span class="tooltip">{{ helpText.preview }}</span>
+              </span>
+            </div>
             <div class="preview-grid">
               <div class="preview-card" :class="{ danger: !configPreview.ok }">
                 <span>Fields</span>
@@ -864,7 +1050,7 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <section class="panel wide">
+          <section v-if="!showCreateForm" class="panel wide">
             <h3>Recent Runs</h3>
             <div class="run-list">
               <div
@@ -1085,12 +1271,14 @@ onUnmounted(() => {
 
 code,
 textarea {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 code {
   word-break: break-all;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .copy-base {
@@ -1211,9 +1399,98 @@ code {
   grid-column: 1 / -1;
 }
 
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-xs);
+}
+
+.section-heading h3 {
+  margin: 0;
+}
+
+.section-description {
+  margin: 0 0 var(--space-md);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.preview-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin: var(--space-md) 0 var(--space-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.help-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.help-tip:focus {
+  outline: none;
+}
+
+.help-tip:hover,
+.help-tip:focus-visible {
+  color: var(--accent);
+}
+
+.help-tip .tooltip {
+  position: absolute;
+  z-index: 20;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: 260px;
+  transform: translateX(-50%);
+  padding: 8px 10px;
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.help-tip .tooltip::after {
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  content: '';
+  transform: translateX(-50%) rotate(45deg);
+  border-right: 0.5px solid var(--border-default);
+  border-bottom: 0.5px solid var(--border-default);
+  background: var(--bg-elevated);
+}
+
+.help-tip:hover .tooltip,
+.help-tip:focus-visible .tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-2px);
+}
+
 .field-grid,
 .runtime-card,
 .mcp-group,
+.mode-options,
 .picker,
 .run-list,
 .preset-grid,
@@ -1308,6 +1585,64 @@ textarea {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.guard-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.guard-card {
+  display: grid;
+  gap: var(--space-sm);
+  min-width: 0;
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  background: var(--bg-primary);
+}
+
+.guard-card.enabled {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-default));
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-primary));
+}
+
+.guard-card-head,
+.field-label-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.guard-card-head {
+  justify-content: space-between;
+}
+
+.guard-card-head .check {
+  min-width: 0;
+}
+
+.guard-card-head strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.setting-help {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.guard-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.guard-fields.single {
+  grid-template-columns: 1fr;
+}
+
 .preset-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -1320,6 +1655,59 @@ textarea {
   border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   padding: var(--space-md);
+}
+
+.mode-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.mode-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  cursor: pointer;
+}
+
+.mode-option.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.mode-option input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin-top: 2px;
+}
+
+.mode-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.mode-option strong {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.mode-option small {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.mcp-group.current {
+  padding: var(--space-sm);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
 }
 
 .preset-card {
@@ -1357,12 +1745,14 @@ textarea {
 
 .preview-card pre,
 .run-detail pre {
+  font-family: var(--font-sans);
   margin: var(--space-xs) 0 0;
   max-height: 230px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .chips {
@@ -1381,6 +1771,16 @@ textarea {
 
 .chip.muted {
   color: var(--text-muted);
+}
+
+.chip.strong {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border-default));
+  background: var(--accent-subtle);
+}
+
+.chip.inactive {
+  opacity: 0.55;
+  text-decoration: line-through;
 }
 
 .chip.removable {
@@ -1518,6 +1918,8 @@ textarea {
   .detail-grid,
   .runtime-grid,
   .guard-grid,
+  .guard-cards,
+  .guard-fields,
   .model-selectors,
   .preset-grid,
   .preview-grid,
