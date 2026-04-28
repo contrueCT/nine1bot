@@ -15,6 +15,7 @@ import InputBox from './components/InputBox.vue'
 import PromptCategories from './components/PromptCategories.vue'
 import SearchOverlay from './components/SearchOverlay.vue'
 import ProjectsPage from './components/ProjectsPage.vue'
+import WebhooksPage from './components/WebhooksPage.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import FileViewer from './components/FileViewer.vue'
 import TodoList from './components/TodoList.vue'
@@ -143,6 +144,9 @@ const showSearch = ref(false)
 // Projects page
 const showProjectsPage = ref(false)
 
+// Webhooks page
+const showWebhooksPage = ref(false)
+
 const sidebarCollapsed = ref(false)
 const projectContextRevision = ref(0)
 
@@ -175,7 +179,7 @@ const searchRecentSessions = computed(() => {
 
 // Empty state detection for centered layout
 const isEmptyState = computed(() =>
-  messages.value.length === 0 && !isLoading.value && !showProjectsPage.value
+  messages.value.length === 0 && !isLoading.value && !showProjectsPage.value && !showWebhooksPage.value
 )
 
 // Handle model selection from InputBox
@@ -354,6 +358,9 @@ async function handleSend(content: string, files?: Array<{ type: 'file'; mime: s
   if (showProjectsPage.value) {
     showProjectsPage.value = false
   }
+  if (showWebhooksPage.value) {
+    showWebhooksPage.value = false
+  }
 
   // sendMessage 会自动处理草稿模式，在发送前创建会话
   const model = currentProvider.value && currentModel.value
@@ -376,6 +383,7 @@ async function ensureCurrentSessionId() {
 
 function handleNewSession() {
   showProjectsPage.value = false
+  showWebhooksPage.value = false
   createSession(currentDirectory.value || '.')
 }
 
@@ -387,6 +395,7 @@ function toggleSidebar() {
 function handleSwitchMode(newMode: 'chat' | 'agent') {
   setAppMode(newMode)
   showProjectsPage.value = false
+  showWebhooksPage.value = false
   createSession(currentDirectory.value || '.')
 }
 
@@ -396,6 +405,7 @@ async function handleSelectProject(projectId: string) {
     return
   }
 
+  showWebhooksPage.value = false
   const project = await selectProject(projectId)
   if (!project) return
 
@@ -413,6 +423,15 @@ async function handleSelectProject(projectId: string) {
 
 function handleOpenProjects() {
   showProjectsPage.value = true
+  showWebhooksPage.value = false
+  loadProjects().catch((error) => {
+    console.error('Failed to load projects:', error)
+  })
+}
+
+function handleOpenWebhooks() {
+  showWebhooksPage.value = true
+  showProjectsPage.value = false
   loadProjects().catch((error) => {
     console.error('Failed to load projects:', error)
   })
@@ -434,6 +453,8 @@ async function handleCreateProject(name: string, instructions: string, directory
   } else {
     createSession(targetDirectory)
   }
+  showProjectsPage.value = false
+  showWebhooksPage.value = false
   await loadSessions()
   await refreshGlobalRecentsIfAgent()
 }
@@ -446,6 +467,7 @@ async function handleUpdateProject(projectId: string, updates: { name?: string; 
 function handleSearchSelect(sessionId: string) {
   showSearch.value = false
   showProjectsPage.value = false
+  showWebhooksPage.value = false
   const session = searchRecentSessions.value.find(s => s.id === sessionId) || sessions.value.find(s => s.id === sessionId)
   if (session) {
     selectSession(session)
@@ -456,6 +478,7 @@ function handleProjectNewSession(projectId: string) {
   const project = getProject(projectId)
   if (!project) return
   showProjectsPage.value = false
+  showWebhooksPage.value = false
   createSession(project.rootDirectory || project.worktree)
 }
 
@@ -466,11 +489,19 @@ async function handleDeleteProject(projectId: string) {
 
 async function handleProjectSelectSession(session: Session) {
   showProjectsPage.value = false
+  showWebhooksPage.value = false
   await selectSession(session)
 }
 
 async function handleSidebarSelectSession(session: Session) {
   showProjectsPage.value = false
+  showWebhooksPage.value = false
+  await selectSession(session)
+}
+
+async function handleWebhookSelectSession(session: Session) {
+  showProjectsPage.value = false
+  showWebhooksPage.value = false
   await selectSession(session)
 }
 
@@ -576,6 +607,7 @@ function handlePromptSelect(prompt: string) {
       :isSessionRunning="isSessionRunning"
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
+      :activePage="showWebhooksPage ? 'webhooks' : showProjectsPage ? 'projects' : 'chat'"
       @toggle-collapse="toggleSidebar"
       @select-session="handleSidebarSelectSession"
       @new-session="handleNewSession"
@@ -590,6 +622,7 @@ function handlePromptSelect(prompt: string) {
       @switch-mode="handleSwitchMode"
       @select-project="handleSelectProject"
       @open-projects="handleOpenProjects"
+      @open-webhooks="handleOpenWebhooks"
     />
 
     <!-- Main Content -->
@@ -607,9 +640,16 @@ function handlePromptSelect(prompt: string) {
 
       <!-- Chat Area -->
       <div class="chat-panel" :class="{ 'empty-layout': isEmptyState }">
+        <!-- Webhooks Page -->
+        <WebhooksPage
+          v-if="showWebhooksPage"
+          :projects="projects"
+          @select-session="handleWebhookSelectSession"
+        />
+
         <!-- Projects Page -->
         <ProjectsPage
-          v-if="showProjectsPage"
+          v-else-if="showProjectsPage"
           :projects="projects"
           :currentProject="currentProject"
           :projectContextRevision="projectContextRevision"

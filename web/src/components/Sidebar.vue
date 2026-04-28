@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import {
   PanelLeftClose, PanelLeft, MessageSquare, Plus, Search,
   FolderOpen, Code2, Sparkles, Pencil, Trash2, X, Check,
-  Loader2, Square, ChevronRight, User, MessageCircle, EllipsisVertical
+  Loader2, Square, ChevronRight, User, MessageCircle, EllipsisVertical, Webhook
 } from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
 import type { AppMode } from '../composables/useAppMode'
@@ -45,6 +45,7 @@ const props = defineProps<{
   isSessionRunning: (sessionId: string) => boolean
   runningCount: number
   maxParallelAgents: number
+  activePage: 'chat' | 'projects' | 'webhooks'
 }>()
 
 const emit = defineEmits<{
@@ -62,6 +63,7 @@ const emit = defineEmits<{
   'switch-mode': [mode: AppMode]
   'select-project': [projectId: string]
   'open-projects': []
+  'open-webhooks': []
 }>()
 
 // Session mode mapping
@@ -190,9 +192,13 @@ function contextMenuDelete() {
         <Search :size="18" />
         <span>Search</span>
       </button>
-      <button class="nav-item" @click="emit('open-projects')">
+      <button class="nav-item" :class="{ active: activePage === 'projects' }" @click="emit('open-projects')">
         <FolderOpen :size="18" />
         <span>Projects</span>
+      </button>
+      <button class="nav-item" :class="{ active: activePage === 'webhooks' }" @click="emit('open-webhooks')">
+        <Webhook :size="18" />
+        <span>Webhooks</span>
       </button>
     </nav>
 
@@ -204,8 +210,11 @@ function contextMenuDelete() {
       <button class="nav-item-icon" @click="emit('open-search')" title="Search">
         <Search :size="18" />
       </button>
-      <button class="nav-item-icon" @click="emit('open-projects')" title="Projects">
+      <button class="nav-item-icon" :class="{ active: activePage === 'projects' }" @click="emit('open-projects')" title="Projects">
         <FolderOpen :size="18" />
+      </button>
+      <button class="nav-item-icon" :class="{ active: activePage === 'webhooks' }" @click="emit('open-webhooks')" title="Webhooks">
+        <Webhook :size="18" />
       </button>
     </nav>
 
@@ -505,6 +514,11 @@ function contextMenuDelete() {
 .nav-item:hover {
   background: rgba(0, 0, 0, 0.04);
   color: var(--text-primary);
+}
+
+.nav-item.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
 }
 
 .nav-item.new-chat {
