@@ -66,6 +66,18 @@ Nine1Bot has built-in browser automation with two modes: control the user's own 
 
 > **Note**: The extension uses sensitive permissions (debugger, scripting, all_urls) for full browser automation. Only use in trusted environments.
 
+### Webhooks
+
+The Webhooks page lets external services trigger project-bound agent runs through JSON requests. Each source has a system-generated URL and secret; the full URL is shown only when the source is created or the secret is refreshed.
+
+Built-in presets provide quick starts for Generic JSON, Uptime Kuma incidents, and GitLab merge request review events. Presets only prefill mappings, prompts, sample payloads, and guards, so every source remains fully editable.
+
+```bash
+curl -X POST "http://127.0.0.1:4096/webhooks/{sourceId}/{secret}" \
+  -H "Content-Type: application/json" \
+  -d '{"event":"deploy_failed","severity":"warning","message":"Health check failed"}'
+```
+
 ### Built-in Skills
 
 Nine1Bot includes several built-in skills, invoked via `/skill-name`:
