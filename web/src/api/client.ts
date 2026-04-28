@@ -212,6 +212,14 @@ export interface MetricsTimelineBucket {
   toolCalls: number
 }
 
+export interface MetricsDashboardPayload {
+  overview: MetricsOverview
+  models: ModelMetricsRow[]
+  tools: ToolMetricsRow[]
+  resources: ResourceMetricsRow[]
+  timeline: MetricsTimelineBucket[]
+}
+
 export interface MetricTokens {
   input: number
   output: number
@@ -529,6 +537,12 @@ export const api = {
   async getMetricsTimeline(window: '1h' | '24h' | '7d' = '24h'): Promise<MetricsTimelineBucket[]> {
     const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/metrics/timeline?window=${window}`)
     if (!res.ok) throw new Error(`Failed to load metrics timeline: ${res.status}`)
+    return res.json()
+  },
+
+  async getMetricsDashboard(window: '1h' | '24h' | '7d' = '24h'): Promise<MetricsDashboardPayload> {
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/metrics/dashboard?window=${window}`)
+    if (!res.ok) throw new Error(`Failed to load metrics dashboard: ${res.status}`)
     return res.json()
   },
 

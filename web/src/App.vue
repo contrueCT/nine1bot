@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, defineAsyncComponent } from 'vue'
 import { useSession } from './composables/useSession'
 import { useFiles } from './composables/useFiles'
 import { useSettings } from './composables/useSettings'
@@ -15,7 +15,6 @@ import InputBox from './components/InputBox.vue'
 import PromptCategories from './components/PromptCategories.vue'
 import SearchOverlay from './components/SearchOverlay.vue'
 import ProjectsPage from './components/ProjectsPage.vue'
-import MetricsDashboard from './components/MetricsDashboard.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import FileViewer from './components/FileViewer.vue'
 import TodoList from './components/TodoList.vue'
@@ -26,6 +25,8 @@ import { useAgentTerminal } from './composables/useAgentTerminal'
 import { useFilePreview } from './composables/useFilePreview'
 
 import { MAX_PARALLEL_AGENTS } from './composables/useParallelSessions'
+
+const MetricsDashboard = defineAsyncComponent(() => import('./components/MetricsDashboard.vue'))
 
 const {
   sessions,

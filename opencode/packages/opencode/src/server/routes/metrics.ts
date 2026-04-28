@@ -52,6 +52,29 @@ function summarize(window: z.infer<typeof WindowQuery>["window"]) {
 export const MetricsRoutes = lazy(() =>
   new Hono()
     .get(
+      "/dashboard",
+      describeRoute({
+        summary: "Get metrics dashboard payload",
+        description: "Return aggregated dashboard data for the current project directory in a single response.",
+        operationId: "metrics.dashboard",
+        responses: {
+          200: {
+            description: "Metrics dashboard payload",
+            content: {
+              "application/json": {
+                schema: resolver(z.any()),
+              },
+            },
+          },
+        },
+      }),
+      validator("query", WindowQuery),
+      async (c) => {
+        const query = c.req.valid("query")
+        return c.json(summarize(query.window))
+      },
+    )
+    .get(
       "/events",
       describeRoute({
         summary: "Get metrics detail events",

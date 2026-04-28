@@ -16,6 +16,7 @@ import {
 } from 'lucide-vue-next'
 import {
   api,
+  type MetricsDashboardPayload,
   type MetricsDetailEvent,
   type MetricsOverview,
   type MetricsTimelineBucket,
@@ -319,18 +320,12 @@ async function loadMetrics() {
   isLoading.value = true
   error.value = ''
   try {
-    const [overviewData, modelData, toolData, resourceData, timelineData] = await Promise.all([
-      api.getMetricsOverview(selectedWindow.value),
-      api.getMetricsModels(selectedWindow.value),
-      api.getMetricsTools(selectedWindow.value),
-      api.getMetricsResources(selectedWindow.value),
-      api.getMetricsTimeline(selectedWindow.value),
-    ])
-    overview.value = overviewData
-    models.value = modelData
-    tools.value = toolData
-    resources.value = resourceData
-    timeline.value = timelineData
+    const payload: MetricsDashboardPayload = await api.getMetricsDashboard(selectedWindow.value)
+    overview.value = payload.overview
+    models.value = payload.models
+    tools.value = payload.tools
+    resources.value = payload.resources
+    timeline.value = payload.timeline
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load metrics'
   } finally {
