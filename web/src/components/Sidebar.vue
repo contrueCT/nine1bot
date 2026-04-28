@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import {
   PanelLeftClose, PanelLeft, MessageSquare, Plus, Search,
   FolderOpen, Code2, Sparkles, Pencil, Trash2, X, Check,
-  Loader2, Square, ChevronRight, User, MessageCircle, EllipsisVertical
+  Loader2, Square, ChevronRight, User, MessageCircle, EllipsisVertical, BarChart3
 } from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
 import type { AppMode } from '../composables/useAppMode'
@@ -62,6 +62,7 @@ const emit = defineEmits<{
   'switch-mode': [mode: AppMode]
   'select-project': [projectId: string]
   'open-projects': []
+  'open-metrics': []
 }>()
 
 // Session mode mapping
@@ -194,6 +195,10 @@ function contextMenuDelete() {
         <FolderOpen :size="18" />
         <span>Projects</span>
       </button>
+      <button class="nav-item" @click="emit('open-metrics')">
+        <BarChart3 :size="18" />
+        <span>Metrics</span>
+      </button>
     </nav>
 
     <!-- Top Navigation (collapsed) -->
@@ -206,6 +211,9 @@ function contextMenuDelete() {
       </button>
       <button class="nav-item-icon" @click="emit('open-projects')" title="Projects">
         <FolderOpen :size="18" />
+      </button>
+      <button class="nav-item-icon" @click="emit('open-metrics')" title="Metrics">
+        <BarChart3 :size="18" />
       </button>
     </nav>
 

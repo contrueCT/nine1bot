@@ -15,6 +15,7 @@ import InputBox from './components/InputBox.vue'
 import PromptCategories from './components/PromptCategories.vue'
 import SearchOverlay from './components/SearchOverlay.vue'
 import ProjectsPage from './components/ProjectsPage.vue'
+import MetricsDashboard from './components/MetricsDashboard.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import FileViewer from './components/FileViewer.vue'
 import TodoList from './components/TodoList.vue'
@@ -142,6 +143,7 @@ const showSearch = ref(false)
 
 // Projects page
 const showProjectsPage = ref(false)
+const showMetricsPage = ref(false)
 
 const sidebarCollapsed = ref(false)
 const projectContextRevision = ref(0)
@@ -175,7 +177,7 @@ const searchRecentSessions = computed(() => {
 
 // Empty state detection for centered layout
 const isEmptyState = computed(() =>
-  messages.value.length === 0 && !isLoading.value && !showProjectsPage.value
+  messages.value.length === 0 && !isLoading.value && !showProjectsPage.value && !showMetricsPage.value
 )
 
 // Handle model selection from InputBox
@@ -354,6 +356,9 @@ async function handleSend(content: string, files?: Array<{ type: 'file'; mime: s
   if (showProjectsPage.value) {
     showProjectsPage.value = false
   }
+  if (showMetricsPage.value) {
+    showMetricsPage.value = false
+  }
 
   // sendMessage 会自动处理草稿模式，在发送前创建会话
   const model = currentProvider.value && currentModel.value
@@ -376,6 +381,7 @@ async function ensureCurrentSessionId() {
 
 function handleNewSession() {
   showProjectsPage.value = false
+  showMetricsPage.value = false
   createSession(currentDirectory.value || '.')
 }
 
@@ -387,6 +393,7 @@ function toggleSidebar() {
 function handleSwitchMode(newMode: 'chat' | 'agent') {
   setAppMode(newMode)
   showProjectsPage.value = false
+  showMetricsPage.value = false
   createSession(currentDirectory.value || '.')
 }
 
@@ -412,10 +419,40 @@ async function handleSelectProject(projectId: string) {
 }
 
 function handleOpenProjects() {
+  showMetricsPage.value = false
   showProjectsPage.value = true
   loadProjects().catch((error) => {
     console.error('Failed to load projects:', error)
   })
+}
+
+function handleOpenMetrics() {
+  showProjectsPage.value = false
+  showMetricsPage.value = true
+}
+
+function handleToggleMetrics() {
+  showProjectsPage.value = false
+  showMetricsPage.value = !showMetricsPage.value
+}
+
+async function handleOpenMetricsSession(sessionId: string) {
+  let session =
+    sidebarSessions.value.find((item) => item.id === sessionId) ||
+    sessions.value.find((item) => item.id === sessionId)
+
+  if (!session) {
+    await loadSessions()
+    session =
+      sidebarSessions.value.find((item) => item.id === sessionId) ||
+      sessions.value.find((item) => item.id === sessionId)
+  }
+
+  if (!session) return
+
+  showProjectsPage.value = false
+  showMetricsPage.value = false
+  await selectSession(session)
 }
 
 async function handleCreateProject(name: string, instructions: string, directory?: string) {
@@ -446,6 +483,7 @@ async function handleUpdateProject(projectId: string, updates: { name?: string; 
 function handleSearchSelect(sessionId: string) {
   showSearch.value = false
   showProjectsPage.value = false
+  showMetricsPage.value = false
   const session = searchRecentSessions.value.find(s => s.id === sessionId) || sessions.value.find(s => s.id === sessionId)
   if (session) {
     selectSession(session)
@@ -456,6 +494,7 @@ function handleProjectNewSession(projectId: string) {
   const project = getProject(projectId)
   if (!project) return
   showProjectsPage.value = false
+  showMetricsPage.value = false
   createSession(project.rootDirectory || project.worktree)
 }
 
@@ -466,11 +505,13 @@ async function handleDeleteProject(projectId: string) {
 
 async function handleProjectSelectSession(session: Session) {
   showProjectsPage.value = false
+  showMetricsPage.value = false
   await selectSession(session)
 }
 
 async function handleSidebarSelectSession(session: Session) {
   showProjectsPage.value = false
+  showMetricsPage.value = false
   await selectSession(session)
 }
 
@@ -590,6 +631,7 @@ function handlePromptSelect(prompt: string) {
       @switch-mode="handleSwitchMode"
       @select-project="handleSelectProject"
       @open-projects="handleOpenProjects"
+      @open-metrics="handleOpenMetrics"
     />
 
     <!-- Main Content -->
@@ -601,8 +643,10 @@ function handlePromptSelect(prompt: string) {
         :sidebarCollapsed="sidebarCollapsed"
         :isSummarizing="isSummarizing"
         :retryInfo="retryInfo"
+        :showMetrics="showMetricsPage"
         @toggle-sidebar="toggleSidebar"
         @abort="abortCurrentSession"
+        @toggle-metrics="handleToggleMetrics"
       />
 
       <!-- Chat Area -->
@@ -622,6 +666,12 @@ function handlePromptSelect(prompt: string) {
           @rename-session="handleRenameSession"
           @delete-session="handleDeleteSession"
           @close="showProjectsPage = false"
+        />
+
+        <MetricsDashboard
+          v-else-if="showMetricsPage"
+          :visible="showMetricsPage"
+          @open-session="handleOpenMetricsSession"
         />
 
         <!-- Empty State: Centered greeting + input + prompts -->

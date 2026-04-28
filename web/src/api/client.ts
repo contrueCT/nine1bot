@@ -151,6 +151,209 @@ export interface SessionRuntimeSummary {
   }
 }
 
+export interface MetricsOverview {
+  requestsTotal: number
+  requestsSucceeded: number
+  requestsFailed: number
+  successRate: number
+  busyRejects: number
+  busyRejectRate: number
+  p95ApiDurationMs?: number
+  p99ApiDurationMs?: number
+  totalTokens: number
+  totalCostUsd: number
+  toolCallsTotal: number
+  toolSuccessRate: number
+  resourceFailuresTotal: number
+}
+
+export interface ModelMetricsRow {
+  providerID: string
+  modelID: string
+  turns: number
+  failures: number
+  avgFirstTokenLatencyMs?: number
+  p95DurationMs?: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalReasoningTokens: number
+  totalCostUsd: number
+  finishReasons: Record<string, number>
+}
+
+export interface ToolMetricsRow {
+  tool: string
+  calls: number
+  successes: number
+  failures: number
+  successRate: number
+  avgDurationMs?: number
+  p95DurationMs?: number
+  failureReasons: Record<string, number>
+}
+
+export interface ResourceMetricsRow {
+  resourceType: 'mcp' | 'skill'
+  resourceID: string
+  failures: number
+  recoverableFailures: number
+  statuses: Record<string, number>
+  stages: Record<string, number>
+  reasons: Record<string, number>
+}
+
+export interface MetricsTimelineBucket {
+  timestamp: number
+  requests: number
+  successRate: number
+  avgApiDurationMs: number
+  totalTokens: number
+  totalCostUsd: number
+  toolCalls: number
+}
+
+export interface MetricTokens {
+  input: number
+  output: number
+  reasoning: number
+  cache: {
+    read: number
+    write: number
+  }
+}
+
+export type MetricsDetailEvent =
+  | {
+      kind: 'controller_api'
+      recordedAt: number
+      route: string
+      method: string
+      status: number
+      durationMs: number
+      entrySource?: string
+      platform?: string
+      mode?: string
+      traceId?: string
+      protocolVersion?: string
+      accepted?: boolean
+      busy?: boolean
+      errorType?: string
+    }
+  | {
+      kind: 'turn'
+      status: 'completed'
+      recordedAt: number
+      sessionID: string
+      turnSnapshotId?: string
+      agent?: string
+      providerID?: string
+      modelID?: string
+      finishReason?: string
+      tokens?: MetricTokens
+      costUsd?: number
+      firstTokenLatencyMs?: number
+      durationMs?: number
+    }
+  | {
+      kind: 'turn'
+      status: 'failed'
+      recordedAt: number
+      sessionID: string
+      turnSnapshotId?: string
+      agent?: string
+      providerID?: string
+      modelID?: string
+      errorType?: string
+      errorMessage?: string
+      durationMs?: number
+    }
+  | {
+      kind: 'tool'
+      status: 'started' | 'completed' | 'failed'
+      recordedAt: number
+      sessionID: string
+      turnSnapshotId?: string
+      messageID: string
+      partID: string
+      tool: string
+      toolCallId: string
+      startedAt: number
+      finishedAt?: number
+      durationMs?: number
+      title?: string
+      attachmentCount?: number
+      errorType?: string
+      errorMessage?: string
+    }
+  | {
+      kind: 'resource'
+      status: 'resolved' | 'failed'
+      recordedAt: number
+      sessionID: string
+      turnSnapshotId?: string
+      declaredMcp?: number
+      declaredSkills?: number
+      resolvedMcp?: number
+      resolvedSkills?: number
+      failures?: number
+      resourceType?: 'mcp' | 'skill'
+      resourceID?: string
+      failureStatus?: 'degraded' | 'unavailable' | 'auth-required'
+      stage?: 'resolve' | 'connect' | 'auth' | 'load' | 'execute'
+      reason?: string
+      recoverable?: boolean
+    }
+
+export interface SessionDebugResponse {
+  version: string
+  sessionId: string
+  status?: { type?: string }
+  session: {
+    id: string
+    title: string
+    directory: string
+    runtime?: {
+      protocolVersion?: string
+      profileSnapshotId?: string
+      profileSource?: string
+      agent?: string
+      currentModel?: {
+        providerID: string
+        modelID: string
+        source?: string
+      }
+    }
+  }
+  profileSnapshot?: {
+    id?: string
+    source?: string
+    version?: string
+    resources?: {
+      mcp?: string[]
+      skills?: string[]
+    }
+  }
+  resourceAudit?: {
+    failures?: Array<{
+      resourceType?: 'mcp' | 'skill'
+      resourceID?: string
+      status?: string
+      stage?: string
+      reason?: string
+    }>
+  }
+  contextEvents?: Array<{
+    id?: string
+    type?: string
+    createdAt?: number
+  }>
+  recentMessages?: Array<{
+    id: string
+    role: 'user' | 'assistant'
+    parts: number
+  }>
+}
+
 export interface Project {
   id: string
   worktree: string
@@ -297,6 +500,70 @@ export const api = {
     const res = await fetchWithTimeout(`${BASE_URL}/global/health`, {}, 10000) // 10秒超时
     const data = await res.json()
     return data.data
+  },
+
+  async getMetricsOverview(window: '1h' | '24h' | '7d' = '24h'): Promise<MetricsOverview> {
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/metrics/overview?window=${window}`)
+    if (!res.ok) throw new Error(`Failed to load metrics overview: ${res.status}`)
+    return res.json()
+  },
+
+  async getMetricsModels(window: '1h' | '24h' | '7d' = '24h'): Promise<ModelMetricsRow[]> {
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/metrics/models?window=${window}`)
+    if (!res.ok) throw new Error(`Failed to load model metrics: ${res.status}`)
+    return res.json()
+  },
+
+  async getMetricsTools(window: '1h' | '24h' | '7d' = '24h'): Promise<ToolMetricsRow[]> {
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/metrics/tools?window=${window}`)
+    if (!res.ok) throw new Error(`Failed to load tool metrics: ${res.status}`)
+    return res.json()
+  },
+
+  async getMetricsResources(window: '1h' | '24h' | '7d' = '24h'): Promise<ResourceMetricsRow[]> {
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/metrics/resources?window=${window}`)
+    if (!res.ok) throw new Error(`Failed to load resource metrics: ${res.status}`)
+    return res.json()
+  },
+
+  async getMetricsTimeline(window: '1h' | '24h' | '7d' = '24h'): Promise<MetricsTimelineBucket[]> {
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/metrics/timeline?window=${window}`)
+    if (!res.ok) throw new Error(`Failed to load metrics timeline: ${res.status}`)
+    return res.json()
+  },
+
+  async getMetricsEvents(params: {
+    window?: '1h' | '24h' | '7d'
+    kind?: 'controller_api' | 'turn' | 'tool' | 'resource'
+    providerID?: string
+    modelID?: string
+    tool?: string
+    resourceType?: 'mcp' | 'skill'
+    resourceID?: string
+    sessionID?: string
+    turnSnapshotId?: string
+    limit?: number
+  } = {}): Promise<MetricsDetailEvent[]> {
+    const query = new URLSearchParams()
+    if (params.window) query.set('window', params.window)
+    if (params.kind) query.set('kind', params.kind)
+    if (params.providerID) query.set('providerID', params.providerID)
+    if (params.modelID) query.set('modelID', params.modelID)
+    if (params.tool) query.set('tool', params.tool)
+    if (params.resourceType) query.set('resourceType', params.resourceType)
+    if (params.resourceID) query.set('resourceID', params.resourceID)
+    if (params.sessionID) query.set('sessionID', params.sessionID)
+    if (params.turnSnapshotId) query.set('turnSnapshotId', params.turnSnapshotId)
+    if (params.limit) query.set('limit', String(params.limit))
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/metrics/events?${query}`)
+    if (!res.ok) throw new Error(`Failed to load metric events: ${res.status}`)
+    return res.json()
+  },
+
+  async getSessionDebug(sessionId: string): Promise<SessionDebugResponse> {
+    const res = await fetchWithDirectory(`${BASE_URL}/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/debug`)
+    if (!res.ok) throw new Error(`Failed to load session debug: ${res.status}`)
+    return res.json()
   },
 
   // 获取会话列表

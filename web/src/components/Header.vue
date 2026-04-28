@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Square, PanelLeftOpen, Folder } from 'lucide-vue-next'
+import { Square, PanelLeftOpen, Folder, BarChart3, MessageSquare } from 'lucide-vue-next'
 import type { Session } from '../api/client'
 
 defineProps<{
@@ -8,11 +8,13 @@ defineProps<{
   sidebarCollapsed: boolean
   isSummarizing?: boolean
   retryInfo?: { attempt: number; message: string; next: number } | null
+  showMetrics?: boolean
 }>()
 
 const emit = defineEmits<{
   'toggle-sidebar': []
   'abort': []
+  'toggle-metrics': []
 }>()
 </script>
 
@@ -50,6 +52,15 @@ const emit = defineEmits<{
     </div>
 
     <div class="header-right">
+      <button
+        class="btn btn-ghost metrics-btn"
+        @click="emit('toggle-metrics')"
+      >
+        <BarChart3 v-if="!showMetrics" :size="14" />
+        <MessageSquare v-else :size="14" />
+        <span>{{ showMetrics ? 'Chat' : 'Metrics' }}</span>
+      </button>
+
       <!-- Abort Button -->
       <button
         v-if="isStreaming"
@@ -135,6 +146,12 @@ const emit = defineEmits<{
 
 .abort-btn {
   color: var(--error);
+  font-size: 13px;
+  gap: 6px;
+}
+
+.metrics-btn {
+  margin-right: 10px;
   font-size: 13px;
   gap: 6px;
 }
