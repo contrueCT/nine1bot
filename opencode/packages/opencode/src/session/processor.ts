@@ -583,18 +583,19 @@ Possible questions to ask:
           const p = await MessageV2.parts(input.assistantMessage.id)
           for (const part of p) {
             if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
-              await Session.updatePart({
+              const updated = (await Session.updatePart({
                 ...part,
                 state: {
                   ...part.state,
                   status: "error",
                   error: "Tool execution aborted",
                   time: {
-                    start: Date.now(),
+                    start: part.state.time.start ?? Date.now(),
                     end: Date.now(),
                   },
                 },
-              })
+              })) as MessageV2.ToolPart
+              await publishToolFailed(updated, new Error("Tool execution aborted"))
             }
           }
           input.assistantMessage.time.completed = Date.now()
