@@ -1,0 +1,1397 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nine1Bot Webhooks Preview</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f4ef;
+      --panel: #fffdf9;
+      --panel-2: #f2efe9;
+      --ink: #23211d;
+      --muted: #746f66;
+      --subtle: #9a9287;
+      --line: #ded7cc;
+      --line-strong: #c9c0b3;
+      --accent: #2f6f73;
+      --accent-2: #8f4e31;
+      --accent-soft: #dcebea;
+      --warn: #9a6b16;
+      --warn-soft: #fff2cc;
+      --danger: #b54848;
+      --danger-soft: #fae5e5;
+      --ok: #28784b;
+      --ok-soft: #dff1e7;
+      --blue: #345c9c;
+      --blue-soft: #e3ebfb;
+      --shadow: 0 10px 30px rgba(35, 33, 29, 0.08);
+      --radius: 8px;
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 14px;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      background: #ebe6dc;
+      border-right: 1px solid var(--line);
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 8px 14px;
+      border-bottom: 1px solid var(--line);
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .brand-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      background: var(--ink);
+      color: var(--panel);
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .nav {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted);
+      padding: 9px 10px;
+      text-align: left;
+    }
+
+    .nav-item.active {
+      background: var(--panel);
+      color: var(--ink);
+      box-shadow: 0 1px 2px rgba(35, 33, 29, 0.06);
+    }
+
+    .nav-item svg,
+    .icon-button svg,
+    .button svg,
+    .source-icon svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+      flex: 0 0 auto;
+    }
+
+    .sidebar-spacer {
+      flex: 1;
+    }
+
+    .profile {
+      border-top: 1px solid var(--line);
+      padding: 12px 8px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+    }
+
+    .avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      color: var(--accent);
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 22px 28px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.1;
+      letter-spacing: 0;
+      font-weight: 650;
+    }
+
+    .header-meta {
+      margin-top: 6px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .button {
+      height: 34px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 7px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 1px 1px rgba(35, 33, 29, 0.03);
+    }
+
+    .button.primary {
+      background: var(--ink);
+      color: var(--panel);
+      border-color: var(--ink);
+    }
+
+    .button.subtle {
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .status-band {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .endpoint-box {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px 12px;
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+      background: #fbfaf6;
+    }
+
+    .endpoint-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .mono {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      background: var(--ok-soft);
+      color: var(--ok);
+      border-color: #b8dfc8;
+    }
+
+    .pill.warn {
+      background: var(--warn-soft);
+      color: var(--warn);
+      border-color: #ead28f;
+    }
+
+    .pill.danger {
+      background: var(--danger-soft);
+      color: var(--danger);
+      border-color: #efc8c8;
+    }
+
+    .pill.blue {
+      background: var(--blue-soft);
+      color: var(--blue);
+      border-color: #c5d5f4;
+    }
+
+    .quick-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 142px;
+    }
+
+    .quick-actions .button {
+      justify-content: center;
+      width: 100%;
+    }
+
+    .quick-actions.is-compact {
+      justify-content: center;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 330px minmax(0, 1fr);
+      gap: 16px;
+      min-height: 650px;
+    }
+
+    .column {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .column-header {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .column-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .search {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .search input {
+      width: 100%;
+      height: 34px;
+      border: 1px solid var(--line);
+      background: #fbfaf6;
+      border-radius: 7px;
+      padding: 0 10px;
+      color: var(--ink);
+      outline: none;
+    }
+
+    .source-list {
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow: auto;
+    }
+
+    .source-item {
+      border: 1px solid transparent;
+      background: transparent;
+      border-radius: 7px;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: start;
+      color: var(--ink);
+      text-align: left;
+    }
+
+    .source-item.active {
+      background: #f6f2ea;
+      border-color: var(--line);
+    }
+
+    .source-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .source-item.gitlab .source-icon {
+      background: #fbe7df;
+      color: var(--accent-2);
+    }
+
+    .source-item.generic .source-icon {
+      background: var(--blue-soft);
+      color: var(--blue);
+    }
+
+    .source-name {
+      font-weight: 650;
+      margin-bottom: 3px;
+    }
+
+    .source-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .source-count {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .detail-header {
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .detail-title {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      min-width: 0;
+    }
+
+    .detail-title h2 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      letter-spacing: 0;
+      font-weight: 650;
+    }
+
+    .detail-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: var(--muted);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 2px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      overflow-x: auto;
+    }
+
+    .tab {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 12px 10px 10px;
+      border-bottom: 2px solid transparent;
+      white-space: nowrap;
+    }
+
+    .tab.active {
+      color: var(--ink);
+      border-bottom-color: var(--accent);
+      font-weight: 650;
+    }
+
+    .detail-body {
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .panel-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fbfaf6;
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .section.wide {
+      grid-column: 1 / -1;
+    }
+
+    .section h3 {
+      margin: 0 0 12px;
+      font-size: 14px;
+    }
+
+    .field-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .field {
+      display: grid;
+      gap: 5px;
+    }
+
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .input-like,
+    .select-like,
+    textarea {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      padding: 9px 10px;
+      color: var(--ink);
+      min-width: 0;
+    }
+
+    .select-like {
+      width: 100%;
+      height: 38px;
+      appearance: none;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 140px;
+      resize: vertical;
+      line-height: 1.45;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .segmented {
+      display: flex;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel-2);
+      padding: 3px;
+      gap: 3px;
+      width: fit-content;
+    }
+
+    .segment {
+      border: 0;
+      background: transparent;
+      border-radius: 5px;
+      padding: 6px 10px;
+      color: var(--muted);
+    }
+
+    .segment.active {
+      background: var(--panel);
+      color: var(--ink);
+      box-shadow: 0 1px 2px rgba(35, 33, 29, 0.08);
+    }
+
+    .check-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--ink);
+    }
+
+    .check input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .mode-card {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      padding: 10px;
+      display: grid;
+      gap: 4px;
+    }
+
+    .mode-card strong {
+      font-weight: 650;
+    }
+
+    .mode-card span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .mcp-picker {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .mcp-picker-heading {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .chip-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 4px 9px;
+      color: var(--ink);
+      font-size: 12px;
+    }
+
+    .chip.empty {
+      color: var(--muted);
+      border-style: dashed;
+    }
+
+    .run-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .run-table th,
+    .run-table td {
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    .run-table th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .run-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .run-table td:nth-child(2),
+    .run-table td:nth-child(4) {
+      color: var(--muted);
+    }
+
+    .link-button {
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: var(--accent);
+      font-weight: 650;
+    }
+
+    .preview-box {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fffdf9;
+      padding: 12px;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      min-height: 140px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .toast {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      background: var(--ink);
+      color: var(--panel);
+      padding: 10px 14px;
+      border-radius: 7px;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: opacity 0.16s ease, transform 0.16s ease;
+      font-size: 13px;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .mobile-run-card {
+      display: none;
+    }
+
+    @media (max-width: 1080px) {
+      .app {
+        grid-template-columns: 76px minmax(0, 1fr);
+      }
+
+      .brand span,
+      .nav-item span,
+      .profile-info {
+        display: none;
+      }
+
+      .brand {
+        justify-content: center;
+        padding-left: 0;
+        padding-right: 0;
+      }
+
+      .nav-item {
+        justify-content: center;
+      }
+
+      .status-band {
+        grid-template-columns: 1fr;
+      }
+
+      .quick-actions {
+        flex-direction: row;
+        min-width: 0;
+      }
+    }
+
+    @media (max-width: 820px) {
+      .app {
+        display: block;
+      }
+
+      .sidebar {
+        display: none;
+      }
+
+      .main {
+        padding: 16px;
+      }
+
+      .page-header {
+        flex-direction: column;
+      }
+
+      .workspace,
+      .panel-grid,
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+
+      .section.wide {
+        grid-column: auto;
+      }
+
+      .run-table {
+        display: none;
+      }
+
+      .mobile-run-card {
+        display: grid;
+        gap: 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 12px;
+        margin-bottom: 10px;
+        background: var(--panel);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">N1</div>
+        <span>Nine1Bot</span>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New chat</span>
+        </button>
+        <button class="nav-item">
+          <svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span>Projects</span>
+        </button>
+        <button class="nav-item active">
+          <svg viewBox="0 0 24 24"><path d="M9 7H5a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h4"/><path d="M15 7h4a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-4"/><path d="M8 17h8"/><path d="M12 13v8"/></svg>
+          <span>Webhooks</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-spacer"></div>
+
+      <div class="profile">
+        <div class="avatar">C</div>
+        <div class="profile-info">
+          <div>confff</div>
+          <div style="font-size:12px;color:var(--subtle)">Nine1Bot</div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="page-header">
+        <div>
+          <h1>Webhooks</h1>
+          <div class="header-meta">
+            <span class="pill ok">4 enabled</span>
+            <span class="pill warn">2 guarded today</span>
+            <span>Project-bound external triggers</span>
+          </div>
+        </div>
+
+        <div class="button-row">
+          <button class="button subtle" id="refreshButton">
+            <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.3 6.4"/><path d="M3 12A9 9 0 0 1 18.3 5.6"/><path d="M18 2v4h-4"/><path d="M6 22v-4h4"/></svg>
+            Refresh
+          </button>
+          <button class="button primary">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            New source
+          </button>
+        </div>
+      </header>
+
+      <section class="status-band">
+        <div class="endpoint-box">
+          <div class="endpoint-heading">
+            <span class="label">Local address</span>
+            <span class="pill ok">Listening</span>
+          </div>
+          <div class="mono">http://127.0.0.1:4096/webhooks/{sourceId}/{secret}</div>
+        </div>
+
+        <div class="endpoint-box">
+          <div class="endpoint-heading">
+            <span class="label">Tunnel address</span>
+            <span class="pill ok">ngrok active</span>
+          </div>
+          <div class="mono">https://nine1bot-demo.ngrok.app/webhooks/{sourceId}/{secret}</div>
+        </div>
+
+        <div class="quick-actions is-compact">
+          <button class="button" data-copy="base">
+            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            Copy URL
+          </button>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <aside class="column">
+          <div class="column-header">
+            <h2 class="column-title">Sources</h2>
+            <span class="pill blue">6 total</span>
+          </div>
+          <div class="search">
+            <input value="" placeholder="Search sources" />
+          </div>
+          <div class="source-list">
+            <button class="source-item active" data-source="uptime">
+              <span class="source-icon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></span>
+              <span>
+                <span class="source-name">Uptime Kuma Production</span>
+                <span class="source-meta">nine1bot · default permissions</span>
+              </span>
+              <span class="source-count">18 runs</span>
+            </button>
+
+            <button class="source-item gitlab" data-source="gitlab">
+              <span class="source-icon"><svg viewBox="0 0 24 24"><path d="M8 3l4 8 4-8 4 14-8 4-8-4z"/></svg></span>
+              <span>
+                <span class="source-name">GitLab MR Review</span>
+                <span class="source-meta">loreforge · custom model</span>
+              </span>
+              <span class="source-count">7 runs</span>
+            </button>
+
+            <button class="source-item generic" data-source="deploy">
+              <span class="source-icon"><svg viewBox="0 0 24 24"><path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/></svg></span>
+              <span>
+                <span class="source-name">Deploy Notify</span>
+                <span class="source-meta">multi-datasource-query · full</span>
+              </span>
+              <span class="source-count">31 runs</span>
+            </button>
+          </div>
+        </aside>
+
+        <section class="column">
+          <div class="detail-header">
+            <div class="detail-title">
+              <span class="source-icon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg></span>
+              <div>
+                <h2 id="sourceTitle">Uptime Kuma Production</h2>
+                <div class="detail-meta">
+                  <span class="pill ok">Enabled</span>
+                  <span>Project: nine1bot</span>
+                  <span>Preset: Uptime Kuma</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="button-row">
+              <button class="button" data-copy="source">
+                <svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                Copy
+              </button>
+              <button class="button">
+                <svg viewBox="0 0 24 24"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+                Rotate secret
+              </button>
+              <button class="button primary">
+                <svg viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
+                Send test
+              </button>
+            </div>
+          </div>
+
+          <nav class="tabs" aria-label="Source detail tabs">
+            <button class="tab active" data-tab="overview">Overview</button>
+            <button class="tab" data-tab="request">Request</button>
+            <button class="tab" data-tab="prompt">Prompt</button>
+            <button class="tab" data-tab="runtime">Runtime</button>
+            <button class="tab" data-tab="guards">Guards</button>
+            <button class="tab" data-tab="runs">Runs</button>
+          </nav>
+
+          <div class="detail-body">
+            <div class="tab-panel" data-panel="overview">
+              <div class="panel-grid">
+                <section class="section wide">
+                  <h3>Endpoint</h3>
+                  <div class="field-list">
+                    <div class="field">
+                      <label>Public URL</label>
+                      <div class="input-like mono">https://nine1bot-demo.ngrok.app/webhooks/src_uptime_prod/sec_********</div>
+                    </div>
+                    <div class="field">
+                      <label>Local URL</label>
+                      <div class="input-like mono">http://127.0.0.1:4096/webhooks/src_uptime_prod/sec_********</div>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="section">
+                  <h3>Runtime</h3>
+                  <div class="field-list">
+                    <div class="field">
+                      <label>Model</label>
+                      <div class="segmented">
+                        <button class="segment active">default</button>
+                        <button class="segment">custom</button>
+                      </div>
+                      <div class="input-like">Claude Sonnet 4.5 from user config</div>
+                    </div>
+                    <div class="field">
+                      <label>MCP</label>
+                      <div class="mode-card">
+                        <div class="field">
+                          <label>Default MCP</label>
+                          <div class="chip-list">
+                            <span class="chip">project-files</span>
+                            <span class="chip">terminal</span>
+                            <span class="chip">browser-use</span>
+                          </div>
+                        </div>
+                        <div class="field">
+                          <label>Added MCP</label>
+                          <div class="chip-list">
+                            <span class="chip">filesystem-inspector</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label>Permissions</label>
+                      <div class="segmented">
+                        <button class="segment active">default</button>
+                        <button class="segment">full</button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="section">
+                  <h3>Protection</h3>
+                  <div class="check-list">
+                    <label class="check"><input type="checkbox" checked /> Dedupe by monitor id</label>
+                    <label class="check"><input type="checkbox" checked /> Rate limit 20 / 60s</label>
+                    <label class="check"><input type="checkbox" checked /> Cooldown 120s</label>
+                    <label class="check"><input type="checkbox" checked /> Timestamp replay check</label>
+                  </div>
+                </section>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel="request" hidden>
+              <div class="two-col">
+                <section class="section">
+                  <h3>Sample Request</h3>
+                  <textarea>{"monitor":{"name":"api-server","url":"https://api.example.com/health"},"heartbeat":{"status":"down"},"msg":"HTTP 502 for 3 checks"}</textarea>
+                </section>
+                <section class="section">
+                  <h3>Field Mapping</h3>
+                  <div class="field-list">
+                    <div class="field"><label>fields.service</label><div class="input-like mono">body.monitor.name</div></div>
+                    <div class="field"><label>fields.status</label><div class="input-like mono">body.heartbeat.status</div></div>
+                    <div class="field"><label>fields.message</label><div class="input-like mono">body.msg</div></div>
+                    <div class="field"><label>fields.url</label><div class="input-like mono">body.monitor.url</div></div>
+                  </div>
+                </section>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel="prompt" hidden>
+              <div class="two-col">
+                <section class="section">
+                  <h3>Prompt Template</h3>
+                  <textarea>项目 {{project.name}} 收到外部告警。
+
+来源：{{source.name}}
+服务：{{fields.service}}
+状态：{{fields.status}}
+地址：{{fields.url}}
+消息：{{fields.message}}
+
+请根据项目上下文进行检查，并在当前权限范围内执行必要操作。</textarea>
+                </section>
+                <section class="section">
+                  <h3>Rendered Preview</h3>
+                  <div class="preview-box">项目 nine1bot 收到外部告警。
+
+来源：Uptime Kuma Production
+服务：api-server
+状态：down
+地址：https://api.example.com/health
+消息：HTTP 502 for 3 checks
+
+请根据项目上下文进行检查，并在当前权限范围内执行必要操作。</div>
+                </section>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel="runtime" hidden>
+              <div class="panel-grid">
+                <section class="section">
+                  <h3>Model</h3>
+                  <div class="field-list">
+                    <div class="segmented" aria-label="Model mode">
+                      <button class="segment active" data-model-mode="default">default</button>
+                      <button class="segment" data-model-mode="custom">custom</button>
+                    </div>
+                    <div class="mode-card" id="modelDefaultPanel">
+                      <strong>Claude Sonnet 4.5</strong>
+                      <span>Current default model from the user's normal chat configuration.</span>
+                    </div>
+                    <div class="field" id="modelCustomPanel" hidden>
+                      <label>Custom model for new webhook sessions</label>
+                      <select class="select-like">
+                        <option>Claude Sonnet 4.5</option>
+                        <option>GPT-5.2</option>
+                        <option>Gemini 3 Pro</option>
+                        <option>Qwen3 Coder</option>
+                      </select>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="section">
+                  <h3>Permissions</h3>
+                  <div class="field-list">
+                    <div class="segmented">
+                      <button class="segment active">default</button>
+                      <button class="segment">full</button>
+                    </div>
+                    <div class="input-like">Permission asks are automatically denied.</div>
+                  </div>
+                </section>
+
+                <section class="section wide">
+                  <h3>MCP Servers</h3>
+                  <div class="field-list">
+                    <div class="segmented" aria-label="MCP mode">
+                      <button class="segment active" data-mcp-mode="default">default</button>
+                      <button class="segment" data-mcp-mode="add">add</button>
+                    </div>
+
+                    <div class="mode-card" id="mcpDefaultPanel">
+                      <strong>Default MCP remains enabled</strong>
+                      <span>Webhook sessions inherit the user's normal MCP configuration. Additional MCP servers are listed below.</span>
+                      <div class="field">
+                        <label>Default MCP servers</label>
+                        <div class="chip-list">
+                          <span class="chip">project-files</span>
+                          <span class="chip">terminal</span>
+                          <span class="chip">browser-use</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="mcp-picker" id="mcpAddPanel" hidden>
+                      <div class="mcp-picker-heading">
+                        <span>Available MCP servers</span>
+                        <span>multi-select</span>
+                      </div>
+                      <div class="check-list">
+                        <label class="check"><input type="checkbox" data-mcp-option value="filesystem-inspector" checked /> filesystem-inspector</label>
+                        <label class="check"><input type="checkbox" data-mcp-option value="browser-debug-tools" /> browser-debug-tools</label>
+                        <label class="check"><input type="checkbox" data-mcp-option value="git-context" /> git-context</label>
+                        <label class="check"><input type="checkbox" data-mcp-option value="incident-ops" /> incident-ops</label>
+                      </div>
+                      <div class="button-row">
+                        <button class="button primary" id="confirmMcpAdd">Confirm</button>
+                      </div>
+                    </div>
+
+                    <div class="field">
+                      <label>Added MCP servers</label>
+                      <div class="chip-list" id="selectedMcpList"></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel="guards" hidden>
+              <div class="panel-grid">
+                <section class="section">
+                  <h3>Dedupe</h3>
+                  <div class="field-list">
+                    <label class="check"><input type="checkbox" checked /> Enabled</label>
+                    <div class="field"><label>Key template</label><div class="input-like mono">monitor:{{fields.service}}:{{fields.status}}</div></div>
+                    <div class="field"><label>TTL</label><div class="input-like">300 seconds</div></div>
+                  </div>
+                </section>
+
+                <section class="section">
+                  <h3>Rate Limit</h3>
+                  <div class="field-list">
+                    <label class="check"><input type="checkbox" checked /> Enabled</label>
+                    <div class="field"><label>Window</label><div class="input-like">20 requests / 60 seconds</div></div>
+                    <div class="field"><label>HTTP response</label><div class="input-like">429 rate_limited</div></div>
+                  </div>
+                </section>
+
+                <section class="section">
+                  <h3>Cooldown</h3>
+                  <div class="field-list">
+                    <label class="check"><input type="checkbox" checked /> Enabled</label>
+                    <div class="field"><label>Cooldown</label><div class="input-like">120 seconds after accepted run</div></div>
+                  </div>
+                </section>
+
+                <section class="section">
+                  <h3>Replay Protection</h3>
+                  <div class="field-list">
+                    <label class="check"><input type="checkbox" checked /> Enabled</label>
+                    <div class="field"><label>Timestamp header</label><div class="input-like mono">X-Nine1Bot-Timestamp</div></div>
+                    <div class="field"><label>Max skew</label><div class="input-like">300 seconds</div></div>
+                  </div>
+                </section>
+              </div>
+            </div>
+
+            <div class="tab-panel" data-panel="runs" hidden>
+              <section class="section wide">
+                <h3>Recent Runs</h3>
+                <table class="run-table">
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Time</th>
+                      <th>Source</th>
+                      <th>HTTP</th>
+                      <th>Session</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><span class="pill ok">running</span></td>
+                      <td>10:38</td>
+                      <td>Uptime Kuma Production</td>
+                      <td>202 accepted</td>
+                      <td><button class="link-button">Open session</button></td>
+                    </tr>
+                    <tr>
+                      <td><span class="pill danger">rejected</span></td>
+                      <td>10:35</td>
+                      <td>Uptime Kuma Production</td>
+                      <td>429 rate_limited</td>
+                      <td>none</td>
+                    </tr>
+                    <tr>
+                      <td><span class="pill warn">guarded</span></td>
+                      <td>10:21</td>
+                      <td>Uptime Kuma Production</td>
+                      <td>409 duplicate</td>
+                      <td>none</td>
+                    </tr>
+                    <tr>
+                      <td><span class="pill ok">done</span></td>
+                      <td>09:52</td>
+                      <td>Uptime Kuma Production</td>
+                      <td>202 accepted</td>
+                      <td><button class="link-button">Open session</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div class="mobile-run-card">
+                  <span class="pill ok">running</span>
+                  <strong>Uptime Kuma Production</strong>
+                  <span>10:38 · 202 accepted</span>
+                  <button class="link-button">Open session</button>
+                </div>
+                <div class="mobile-run-card">
+                  <span class="pill danger">rejected</span>
+                  <strong>Uptime Kuma Production</strong>
+                  <span>10:35 · 429 rate_limited</span>
+                  <span>Session: none</span>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast">Copied</div>
+
+  <script>
+    const sourceData = {
+      uptime: {
+        title: 'Uptime Kuma Production',
+        project: 'nine1bot',
+        preset: 'Uptime Kuma'
+      },
+      gitlab: {
+        title: 'GitLab MR Review',
+        project: 'loreforge',
+        preset: 'GitLab Webhook'
+      },
+      deploy: {
+        title: 'Deploy Notify',
+        project: 'multi-datasource-query',
+        preset: 'Generic JSON'
+      }
+    }
+
+    const toast = document.getElementById('toast')
+    let toastTimer = null
+    function showToast(message) {
+      toast.textContent = message
+      toast.classList.add('show')
+      clearTimeout(toastTimer)
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 1300)
+    }
+
+    document.querySelectorAll('[data-copy]').forEach((button) => {
+      button.addEventListener('click', () => showToast('Webhook URL copied'))
+    })
+
+    document.getElementById('refreshButton').addEventListener('click', () => showToast('Status refreshed'))
+
+    document.querySelectorAll('.source-item').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.source-item').forEach((item) => item.classList.remove('active'))
+        button.classList.add('active')
+        const source = sourceData[button.dataset.source]
+        document.getElementById('sourceTitle').textContent = source.title
+        const meta = document.querySelector('.detail-meta')
+        meta.innerHTML = '<span class="pill ok">Enabled</span><span>Project: ' + source.project + '</span><span>Preset: ' + source.preset + '</span>'
+      })
+    })
+
+    document.querySelectorAll('.tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.tab
+        document.querySelectorAll('.tab').forEach((item) => item.classList.remove('active'))
+        tab.classList.add('active')
+        document.querySelectorAll('.tab-panel').forEach((panel) => {
+          panel.hidden = panel.dataset.panel !== target
+        })
+      })
+    })
+
+    document.querySelectorAll('.segment').forEach((segment) => {
+      segment.addEventListener('click', () => {
+        const parent = segment.parentElement
+        parent.querySelectorAll('.segment').forEach((item) => item.classList.remove('active'))
+        segment.classList.add('active')
+      })
+    })
+
+    const modelDefaultPanel = document.getElementById('modelDefaultPanel')
+    const modelCustomPanel = document.getElementById('modelCustomPanel')
+    document.querySelectorAll('[data-model-mode]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const isCustom = button.dataset.modelMode === 'custom'
+        modelDefaultPanel.hidden = isCustom
+        modelCustomPanel.hidden = !isCustom
+      })
+    })
+
+    const mcpDefaultPanel = document.getElementById('mcpDefaultPanel')
+    const mcpAddPanel = document.getElementById('mcpAddPanel')
+    document.querySelectorAll('[data-mcp-mode]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const isAdd = button.dataset.mcpMode === 'add'
+        mcpDefaultPanel.hidden = isAdd
+        mcpAddPanel.hidden = !isAdd
+      })
+    })
+
+    const selectedMcp = new Set(['filesystem-inspector'])
+    const selectedMcpList = document.getElementById('selectedMcpList')
+
+    function renderSelectedMcp() {
+      selectedMcpList.innerHTML = ''
+      if (selectedMcp.size === 0) {
+        const empty = document.createElement('span')
+        empty.className = 'chip empty'
+        empty.textContent = 'No additional MCP selected'
+        selectedMcpList.append(empty)
+        return
+      }
+
+      Array.from(selectedMcp).forEach((name) => {
+        const chip = document.createElement('span')
+        chip.className = 'chip'
+        chip.textContent = name
+        selectedMcpList.append(chip)
+      })
+    }
+
+    document.getElementById('confirmMcpAdd').addEventListener('click', () => {
+      selectedMcp.clear()
+      document.querySelectorAll('[data-mcp-option]:checked').forEach((input) => selectedMcp.add(input.value))
+      renderSelectedMcp()
+      showToast('MCP selection updated')
+    })
+
+    renderSelectedMcp()
+  </script>
+</body>
+</html>
