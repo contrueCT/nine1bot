@@ -122,4 +122,51 @@ describe("RuntimeControllerEvents", () => {
       },
     })
   })
+
+  test("passes through direct runtime turn and tool events", () => {
+    const turnCompleted = RuntimeControllerEvents.project({
+      type: "runtime.turn.completed",
+      properties: {
+        sessionID: "session_test",
+        turnSnapshotId: "turn_test",
+        providerID: "openai",
+        modelID: "gpt-5.4",
+        finishReason: "stop",
+        costUsd: 0.12,
+        completedAt: 123,
+      },
+    })
+
+    expect(turnCompleted).toHaveLength(1)
+    expect(turnCompleted[0]?.type).toBe("runtime.turn.completed")
+    expect(turnCompleted[0]?.data).toMatchObject({
+      providerID: "openai",
+      modelID: "gpt-5.4",
+      finishReason: "stop",
+      costUsd: 0.12,
+    })
+
+    const toolCompleted = RuntimeControllerEvents.project({
+      type: "runtime.tool.completed",
+      properties: {
+        sessionID: "session_test",
+        turnSnapshotId: "turn_test_2",
+        messageID: "message_test",
+        partID: "part_test",
+        tool: "read_file",
+        toolCallId: "call_test",
+        startedAt: 10,
+        finishedAt: 25,
+        durationMs: 15,
+      },
+    })
+
+    expect(toolCompleted).toHaveLength(1)
+    expect(toolCompleted[0]?.type).toBe("runtime.tool.completed")
+    expect(toolCompleted[0]?.data).toMatchObject({
+      tool: "read_file",
+      toolCallId: "call_test",
+      durationMs: 15,
+    })
+  })
 })

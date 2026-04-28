@@ -16,6 +16,8 @@ import { SessionCompaction } from "./compaction"
 import { PermissionNext } from "@/permission/next"
 import { Question } from "@/question"
 import type { RuntimeTiming } from "./timing"
+import { RuntimeControllerEvents } from "@/runtime/controller/events"
+import { RuntimeMetricsEvents } from "@/runtime/metrics/events"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
@@ -69,6 +71,96 @@ export namespace SessionProcessor {
     let blocked = false
     let attempt = 0
     let needsCompaction = false
+    let firstResponseAt: number | undefined
+
+    const markFirstResponse = () => {
+      firstResponseAt ??= Date.now()
+    }
+
+    const turnSnapshotId = () => RuntimeControllerEvents.turnSnapshotIdFor(input.sessionID)
+
+    const publishTurnCompleted = async () => {
+      const completedAt = input.assistantMessage.time.completed ?? Date.now()
+      await Bus.publish(RuntimeControllerEvents.TurnCompleted, {
+        sessionID: input.sessionID,
+        turnSnapshotId: turnSnapshotId(),
+        agent: input.assistantMessage.agent,
+        providerID: input.model.providerID,
+        modelID: input.model.id,
+        finishReason: input.assistantMessage.finish,
+        tokens: input.assistantMessage.tokens,
+        costUsd: input.assistantMessage.cost,
+        firstTokenLatencyMs: firstResponseAt
+          ? Math.max(0, firstResponseAt - input.assistantMessage.time.created)
+          : undefined,
+        durationMs: Math.max(0, completedAt - input.assistantMessage.time.created),
+        completedAt,
+      })
+    }
+
+    const publishTurnFailed = async () => {
+      const failedAt = input.assistantMessage.time.completed ?? Date.now()
+      const error = input.assistantMessage.error
+      await Bus.publish(RuntimeControllerEvents.TurnFailed, {
+        sessionID: input.sessionID,
+        turnSnapshotId: turnSnapshotId(),
+        agent: input.assistantMessage.agent,
+        providerID: input.model.providerID,
+        modelID: input.model.id,
+        errorType: error?.name ?? RuntimeMetricsEvents.normalizeErrorType(error),
+        errorMessage: error?.message,
+        durationMs: Math.max(0, failedAt - input.assistantMessage.time.created),
+        failedAt,
+      })
+    }
+
+    const publishToolStarted = async (part: MessageV2.ToolPart) => {
+      if (part.state.status !== "running") return
+      await Bus.publish(RuntimeControllerEvents.ToolStarted, {
+        sessionID: part.sessionID,
+        turnSnapshotId: turnSnapshotId(),
+        messageID: part.messageID,
+        partID: part.id,
+        tool: part.tool,
+        toolCallId: part.callID,
+        startedAt: part.state.time.start,
+        input: part.state.input,
+      })
+    }
+
+    const publishToolCompleted = async (part: MessageV2.ToolPart) => {
+      if (part.state.status !== "completed") return
+      await Bus.publish(RuntimeControllerEvents.ToolCompleted, {
+        sessionID: part.sessionID,
+        turnSnapshotId: turnSnapshotId(),
+        messageID: part.messageID,
+        partID: part.id,
+        tool: part.tool,
+        toolCallId: part.callID,
+        startedAt: part.state.time.start,
+        finishedAt: part.state.time.end,
+        durationMs: Math.max(0, part.state.time.end - part.state.time.start),
+        title: part.state.title,
+        attachmentCount: part.state.attachments?.length,
+      })
+    }
+
+    const publishToolFailed = async (part: MessageV2.ToolPart, error?: unknown) => {
+      if (part.state.status !== "error") return
+      await Bus.publish(RuntimeControllerEvents.ToolFailed, {
+        sessionID: part.sessionID,
+        turnSnapshotId: turnSnapshotId(),
+        messageID: part.messageID,
+        partID: part.id,
+        tool: part.tool,
+        toolCallId: part.callID,
+        startedAt: part.state.time.start,
+        finishedAt: part.state.time.end,
+        durationMs: Math.max(0, part.state.time.end - part.state.time.start),
+        errorType: RuntimeMetricsEvents.normalizeErrorType(error ?? part.state.error),
+        errorMessage: part.state.error,
+      })
+    }
 
     const result = {
       get message() {
@@ -117,6 +209,7 @@ export namespace SessionProcessor {
                   break
 
                 case "reasoning-delta":
+                  markFirstResponse()
                   if (value.id in reasoningMap) {
                     const part = reasoningMap[value.id]
                     part.text += value.text
@@ -164,6 +257,7 @@ export namespace SessionProcessor {
                   break
 
                 case "tool-call": {
+                  markFirstResponse()
                   const match = toolcalls[value.toolCallId]
                   if (match) {
                     const part = await Session.updatePart({
@@ -179,6 +273,7 @@ export namespace SessionProcessor {
                       metadata: value.providerMetadata,
                     })
                     toolcalls[value.toolCallId] = part as MessageV2.ToolPart
+                    await publishToolStarted(toolcalls[value.toolCallId]!)
 
                     const parts = await MessageV2.parts(input.assistantMessage.id)
                     const lastThree = parts.slice(-DOOM_LOOP_THRESHOLD)
@@ -259,7 +354,7 @@ Possible questions to ask:
                 case "tool-result": {
                   const match = toolcalls[value.toolCallId]
                   if (match && match.state.status === "running") {
-                    await Session.updatePart({
+                    const updated = (await Session.updatePart({
                       ...match,
                       state: {
                         status: "completed",
@@ -273,7 +368,8 @@ Possible questions to ask:
                         },
                         attachments: value.output.attachments,
                       },
-                    })
+                    })) as MessageV2.ToolPart
+                    await publishToolCompleted(updated)
 
                     delete toolcalls[value.toolCallId]
                   }
@@ -286,7 +382,7 @@ Possible questions to ask:
                     const config = await Config.get()
                     const isAutonomous = config.autonomous?.enabled !== false
 
-                    await Session.updatePart({
+                    const updated = (await Session.updatePart({
                       ...match,
                       state: {
                         status: "error",
@@ -297,7 +393,8 @@ Possible questions to ask:
                           end: Date.now(),
                         },
                       },
-                    })
+                    })) as MessageV2.ToolPart
+                    await publishToolFailed(updated, value.error)
 
                     // In autonomous mode, only block on explicit user rejection (RejectedError)
                     // CorrectedError and other errors should allow the LLM to try alternatives
@@ -393,6 +490,7 @@ Possible questions to ask:
                   break
 
                 case "text-delta":
+                  markFirstResponse()
                   if (currentText) {
                     currentText.text += value.text
                     if (value.providerMetadata) currentText.metadata = value.providerMetadata
@@ -502,8 +600,12 @@ Possible questions to ask:
           input.assistantMessage.time.completed = Date.now()
           await Session.updateMessage(input.assistantMessage)
           if (needsCompaction) return "compact"
+          if (input.assistantMessage.error) {
+            await publishTurnFailed()
+            return "stop"
+          }
+          await publishTurnCompleted()
           if (blocked) return "stop"
-          if (input.assistantMessage.error) return "stop"
           return "continue"
         }
       },

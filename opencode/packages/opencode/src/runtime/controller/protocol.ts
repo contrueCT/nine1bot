@@ -204,6 +204,9 @@ export namespace RuntimeControllerProtocol {
     "runtime.turn.started",
     "runtime.turn.completed",
     "runtime.turn.failed",
+    "runtime.tool.started",
+    "runtime.tool.completed",
+    "runtime.tool.failed",
     "runtime.todo.updated",
   ] as const
   export type RuntimeEventType = (typeof RuntimeEventTypes)[number] | `runtime.${string}`

@@ -46,6 +46,8 @@ import { PreferencesRoutes } from "./routes/preferences"
 import { AgentTerminalRoutes } from "./routes/agent-terminal"
 import { BrowserRoutes } from "./routes/browser"
 import { Nine1BotAgentRoutes } from "./routes/nine1bot-agent"
+import { MetricsRoutes } from "./routes/metrics"
+import { RuntimeMetricsStore } from "@/runtime/metrics/store"
 import { MDNS } from "./mdns"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
@@ -53,6 +55,7 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 export namespace Server {
   const log = Log.create({ service: "server" })
+  RuntimeMetricsStore()
 
   let _url: URL | undefined
   let _corsWhitelist: string[] = []
@@ -209,6 +212,7 @@ export namespace Server {
         )
         .use(validator("query", z.object({ directory: z.string().optional() })))
         .route("/nine1bot", Nine1BotAgentRoutes())
+        .route("/nine1bot/metrics", MetricsRoutes())
         .route("/project", ProjectRoutes())
         .route("/pty", PtyRoutes())
         .route("/browser", BrowserRoutes())

@@ -50,6 +50,85 @@ export namespace RuntimeControllerEvents {
     }),
   )
 
+  export const TurnCompleted = BusEvent.define(
+    "runtime.turn.completed",
+    z.object({
+      sessionID: z.string(),
+      turnSnapshotId: z.string().optional(),
+      agent: z.string().optional(),
+      providerID: z.string().optional(),
+      modelID: z.string().optional(),
+      finishReason: z.string().optional(),
+      tokens: z
+        .object({
+          input: z.number(),
+          output: z.number(),
+          reasoning: z.number(),
+          cache: z.object({
+            read: z.number(),
+            write: z.number(),
+          }),
+        })
+        .optional(),
+      costUsd: z.number().optional(),
+      firstTokenLatencyMs: z.number().optional(),
+      durationMs: z.number().optional(),
+      completedAt: z.number(),
+    }),
+  )
+
+  export const TurnFailed = BusEvent.define(
+    "runtime.turn.failed",
+    z.object({
+      sessionID: z.string(),
+      turnSnapshotId: z.string().optional(),
+      agent: z.string().optional(),
+      providerID: z.string().optional(),
+      modelID: z.string().optional(),
+      errorType: z.string().optional(),
+      errorMessage: z.string().optional(),
+      durationMs: z.number().optional(),
+      failedAt: z.number(),
+    }),
+  )
+
+  const ToolEventBase = z.object({
+    sessionID: z.string(),
+    turnSnapshotId: z.string().optional(),
+    messageID: z.string(),
+    partID: z.string(),
+    tool: z.string(),
+    toolCallId: z.string(),
+    startedAt: z.number(),
+  })
+
+  export const ToolStarted = BusEvent.define(
+    "runtime.tool.started",
+    ToolEventBase.extend({
+      input: z.record(z.string(), z.any()).optional(),
+    }),
+  )
+
+  export const ToolCompleted = BusEvent.define(
+    "runtime.tool.completed",
+    ToolEventBase.extend({
+      finishedAt: z.number(),
+      durationMs: z.number(),
+      title: z.string().optional(),
+      attachmentCount: z.number().optional(),
+    }),
+  )
+
+  export const ToolFailed = BusEvent.define(
+    "runtime.tool.failed",
+    ToolEventBase.extend({
+      finishedAt: z.number(),
+      durationMs: z.number(),
+      errorType: z.string().optional(),
+      errorMessage: z.string().optional(),
+    }),
+  )
+
   const activeTurns = new Map<string, string>()
 
   export function bindTurn(sessionID: string, turnSnapshotId: string) {
@@ -142,24 +221,28 @@ export namespace RuntimeControllerEvents {
         ]
         break
       case "session.idle":
-        projected = [
-          envelope({
-            ...base,
-            type: "runtime.turn.completed",
-            data: { status: "idle" },
-          }),
-        ]
-        clearTurn(sessionID, turnSnapshotId)
+        if (turnSnapshotId) {
+          projected = [
+            envelope({
+              ...base,
+              type: "runtime.turn.completed",
+              data: { status: "idle" },
+            }),
+          ]
+          clearTurn(sessionID, turnSnapshotId)
+        }
         break
       case "session.error":
-        projected = [
-          envelope({
-            ...base,
-            type: "runtime.turn.failed",
-            data: { error: properties.error },
-          }),
-        ]
-        clearTurn(sessionID, turnSnapshotId)
+        if (turnSnapshotId) {
+          projected = [
+            envelope({
+              ...base,
+              type: "runtime.turn.failed",
+              data: { error: properties.error },
+            }),
+          ]
+          clearTurn(sessionID, turnSnapshotId)
+        }
         break
       case "message.created":
         projected = [
@@ -362,6 +445,53 @@ export namespace RuntimeControllerEvents {
           envelope({
             ...base,
             type: "runtime.turn.started",
+            data: properties,
+          }),
+        ]
+        break
+      case "runtime.turn.completed":
+        projected = [
+          envelope({
+            ...base,
+            type: "runtime.turn.completed",
+            data: properties,
+          }),
+        ]
+        clearTurn(sessionID, turnSnapshotId)
+        break
+      case "runtime.turn.failed":
+        projected = [
+          envelope({
+            ...base,
+            type: "runtime.turn.failed",
+            data: properties,
+          }),
+        ]
+        clearTurn(sessionID, turnSnapshotId)
+        break
+      case "runtime.tool.started":
+        projected = [
+          envelope({
+            ...base,
+            type: "runtime.tool.started",
+            data: properties,
+          }),
+        ]
+        break
+      case "runtime.tool.completed":
+        projected = [
+          envelope({
+            ...base,
+            type: "runtime.tool.completed",
+            data: properties,
+          }),
+        ]
+        break
+      case "runtime.tool.failed":
+        projected = [
+          envelope({
+            ...base,
+            type: "runtime.tool.failed",
             data: properties,
           }),
         ]
