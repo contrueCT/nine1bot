@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Activity,
   AlertTriangle,
@@ -82,6 +82,7 @@ const fullPermissionConfirmed = ref(false)
 const defaultModelLabel = ref('Default model from user config')
 const pollingTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const selectedRunId = ref('')
+const endpointPanel = ref<HTMLElement | null>(null)
 
 const form = ref(defaultForm())
 
@@ -344,6 +345,8 @@ async function createSource() {
     revealedSecret.value = created.secret
     notice.value = 'Webhook source created. Copy the full URL now; the secret is shown only once.'
     await refreshRuns()
+    await nextTick()
+    scrollEndpointIntoView()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -426,6 +429,8 @@ async function refreshSecret() {
     revealedSecretSourceId.value = refreshed.source.id
     revealedSecret.value = refreshed.secret
     notice.value = 'Webhook secret refreshed. Copy the new full URL now; the old URL is invalid.'
+    await nextTick()
+    scrollEndpointIntoView()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -500,6 +505,14 @@ function selectSource(source: WebhookSource) {
 
 function selectRun(run: WebhookRun) {
   selectedRunId.value = selectedRunId.value === run.id ? '' : run.id
+}
+
+function scrollEndpointIntoView() {
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  endpointPanel.value?.scrollIntoView({
+    behavior: reducedMotion ? 'auto' : 'smooth',
+    block: 'start',
+  })
 }
 
 function applyPreset(presetID: WebhookPresetId) {
@@ -703,7 +716,7 @@ onUnmounted(() => {
             </div>
           </section>
 
-          <section class="panel wide">
+          <section ref="endpointPanel" class="panel wide">
             <h3>Endpoint</h3>
             <div class="field-grid">
               <label>

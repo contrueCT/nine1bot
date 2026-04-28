@@ -58,23 +58,37 @@ function renderContext(source: Webhook.Source, now?: number): Webhook.GuardConte
 describe("webhook secrets", () => {
   test("refresh replaces the stored secret hash", async () => {
     await using tmp = await tmpdir({ git: true })
+    let sourceID: string | undefined
+    let projectID: string | undefined
 
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const created = await Webhook.createSource({
-          name: "Secret test",
-          projectID: Instance.project.id,
-        })
-        const before = await Webhook.getSource(created.source.id)
-        expect(Webhook.verifySecret(before, created.secret)).toBe(true)
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          projectID = Instance.project.id
+          const created = await Webhook.createSource({
+            name: "Secret test",
+            projectID: Instance.project.id,
+          })
+          sourceID = created.source.id
+          const before = await Webhook.getSource(created.source.id)
+          expect(Webhook.verifySecret(before, created.secret)).toBe(true)
 
-        const refreshed = await Webhook.refreshSourceSecret(created.source.id)
-        const after = await Webhook.getSource(created.source.id)
-        expect(Webhook.verifySecret(after, created.secret)).toBe(false)
-        expect(Webhook.verifySecret(after, refreshed.secret)).toBe(true)
-      },
-    })
+          const refreshed = await Webhook.refreshSourceSecret(created.source.id)
+          const after = await Webhook.getSource(created.source.id)
+          expect(Webhook.verifySecret(after, created.secret)).toBe(false)
+          expect(Webhook.verifySecret(after, refreshed.secret)).toBe(true)
+        },
+      })
+    } finally {
+      if (sourceID) {
+        await Storage.remove(["webhook_source", sourceID])
+      }
+      if (projectID) {
+        await Storage.remove(["project", projectID])
+        await Storage.remove(["project_meta", projectID])
+      }
+    }
   })
 })
 

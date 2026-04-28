@@ -374,7 +374,13 @@ async function triggerWebhook(c: any) {
 
       if (created.messageResponse.response.accepted) {
         await Webhook.markCooldown(source, run.id)
-        startRunMonitor(run.id, created.sessionResponse.sessionId, source.permissionPolicy.mode)
+        await Instance.provide({
+          directory,
+          init: InstanceBootstrap,
+          fn() {
+            startRunMonitor(run.id, created.sessionResponse.sessionId, source.permissionPolicy.mode)
+          },
+        })
       }
 
       return c.json(responseBody, created.messageResponse.status as never)
