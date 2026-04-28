@@ -71,7 +71,7 @@ export namespace RuntimeControllerProtocol {
 
   export const Entry = z
     .object({
-      source: z.enum(["web", "feishu", "browser-extension", "api"]).optional(),
+      source: z.enum(["web", "feishu", "browser-extension", "api", "webhook"]).optional(),
       platform: z.string().optional(),
       mode: z.string().optional(),
       templateIds: z.array(z.string()).optional(),

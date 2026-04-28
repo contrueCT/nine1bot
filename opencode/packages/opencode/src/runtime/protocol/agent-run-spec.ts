@@ -75,7 +75,7 @@ export type SessionPermissionGrant = {
 }
 
 export type EntrySpec = {
-  source: "web" | "feishu" | "browser-extension" | "api"
+  source: "web" | "feishu" | "browser-extension" | "api" | "webhook"
   platform?: string
   mode?: string
   templateIds: string[]
