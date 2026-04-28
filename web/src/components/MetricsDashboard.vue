@@ -692,7 +692,7 @@ onUnmounted(() => {
 
 <template>
   <section class="metrics-page">
-    <div class="metrics-shell">
+    <div class="metrics-shell" :class="{ 'has-detail': !!detailSelection }">
       <div class="metrics-hero">
         <div>
           <p class="metrics-kicker">Runtime Observability</p>
@@ -1219,25 +1219,28 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <aside v-if="detailSelection" class="detail-drawer">
-        <div class="detail-drawer-head">
-          <div>
-            <p class="detail-kicker">Drill-down</p>
-            <h3>{{ detailSelection.title }}</h3>
-            <p class="detail-subtitle">{{ detailSelection.subtitle }}</p>
+      <div v-if="detailSelection" class="detail-drawer-overlay" @click.self="closeDetail">
+        <aside class="detail-drawer">
+          <div class="detail-drawer-head">
+            <div>
+              <p class="detail-kicker">Drill-down</p>
+              <h3>{{ detailSelection.title }}</h3>
+              <p class="detail-subtitle">{{ detailSelection.subtitle }}</p>
+            </div>
+            <div class="detail-drawer-actions">
+              <button v-if="detailSessionId" class="detail-action" @click="openDetailSession">
+                Open session
+              </button>
+              <button v-if="detailSessionId" class="detail-action" @click="loadDetailDebug">
+                {{ detailDebugLoading ? 'Loading debug...' : 'Load debug' }}
+              </button>
+              <button class="detail-close" @click="closeDetail">
+                <X :size="18" />
+              </button>
+            </div>
           </div>
-          <div class="detail-drawer-actions">
-            <button v-if="detailSessionId" class="detail-action" @click="openDetailSession">
-              Open session
-            </button>
-            <button v-if="detailSessionId" class="detail-action" @click="loadDetailDebug">
-              {{ detailDebugLoading ? 'Loading debug...' : 'Load debug' }}
-            </button>
-            <button class="detail-close" @click="closeDetail">
-              <X :size="18" />
-            </button>
-          </div>
-        </div>
+
+          <div class="detail-drawer-body">
 
         <div v-if="detailError" class="metrics-error">
           <ServerCrash :size="18" />
@@ -1321,8 +1324,10 @@ onUnmounted(() => {
               <strong>{{ formatDebugFailures(detailDebug) }}</strong>
             </article>
           </div>
-        </section>
-      </aside>
+          </section>
+          </div>
+        </aside>
+      </div>
     </div>
   </section>
 </template>
@@ -1341,6 +1346,10 @@ onUnmounted(() => {
   gap: var(--space-lg);
   max-width: 1280px;
   margin: 0 auto;
+}
+
+.metrics-shell.has-detail {
+  align-items: stretch;
 }
 
 .metrics-hero {
@@ -1897,11 +1906,26 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--accent-subtle) 30%, transparent);
 }
 
-.detail-drawer {
-  position: sticky;
-  bottom: var(--space-md);
-  margin-top: var(--space-sm);
+.detail-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
   padding: var(--space-lg);
+  background: color-mix(in srgb, var(--bg-primary) 32%, transparent);
+}
+
+.detail-drawer {
+  width: min(100%, 36rem);
+  height: 100%;
+  max-height: calc(100vh - (var(--space-lg) * 2));
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  overflow: hidden;
   border-radius: var(--radius-2xl);
   border: 1px solid var(--border-default);
   background:
@@ -1918,8 +1942,33 @@ onUnmounted(() => {
 
 .detail-drawer-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 8px;
+}
+
+.detail-drawer-body {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  overflow-y: auto;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+}
+
+.detail-drawer-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.detail-drawer-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border-default) 78%, transparent);
+  border-radius: 999px;
+}
+
+.detail-drawer-body::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .detail-kicker {
@@ -2203,6 +2252,20 @@ onUnmounted(() => {
 
   .attention-pills {
     justify-content: flex-start;
+  }
+
+  .detail-drawer {
+    width: 100%;
+    max-height: none;
+    height: 100%;
+  }
+
+  .detail-drawer-overlay {
+    padding: var(--space-md);
+  }
+
+  .detail-drawer-body {
+    max-height: 60vh;
   }
 }
 
