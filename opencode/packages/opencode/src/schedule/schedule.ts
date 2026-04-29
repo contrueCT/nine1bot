@@ -849,7 +849,8 @@ export namespace Schedule {
   function timezoneOffset(timestamp: number, timezone: string) {
     const parts = zonedParts(timestamp, timezone)
     const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second, 0)
-    return asUtc - Math.floor(timestamp / 1000) * 1000
+    const milliseconds = timestamp - Math.floor(timestamp / 1000) * 1000
+    return asUtc + milliseconds - timestamp
   }
 
   function renderContext(task: Task, project: Project.Info, input: {

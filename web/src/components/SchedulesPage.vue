@@ -371,8 +371,18 @@ async function openRunSession(run: ScheduleRun) {
 
 async function copyText(text: string) {
   if (!text) return
-  await navigator.clipboard?.writeText(text)?.catch(() => undefined)
-  notice.value = 'Copied.'
+  error.value = ''
+  notice.value = ''
+  if (!navigator.clipboard?.writeText) {
+    error.value = 'Clipboard is not available in this browser.'
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    notice.value = 'Copied.'
+  } catch {
+    error.value = 'Unable to copy to clipboard.'
+  }
 }
 
 function beginCreate() {
