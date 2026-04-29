@@ -8,7 +8,7 @@ import {
   type AutomatedControllerRunner,
 } from "@/server/routes/automated-controller"
 import { Storage } from "@/storage/storage"
-import { ulid } from "ulid"
+import { monotonicFactory, ulid } from "ulid"
 import z from "zod"
 
 export namespace Schedule {
@@ -16,8 +16,10 @@ export namespace Schedule {
   const SCANNER_INTERVAL_MS = 60_000
   const RUN_MONITOR_TIMEOUT_MS = 30 * 60 * 1000
   const PROMPT_PREVIEW_LIMIT = 4000
+  const DEFAULT_RUN_LIST_LIMIT = 100
 
   const taskLocks = new Map<string, Promise<void>>()
+  const runUlid = monotonicFactory()
   let scannerStarted = false
   let automatedControllerRunnerOverride: AutomatedControllerRunner | undefined
 
@@ -354,7 +356,7 @@ export namespace Schedule {
     error?: string
   }) {
     const run: Run = {
-      id: `run_${ulid().toLowerCase()}`,
+      id: `run_${runUlid().toLowerCase()}`,
       taskID: input.taskID,
       projectID: input.projectID,
       status: input.status ?? "scheduled",
@@ -369,13 +371,14 @@ export namespace Schedule {
       },
     }
     await Storage.write(["scheduled_run", run.id], run)
+    await writeRunIndexes(run)
     return run
   }
 
   export async function updateRun(runID: string, input: Partial<Omit<Run, "id" | "time">> & {
     time?: Partial<Run["time"]>
   }) {
-    return Storage.update<Run>(["scheduled_run", runID], (draft) => {
+    const updated = await Storage.update<Run>(["scheduled_run", runID], (draft) => {
       const { time, ...rest } = input
       Object.assign(draft, {
         ...rest,
@@ -388,20 +391,27 @@ export namespace Schedule {
         }
       }
     })
+    const parsed = Run.parse(updated)
+    await writeRunIndexes(parsed)
+    return parsed
   }
 
   export async function listRuns(input: { taskID?: string; limit?: number; offset?: number } = {}) {
-    const runs: Run[] = []
-    for (const key of await Storage.list(["scheduled_run"])) {
-      const run = await Storage.read<Run>(key).catch(() => undefined)
-      if (!run) continue
-      const parsed = Run.parse(run)
-      if (input.taskID && parsed.taskID !== input.taskID) continue
-      runs.push(parsed)
+    const paging = normalizeRunPaging(input)
+    if (input.taskID) {
+      const keys = (await Storage.list(["scheduled_run_by_task", input.taskID])).reverse()
+      if (keys.length > 0) {
+        return listRunsFromKeys(keys, {
+          ...paging,
+          taskID: input.taskID,
+          indexed: true,
+        })
+      }
     }
-    runs.sort((a, b) => b.time.created - a.time.created)
-    const offset = input.offset ?? 0
-    return runs.slice(offset, offset + (input.limit ?? 100))
+    return listRunsFromKeys((await Storage.list(["scheduled_run"])).reverse(), {
+      ...paging,
+      taskID: input.taskID,
+    })
   }
 
   export async function runTaskNow(taskID: string, input: { now?: number; runner?: AutomatedControllerRunner } = {}) {
@@ -642,8 +652,21 @@ export namespace Schedule {
   }
 
   async function hasActiveRun(taskID: string) {
-    for (const run of await listRuns({ taskID, limit: 500 })) {
-      if (run.status === "accepted" || run.status === "running" || run.status === "scheduled") return true
+    const keys = (await Storage.list(["scheduled_run_active", taskID])).reverse()
+    for (const key of keys) {
+      const run = await readRunFromKey(key, { indexed: true })
+      if (!run || run.taskID !== taskID || !isActiveRunStatus(run.status)) {
+        await Storage.remove(key).catch(() => undefined)
+        continue
+      }
+      return true
+    }
+
+    for (const run of await listRuns({ taskID, limit: 100 })) {
+      if (isActiveRunStatus(run.status)) {
+        await writeRunIndexes(run).catch(() => undefined)
+        return true
+      }
     }
     return false
   }
@@ -689,6 +712,56 @@ export namespace Schedule {
 
   function promptPreview(prompt: string) {
     return prompt.length > PROMPT_PREVIEW_LIMIT ? `${prompt.slice(0, PROMPT_PREVIEW_LIMIT)}...` : prompt
+  }
+
+  function normalizeRunPaging(input: { limit?: number; offset?: number }) {
+    return {
+      limit: Math.max(0, input.limit ?? DEFAULT_RUN_LIST_LIMIT),
+      offset: Math.max(0, input.offset ?? 0),
+    }
+  }
+
+  async function listRunsFromKeys(keys: string[][], input: {
+    taskID?: string
+    limit: number
+    offset: number
+    indexed?: boolean
+  }) {
+    if (input.limit === 0) return []
+    const runs: Run[] = []
+    let matched = 0
+    for (const key of keys) {
+      const run = await readRunFromKey(key, { indexed: input.indexed })
+      if (!run) continue
+      if (input.taskID && run.taskID !== input.taskID) continue
+      if (matched++ < input.offset) continue
+      runs.push(run)
+      if (runs.length >= input.limit) break
+    }
+    return runs
+  }
+
+  async function readRunFromKey(key: string[], input: { indexed?: boolean } = {}) {
+    const runID = key[key.length - 1]
+    if (!runID) return undefined
+    const run = await Storage.read<Run>(["scheduled_run", runID]).catch(async () => {
+      if (input.indexed) await Storage.remove(key).catch(() => undefined)
+      return undefined
+    })
+    return run ? Run.parse(run) : undefined
+  }
+
+  async function writeRunIndexes(run: Run) {
+    await Storage.write(["scheduled_run_by_task", run.taskID, run.id], { id: run.id })
+    if (isActiveRunStatus(run.status)) {
+      await Storage.write(["scheduled_run_active", run.taskID, run.id], { id: run.id })
+    } else {
+      await Storage.remove(["scheduled_run_active", run.taskID, run.id]).catch(() => undefined)
+    }
+  }
+
+  function isActiveRunStatus(status: RunStatus) {
+    return status === "scheduled" || status === "accepted" || status === "running"
   }
 
   function nextIntervalRunAt(rule: Extract<ScheduleRule, { type: "interval" }>, after: number) {

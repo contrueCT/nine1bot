@@ -33,6 +33,8 @@ async function cleanup(taskIDs: string[], projectID?: string) {
   for (const taskID of taskIDs) {
     for (const run of await Schedule.listRuns({ taskID, limit: 500 }).catch(() => [])) {
       await Storage.remove(["scheduled_run", run.id]).catch(() => undefined)
+      await Storage.remove(["scheduled_run_by_task", taskID, run.id]).catch(() => undefined)
+      await Storage.remove(["scheduled_run_active", taskID, run.id]).catch(() => undefined)
     }
     await Storage.remove(["scheduled_task", taskID]).catch(() => undefined)
   }

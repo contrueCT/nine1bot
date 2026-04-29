@@ -28,6 +28,8 @@ async function cleanup(taskIDs: string[], projectID?: string) {
   for (const taskID of taskIDs) {
     for (const run of await Schedule.listRuns({ taskID, limit: 500 }).catch(() => [])) {
       await Storage.remove(["scheduled_run", run.id]).catch(() => undefined)
+      await Storage.remove(["scheduled_run_by_task", taskID, run.id]).catch(() => undefined)
+      await Storage.remove(["scheduled_run_active", taskID, run.id]).catch(() => undefined)
     }
     await Storage.remove(["scheduled_task", taskID]).catch(() => undefined)
   }
@@ -178,6 +180,53 @@ describe("scheduled task storage and run behavior", () => {
           expect(runs[0].status).toBe("skipped")
           expect(runs[0].reason).toBe("misfire")
           expect(updated.nextRunAt).toBeUndefined()
+        },
+      })
+    } finally {
+      await cleanup(taskIDs, projectID)
+    }
+  })
+
+  test("lists scheduled runs through the per-task index with pagination", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const taskIDs: string[] = []
+    let projectID: string | undefined
+
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          projectID = Instance.project.id
+          const task = await Schedule.createTask({
+            name: "Run index test",
+            projectID,
+            schedule: { type: "once-after", delayMs: 1000 },
+            timezone: "UTC",
+          }, 1000)
+          taskIDs.push(task.id)
+
+          const first = await Schedule.createRun({
+            taskID: task.id,
+            projectID,
+            status: "succeeded",
+            reason: "manual",
+            scheduledAt: 1000,
+          })
+          const second = await Schedule.createRun({
+            taskID: task.id,
+            projectID,
+            status: "succeeded",
+            reason: "manual",
+            scheduledAt: 2000,
+          })
+
+          const newest = await Schedule.listRuns({ taskID: task.id, limit: 1 })
+          const next = await Schedule.listRuns({ taskID: task.id, limit: 1, offset: 1 })
+
+          expect(newest).toHaveLength(1)
+          expect(newest[0].id).toBe(second.id)
+          expect(next).toHaveLength(1)
+          expect(next[0].id).toBe(first.id)
         },
       })
     } finally {
