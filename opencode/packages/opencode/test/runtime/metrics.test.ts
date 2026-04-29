@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
+import { readFileSync } from "fs"
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises"
+import path from "path"
+import { tmpdir } from "os"
 import { RuntimeMetricsNormalizer } from "../../src/runtime/metrics/normalizer"
 import { RuntimeMetricsAggregator } from "../../src/runtime/metrics/aggregator"
 import { RuntimeMetricsQueries } from "../../src/runtime/metrics/queries"
+import { createRuntimeMetricsStore, type StoredEvent } from "../../src/runtime/metrics/store"
 
 describe("Runtime metrics pipeline", () => {
   test("normalizes controller, turn, and tool events", () => {
@@ -242,5 +247,118 @@ describe("Runtime metrics pipeline", () => {
       kind: "turn",
       sessionID: "session_a",
     })
+  })
+
+  test("compacts oversized persisted files during initialization", async () => {
+    const now = 1_750_000_000_000
+    const dir = await mkdtemp(path.join(tmpdir(), "metrics-store-init-"))
+    const file = path.join(dir, "events.jsonl")
+
+    const lines = Array.from({ length: 3 }, (_, index) =>
+      JSON.stringify({
+        directory: ".",
+        event: {
+          kind: "resource",
+          status: "failed",
+          recordedAt: now - index,
+          sessionID: `session_${index}`,
+          resourceType: "mcp",
+          resourceID: `resource_${index}`,
+          failureStatus: "unavailable",
+          stage: "resolve",
+          recoverable: false,
+        },
+      } satisfies StoredEvent),
+    )
+    await writeFile(file, `${lines.join("\n")}\n`, "utf8")
+
+    const store = createRuntimeMetricsStore({
+      file,
+      now: () => now,
+      readTextFile: (target) => readFileSync(target, "utf8"),
+      appendTextFile: async (target, payload) => {
+        await Bun.write(target, payload)
+      },
+      writeTextFile: (target, payload) => writeFile(target, payload, "utf8"),
+      removeFile: (target) => rm(target, { force: true }),
+      statFile: async () => ({ size: 4 * 1024 * 1024 + 1 }),
+    })
+
+    await store.flush()
+
+    const persisted = await readFile(file, "utf8")
+    const persistedLines = persisted.trim().split("\n")
+    expect(persistedLines).toHaveLength(3)
+    expect(() => JSON.parse(persistedLines[0]!)).not.toThrow()
+
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  test("requeues pending events when append fails and eventually persists them", async () => {
+    const now = 1_750_000_000_000
+    const dir = await mkdtemp(path.join(tmpdir(), "metrics-store-retry-"))
+    const file = path.join(dir, "events.jsonl")
+    let appendAttempts = 0
+    let subscribed: ((input: { directory?: string; payload: { type: string; properties?: unknown } }) => void) | undefined
+
+    const store = createRuntimeMetricsStore({
+      file,
+      now: () => now,
+      readTextFile: () => "",
+      appendTextFile: async (target, payload) => {
+        appendAttempts += 1
+        if (appendAttempts === 1) {
+          throw new Error("append failed once")
+        }
+        await writeFile(target, payload, { encoding: "utf8", flag: "a" })
+      },
+      writeTextFile: (target, payload) => writeFile(target, payload, "utf8"),
+      removeFile: (target) => rm(target, { force: true }),
+      statFile: async () => ({ size: 0 }),
+      onBusEvent: (handler) => {
+        subscribed = handler
+      },
+    })
+
+    subscribed?.({
+      directory: ".",
+      payload: {
+        type: "runtime.tool.failed",
+        properties: {
+          sessionID: "session_test",
+          messageID: "message_test",
+          partID: "part_test",
+          tool: "read_file",
+          toolCallId: "call_test",
+          startedAt: now - 50,
+          finishedAt: now,
+          durationMs: 50,
+          errorType: "PermissionDeniedError",
+        },
+      },
+    })
+
+    await store.flush()
+    expect(appendAttempts).toBe(1)
+    expect(store.list()).toHaveLength(1)
+
+    await store.flush()
+    expect(appendAttempts).toBe(2)
+
+    const persisted = await readFile(file, "utf8")
+    const parsed = persisted
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as StoredEvent)
+    expect(parsed).toHaveLength(1)
+    expect(parsed[0]).toMatchObject({
+      event: {
+        kind: "tool",
+        status: "failed",
+        tool: "read_file",
+      },
+    })
+
+    await rm(dir, { recursive: true, force: true })
   })
 })
