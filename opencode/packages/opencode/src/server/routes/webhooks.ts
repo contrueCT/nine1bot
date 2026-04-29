@@ -1,7 +1,4 @@
-import { Bus } from "@/bus"
 import { PermissionNext } from "@/permission/next"
-import { InstanceBootstrap } from "@/project/bootstrap"
-import { Instance } from "@/project/instance"
 import { Project } from "@/project/project"
 import { RuntimeControllerProtocol } from "@/runtime/controller/protocol"
 import { Webhook } from "@/webhook/webhook"
@@ -10,11 +7,7 @@ import { describeRoute, resolver, validator } from "hono-openapi"
 import z from "zod"
 import { lazy } from "../../util/lazy"
 import { errors } from "../error"
-import {
-  answerInteraction,
-  createControllerSession,
-  sendControllerMessage,
-} from "./nine1bot-agent"
+import { runAutomatedControllerSession, type AutomatedControllerResponse } from "./automated-controller"
 
 const WEBHOOK_CLIENT_CAPABILITIES = {
   interactions: false,
@@ -81,6 +74,16 @@ function permissionForSource(source: Webhook.Source) {
   return source.permissionPolicy.mode === "full" ? FULL_PERMISSION_RULES : undefined
 }
 
+function responseForRun(runID: string, response: AutomatedControllerResponse): Webhook.TriggerResponse {
+  return {
+    accepted: response.accepted,
+    runId: runID,
+    sessionId: response.sessionID,
+    turnSnapshotId: response.turnSnapshotId,
+    ...(response.accepted ? {} : { error: "controller_message_not_accepted" }),
+  }
+}
+
 async function createRejectedRun(c: any, input: {
   sourceID: string
   projectID: string
@@ -116,71 +119,6 @@ async function createRejectedRun(c: any, input: {
     } satisfies Webhook.TriggerResponse,
     input.httpStatus,
   )
-}
-
-function startRunMonitor(runID: string, sessionID: string, permissionMode: Webhook.PermissionPolicy["mode"]) {
-  let finished = false
-  let unsubscribe: (() => void) | undefined
-  let timeout: ReturnType<typeof setTimeout> | undefined
-
-  const finish = async (status: "succeeded" | "failed", error?: string) => {
-    if (finished) return
-    finished = true
-    if (timeout) clearTimeout(timeout)
-    unsubscribe?.()
-    await Webhook.updateRun(runID, {
-      status,
-      ...(error ? { error } : {}),
-      time: { finished: Date.now() },
-    }).catch(() => undefined)
-  }
-
-  unsubscribe = Bus.subscribeAll(async (event) => {
-    const properties = event.properties as Record<string, any> | undefined
-    const eventSessionID = properties?.sessionID || properties?.info?.id
-    if (eventSessionID !== sessionID) return
-
-    if (event.type === "permission.asked") {
-      const allowFull = permissionMode === "full"
-      await answerInteraction(String(properties?.id || ""), {
-        kind: "permission",
-        answer: allowFull ? "allow-session" : "deny",
-        message: allowFull
-          ? "Webhook run uses the full permission policy, so permission requests are allowed for this session."
-          : "Webhook runs use the default non-interactive permission policy, so permission requests are denied.",
-      }).catch(() => undefined)
-      if (!allowFull) {
-        await Webhook.updateRun(runID, {
-          error: `Permission request denied automatically: ${String(properties?.permission || "unknown")}`,
-        }).catch(() => undefined)
-      }
-      return
-    }
-
-    if (event.type === "question.asked") {
-      await answerInteraction(String(properties?.id || ""), {
-        kind: "question",
-        answer: "deny",
-      }).catch(() => undefined)
-      await Webhook.updateRun(runID, {
-        error: "Question request denied automatically in webhook run.",
-      }).catch(() => undefined)
-      return
-    }
-
-    if (event.type === "session.idle") {
-      await finish("succeeded")
-      return
-    }
-
-    if (event.type === "session.error") {
-      await finish("failed", JSON.stringify(properties?.error || "Session failed"))
-    }
-  })
-
-  timeout = setTimeout(() => {
-    finish("failed", "Webhook run monitor timed out.").catch(() => undefined)
-  }, RUN_MONITOR_TIMEOUT_MS)
 }
 
 async function triggerWebhook(c: any) {
@@ -330,60 +268,54 @@ async function triggerWebhook(c: any) {
 
     try {
       const directory = projectDirectory(project)
-      const created = await Instance.provide({
+      const created = await runAutomatedControllerSession({
         directory,
-        init: InstanceBootstrap,
-        async fn() {
-          const sessionResponse = await createControllerSession({
-            directory,
-            title: `Webhook: ${source.name}`,
-            permission: permissionForSource(source),
-            sessionChoice: sessionChoiceForSource(source),
-            entry,
-            clientCapabilities: WEBHOOK_CLIENT_CAPABILITIES,
+        title: `Webhook: ${source.name}`,
+        permission: permissionForSource(source),
+        sessionChoice: sessionChoiceForSource(source),
+        entry,
+        clientCapabilities: WEBHOOK_CLIENT_CAPABILITIES,
+        parts: [{ type: "text", text: renderedPrompt }],
+        timeoutMs: RUN_MONITOR_TIMEOUT_MS,
+        timeoutMessage: "Webhook run monitor timed out.",
+        interactionPolicy: {
+          permission: source.permissionPolicy.mode === "full" ? "allow-session" : "deny",
+          question: "deny",
+          permissionAllowMessage: "Webhook run uses the full permission policy, so permission requests are allowed for this session.",
+          permissionDenyMessage: "Webhook runs use the default non-interactive permission policy, so permission requests are denied.",
+          questionDenyMessage: "Question request denied automatically in webhook run.",
+        },
+        async onControllerResponse(response) {
+          const responseBody = responseForRun(run.id, response)
+          await Webhook.updateRun(run.id, {
+            sessionID: response.sessionID,
+            turnSnapshotId: response.turnSnapshotId,
+            status: response.accepted ? "running" : "failed",
+            httpStatus: response.status,
+            responseBody,
+            time: { started: Date.now() },
+            ...(response.accepted ? {} : { error: "controller_message_not_accepted" }),
           })
-          const messageResponse = await sendControllerMessage(sessionResponse.sessionId, {
-            parts: [{ type: "text", text: renderedPrompt }],
-            entry,
-            clientCapabilities: WEBHOOK_CLIENT_CAPABILITIES,
-          })
-          return {
-            sessionResponse,
-            messageResponse,
+          if (response.accepted) {
+            await Webhook.markCooldown(source, run.id)
           }
+        },
+        async onFinished(result) {
+          await Webhook.updateRun(run.id, {
+            status: result.status,
+            ...(result.error ? { error: result.error } : {}),
+            time: { finished: Date.now() },
+          }).catch(() => undefined)
+        },
+        async onInteraction(interaction) {
+          if (!interaction.error) return
+          await Webhook.updateRun(run.id, {
+            error: interaction.error,
+          }).catch(() => undefined)
         },
       })
 
-      const responseBody = {
-        accepted: created.messageResponse.response.accepted,
-        runId: run.id,
-        sessionId: created.sessionResponse.sessionId,
-        turnSnapshotId: created.messageResponse.response.turnSnapshotId,
-        ...(created.messageResponse.response.accepted ? {} : { error: "controller_message_not_accepted" }),
-      } satisfies Webhook.TriggerResponse
-
-      await Webhook.updateRun(run.id, {
-        sessionID: created.sessionResponse.sessionId,
-        turnSnapshotId: created.messageResponse.response.turnSnapshotId,
-        status: created.messageResponse.response.accepted ? "running" : "failed",
-        httpStatus: created.messageResponse.status,
-        responseBody,
-        time: { started: Date.now() },
-        ...(created.messageResponse.response.accepted ? {} : { error: "controller_message_not_accepted" }),
-      })
-
-      if (created.messageResponse.response.accepted) {
-        await Webhook.markCooldown(source, run.id)
-        await Instance.provide({
-          directory,
-          init: InstanceBootstrap,
-          fn() {
-            startRunMonitor(run.id, created.sessionResponse.sessionId, source.permissionPolicy.mode)
-          },
-        })
-      }
-
-      return c.json(responseBody, created.messageResponse.status as never)
+      return c.json(responseForRun(run.id, created), created.status as never)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const responseBody = {

@@ -78,6 +78,11 @@ export namespace ControllerTemplateResolver {
     "Do not use markdown in this chat, and do not include code blocks.",
     "If a permission request or follow-up question is rejected, clearly tell the user that they need to continue in the web UI.",
   ].join("\n")
+  const SCHEDULED_ENTRY_CONTEXT = [
+    "This session was created by a Nine1Bot scheduled task.",
+    "There may be no user available to answer follow-up questions during this run.",
+    "Stay within the configured unattended permissions and make the final result easy to inspect later.",
+  ].join("\n")
 
   export async function resolve(input: Input = {}): Promise<Resolved> {
     const requestedTemplateIds = normalizeTemplateIds(input.entry?.templateIds ?? [])
@@ -178,6 +183,7 @@ export namespace ControllerTemplateResolver {
     if (source === "feishu" || platform === "feishu" || mode === "feishu-private-chat") ids.push("feishu-chat")
     if (source === "browser-extension" || mode === "browser-sidepanel") ids.push("browser-generic")
     if (platform === "generic-browser") ids.push("browser-generic")
+    if (source === "schedule" || mode === "scheduled-run") ids.push("scheduled-entry")
     ids.push(...RuntimePlatformAdapterRegistry.inferTemplateIds({ entry: input.entry, page }))
     return ids
   }
@@ -234,6 +240,19 @@ export namespace ControllerTemplateResolver {
             layer: "platform",
             source: "template.browser-generic",
             content: "This session was created from the browser extension side panel. Active page and selection context may be attached when the user sends a message.",
+            lifecycle: "session",
+            visibility: "developer-toggle",
+            priority: 35,
+          }),
+        )
+      }
+      if (templateId === "scheduled-entry") {
+        blocks.push(
+          RuntimeContextPipeline.textBlock({
+            id: "template:scheduled-entry",
+            layer: "business",
+            source: "template.scheduled-entry",
+            content: SCHEDULED_ENTRY_CONTEXT,
             lifecycle: "session",
             visibility: "developer-toggle",
             priority: 35,
