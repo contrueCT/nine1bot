@@ -304,21 +304,28 @@ export type MetricsDetailEvent =
     }
   | {
       kind: 'resource'
-      status: 'resolved' | 'failed'
+      status: 'resolved'
       recordedAt: number
       sessionID: string
       turnSnapshotId?: string
-      declaredMcp?: number
-      declaredSkills?: number
-      resolvedMcp?: number
-      resolvedSkills?: number
-      failures?: number
-      resourceType?: 'mcp' | 'skill'
-      resourceID?: string
-      failureStatus?: 'degraded' | 'unavailable' | 'auth-required'
-      stage?: 'resolve' | 'connect' | 'auth' | 'load' | 'execute'
+      declaredMcp: number
+      declaredSkills: number
+      resolvedMcp: number
+      resolvedSkills: number
+      failures: number
+    }
+  | {
+      kind: 'resource'
+      status: 'failed'
+      recordedAt: number
+      sessionID: string
+      turnSnapshotId?: string
+      resourceType: 'mcp' | 'skill'
+      resourceID: string
+      failureStatus: 'degraded' | 'unavailable' | 'auth-required'
+      stage: 'resolve' | 'connect' | 'auth' | 'load' | 'execute'
       reason?: string
-      recoverable?: boolean
+      recoverable: boolean
     }
 
 export interface SessionDebugResponse {
