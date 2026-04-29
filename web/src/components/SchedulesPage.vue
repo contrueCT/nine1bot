@@ -371,7 +371,7 @@ async function openRunSession(run: ScheduleRun) {
 
 async function copyText(text: string) {
   if (!text) return
-  await navigator.clipboard?.writeText(text).catch(() => undefined)
+  await navigator.clipboard?.writeText(text)?.catch(() => undefined)
   notice.value = 'Copied.'
 }
 

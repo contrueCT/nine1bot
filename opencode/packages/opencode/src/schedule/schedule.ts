@@ -283,7 +283,7 @@ export namespace Schedule {
     }
     const updated = await Storage.update<Task>(["scheduled_task", taskID], (draft) => {
       Object.assign(draft, Task.parse(draft))
-      if (draft.deletedAt) return
+      if (draft.deletedAt) throw taskNotFound(taskID)
       const scheduleChanged = input.schedule !== undefined
       const timezoneChanged = input.timezone !== undefined
       if (input.name !== undefined) draft.name = input.name
@@ -319,6 +319,7 @@ export namespace Schedule {
   export async function deleteTask(taskID: string) {
     const deleted = await Storage.update<Task>(["scheduled_task", taskID], (draft) => {
       Object.assign(draft, Task.parse(draft))
+      if (draft.deletedAt) throw taskNotFound(taskID)
       draft.enabled = false
       draft.nextRunAt = undefined
       draft.deletedAt = Date.now()
@@ -329,7 +330,7 @@ export namespace Schedule {
 
   export async function getTask(taskID: string) {
     const task = Task.parse(await Storage.read<Task>(["scheduled_task", taskID]))
-    if (task.deletedAt) throw new Storage.NotFoundError({ message: `Scheduled task not found: ${taskID}` })
+    if (task.deletedAt) throw taskNotFound(taskID)
     return task
   }
 
@@ -762,6 +763,10 @@ export namespace Schedule {
 
   function isActiveRunStatus(status: RunStatus) {
     return status === "scheduled" || status === "accepted" || status === "running"
+  }
+
+  function taskNotFound(taskID: string) {
+    return new Storage.NotFoundError({ message: `Scheduled task not found: ${taskID}` })
   }
 
   function nextIntervalRunAt(rule: Extract<ScheduleRule, { type: "interval" }>, after: number) {

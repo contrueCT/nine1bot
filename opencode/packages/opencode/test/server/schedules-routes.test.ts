@@ -114,6 +114,21 @@ describe("schedules routes", () => {
           const hiddenList = await app.request("/schedules/tasks", { headers })
           const visibleTasks = await hiddenList.json() as Schedule.Task[]
           expect(visibleTasks.some((item) => item.id === task.id)).toBe(false)
+
+          const updateDeleted = await app.request(`/schedules/tasks/${task.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({
+              name: "Should not update",
+            }),
+          })
+          expect(updateDeleted.status).toBe(404)
+
+          const deleteDeleted = await app.request(`/schedules/tasks/${task.id}`, {
+            method: "DELETE",
+            headers,
+          })
+          expect(deleteDeleted.status).toBe(404)
         },
       })
     } finally {
