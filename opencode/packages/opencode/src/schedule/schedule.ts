@@ -19,6 +19,7 @@ export namespace Schedule {
 
   const taskLocks = new Map<string, Promise<void>>()
   let scannerStarted = false
+  let automatedControllerRunnerOverride: AutomatedControllerRunner | undefined
 
   export const ModelChoice = z.object({
     providerID: z.string(),
@@ -121,6 +122,15 @@ export namespace Schedule {
   })
   export type Run = z.infer<typeof Run>
 
+  export const RunResponse = z.object({
+    accepted: z.boolean(),
+    run: Run,
+    sessionId: z.string().optional(),
+    turnSnapshotId: z.string().optional(),
+    error: z.string().optional(),
+  })
+  export type RunResponse = z.infer<typeof RunResponse>
+
   export const TaskCreate = z.object({
     name: z.string().trim().min(1),
     enabled: z.boolean().optional(),
@@ -192,6 +202,15 @@ export namespace Schedule {
   export function stopScanner() {
     Scheduler.unregister(SCANNER_ID, "global")
     scannerStarted = false
+  }
+
+  export const _testing = {
+    setAutomatedControllerRunner(runner?: AutomatedControllerRunner) {
+      automatedControllerRunnerOverride = runner
+    },
+    resetAutomatedControllerRunner() {
+      automatedControllerRunnerOverride = undefined
+    },
   }
 
   export function defaultPromptTemplate() {
@@ -307,7 +326,9 @@ export namespace Schedule {
   }
 
   export async function getTask(taskID: string) {
-    return Task.parse(await Storage.read<Task>(["scheduled_task", taskID]))
+    const task = Task.parse(await Storage.read<Task>(["scheduled_task", taskID]))
+    if (task.deletedAt) throw new Storage.NotFoundError({ message: `Scheduled task not found: ${taskID}` })
+    return task
   }
 
   export async function listTasks() {
@@ -369,7 +390,7 @@ export namespace Schedule {
     })
   }
 
-  export async function listRuns(input: { taskID?: string; limit?: number } = {}) {
+  export async function listRuns(input: { taskID?: string; limit?: number; offset?: number } = {}) {
     const runs: Run[] = []
     for (const key of await Storage.list(["scheduled_run"])) {
       const run = await Storage.read<Run>(key).catch(() => undefined)
@@ -379,7 +400,8 @@ export namespace Schedule {
       runs.push(parsed)
     }
     runs.sort((a, b) => b.time.created - a.time.created)
-    return runs.slice(0, input.limit ?? 100)
+    const offset = input.offset ?? 0
+    return runs.slice(offset, offset + (input.limit ?? 100))
   }
 
   export async function runTaskNow(taskID: string, input: { now?: number; runner?: AutomatedControllerRunner } = {}) {
@@ -402,9 +424,13 @@ export namespace Schedule {
         reason: "manual",
         scheduledAt: now,
         triggeredAt: now,
-        runner: input.runner,
+        runner: input.runner ?? automatedControllerRunnerOverride,
       })
     })
+  }
+
+  export async function runTaskNowResponse(taskID: string, input: { now?: number; runner?: AutomatedControllerRunner } = {}) {
+    return runResponse(await runTaskNow(taskID, input))
   }
 
   export async function runDueTasks(input: { now?: number; runner?: AutomatedControllerRunner } = {}) {
@@ -435,7 +461,7 @@ export namespace Schedule {
           reason: "due",
           scheduledAt: current.nextRunAt,
           triggeredAt: now,
-          runner: input.runner,
+          runner: input.runner ?? automatedControllerRunnerOverride,
         })
         await advanceTaskAfterDue(current, current.nextRunAt, now)
         return run
@@ -545,7 +571,7 @@ export namespace Schedule {
       ...SCHEDULED_ENTRY_BASE,
       traceId: run.id,
     } satisfies RuntimeControllerProtocol.Entry
-    const runner = input.runner ?? runAutomatedControllerSession
+    const runner = input.runner ?? automatedControllerRunnerOverride ?? runAutomatedControllerSession
 
     try {
       await runner({
@@ -649,6 +675,16 @@ export namespace Schedule {
       turnSnapshotId: response.turnSnapshotId,
       ...(response.accepted ? {} : { error: "controller_message_not_accepted" }),
     }
+  }
+
+  function runResponse(run: Run): RunResponse {
+    return RunResponse.parse({
+      accepted: run.status !== "failed" && run.status !== "skipped",
+      run,
+      sessionId: run.sessionID,
+      turnSnapshotId: run.turnSnapshotId,
+      error: run.error,
+    })
   }
 
   function promptPreview(prompt: string) {

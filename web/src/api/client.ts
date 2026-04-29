@@ -284,6 +284,81 @@ export interface WebhookSourceInput {
   requestGuards?: WebhookRequestGuards
 }
 
+export type ScheduleRule =
+  | { type: 'once-after'; delayMs: number }
+  | { type: 'daily'; timeOfDay: string; daysOfWeek?: number[] }
+  | { type: 'interval'; every: number; unit: 'hour' | 'day'; anchorAt?: number }
+
+export interface ScheduleRuntimeProfile {
+  modelMode: 'default' | 'custom'
+  model?: { providerID: string; modelID: string }
+  resourcesMode: 'default' | 'default-plus-selected'
+  mcpServers: string[]
+}
+
+export interface SchedulePermissionPolicy {
+  mode: 'default' | 'full'
+}
+
+export interface ScheduleTask {
+  id: string
+  name: string
+  enabled: boolean
+  projectID: string
+  schedule: ScheduleRule
+  promptTemplate: string
+  timezone: string
+  runtimeProfile: ScheduleRuntimeProfile
+  permissionPolicy: SchedulePermissionPolicy
+  overlapPolicy: 'skip'
+  misfirePolicy: { mode: 'skip' }
+  nextRunAt?: number
+  lastRunAt?: number
+  deletedAt?: number
+  time: { created: number; updated: number }
+}
+
+export interface ScheduleRun {
+  id: string
+  taskID: string
+  projectID: string
+  sessionID?: string
+  turnSnapshotId?: string
+  status: 'scheduled' | 'accepted' | 'running' | 'succeeded' | 'failed' | 'skipped'
+  reason?: 'disabled' | 'overlap' | 'misfire' | 'manual' | 'due'
+  scheduledAt: number
+  triggeredAt?: number
+  promptPreview?: string
+  responseBody?: unknown
+  error?: string
+  time: {
+    created: number
+    started?: number
+    finished?: number
+  }
+}
+
+export interface ScheduleTaskInput {
+  name: string
+  enabled?: boolean
+  projectID: string
+  schedule: ScheduleRule
+  promptTemplate?: string
+  timezone?: string
+  runtimeProfile?: ScheduleRuntimeProfile
+  permissionPolicy?: SchedulePermissionPolicy
+  overlapPolicy?: 'skip'
+  misfirePolicy?: { mode: 'skip' }
+}
+
+export interface ScheduleRunResponse {
+  accepted: boolean
+  run: ScheduleRun
+  sessionId?: string
+  turnSnapshotId?: string
+  error?: string
+}
+
 // 后端返回格式: { info: MessageInfo, parts: Part[] }
 export interface Message {
   info: MessageInfo
@@ -1144,6 +1219,85 @@ export const webhookApi = {
       status: res.status,
       body,
     }
+  },
+}
+
+export const scheduleApi = {
+  async tasks(): Promise<ScheduleTask[]> {
+    const res = await fetchWithTimeout(`${BASE_URL}/schedules/tasks`)
+    if (!res.ok) {
+      throw new Error(`Failed to list scheduled tasks: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async task(taskID: string): Promise<ScheduleTask> {
+    const res = await fetchWithTimeout(`${BASE_URL}/schedules/tasks/${encodeURIComponent(taskID)}`)
+    if (!res.ok) {
+      throw new Error(`Failed to get scheduled task: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async createTask(input: ScheduleTaskInput): Promise<ScheduleTask> {
+    const res = await fetchWithTimeout(`${BASE_URL}/schedules/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to create scheduled task: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async updateTask(taskID: string, input: Partial<ScheduleTaskInput>): Promise<ScheduleTask> {
+    const res = await fetchWithTimeout(`${BASE_URL}/schedules/tasks/${encodeURIComponent(taskID)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to update scheduled task: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async deleteTask(taskID: string): Promise<ScheduleTask> {
+    const res = await fetchWithTimeout(`${BASE_URL}/schedules/tasks/${encodeURIComponent(taskID)}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to delete scheduled task: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async runTask(taskID: string): Promise<ScheduleRunResponse> {
+    const res = await fetchWithTimeout(`${BASE_URL}/schedules/tasks/${encodeURIComponent(taskID)}/run`, {
+      method: 'POST',
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to run scheduled task: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async runs(opts: { taskID?: string; limit?: number; offset?: number } = {}): Promise<ScheduleRun[]> {
+    const params = new URLSearchParams()
+    if (opts.taskID) params.set('taskID', opts.taskID)
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+    if (opts.offset !== undefined) params.set('offset', String(opts.offset))
+    const suffix = params.toString() ? `?${params}` : ''
+    const res = await fetchWithTimeout(`${BASE_URL}/schedules/runs${suffix}`)
+    if (!res.ok) {
+      throw new Error(`Failed to list scheduled runs: ${res.status}`)
+    }
+    return res.json()
   },
 }
 

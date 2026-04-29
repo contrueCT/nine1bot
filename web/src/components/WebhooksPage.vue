@@ -39,9 +39,12 @@ import {
   type WebhookPresetId,
 } from '../utils/webhooks'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   projects: ProjectInfo[]
-}>()
+  embedded?: boolean
+}>(), {
+  embedded: false,
+})
 
 const emit = defineEmits<{
   selectSession: [session: Session]
@@ -86,6 +89,7 @@ const endpointPanel = ref<HTMLElement | null>(null)
 
 const form = ref(defaultForm())
 
+const isEmbedded = computed(() => props.embedded)
 const selectedSource = computed(() => sources.value.find((source) => source.id === selectedSourceId.value) || null)
 const selectedRuns = computed(() => {
   if (!selectedSourceId.value) return runs.value
@@ -596,8 +600,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="webhooks-page">
-    <header class="webhooks-header">
+  <div class="webhooks-page" :class="{ embedded: isEmbedded }">
+    <header v-if="!isEmbedded" class="webhooks-header">
       <div>
         <h1>Webhooks</h1>
         <div class="header-meta">
@@ -1135,6 +1139,11 @@ onUnmounted(() => {
   font-family: var(--font-sans);
   line-height: 1.45;
   overflow: auto;
+}
+
+.webhooks-page.embedded {
+  padding: 0;
+  overflow: visible;
 }
 
 .webhooks-header,
