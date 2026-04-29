@@ -15,6 +15,6 @@
     "web": "bun run --cwd web dev",
     "nine1bot": "bun run packages/nine1bot/src/index.ts",
     "rebuild": "web/node_modules/.bin/vue-tsc -b web/tsconfig.json && web/node_modules/.bin/vite build web --config web/vite.config.ts",
-    "dev:test": "bun run rebuild && bun run nine1bot"
+    "dev:test": "node scripts/dev-test.mjs"
   }
 }

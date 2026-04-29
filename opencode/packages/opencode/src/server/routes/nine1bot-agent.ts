@@ -163,7 +163,7 @@ function parsePage(input: unknown) {
   return parsed.success ? parsed.data : undefined
 }
 
-async function createControllerSession(input?: RuntimeControllerProtocol.SessionCreateRequest) {
+export async function createControllerSession(input?: RuntimeControllerProtocol.SessionCreateRequest) {
   const model = input?.sessionChoice?.model
   const permission = parsePermission(input?.permission)
   const template = await ControllerTemplateResolver.resolve({
@@ -237,7 +237,7 @@ async function compileControllerPrompt(input: {
   })
 }
 
-async function sendControllerMessage(sessionID: string, body: RuntimeControllerProtocol.MessageSendRequest) {
+export async function sendControllerMessage(sessionID: string, body: RuntimeControllerProtocol.MessageSendRequest) {
   const turnSnapshotId = ulid()
   let prompt: SessionPrompt.PromptInput
   try {
@@ -370,7 +370,7 @@ async function changeModel(sessionID: string, input: RuntimeControllerProtocol.M
   }
 }
 
-async function answerInteraction(requestID: string, body: RuntimeControllerProtocol.InteractionAnswerRequest) {
+export async function answerInteraction(requestID: string, body: RuntimeControllerProtocol.InteractionAnswerRequest) {
   const inferredKind = body.kind ?? (typeof body.answer === "object" ? "question" : "permission")
   if (inferredKind === "question") {
     if (typeof body.answer === "object") {

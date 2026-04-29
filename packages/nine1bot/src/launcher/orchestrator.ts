@@ -57,6 +57,7 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
   })
 
   const localUrl = server.url || `http://${serverConfig.hostname}:${serverConfig.port}`
+  process.env.NINE1BOT_LOCAL_URL = localUrl
 
   let feishu: FeishuServiceHandle | undefined
   if (config.feishu?.enabled) {
@@ -69,6 +70,7 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
   // 2. 创建隧道（如果启用）
   let tunnel: TunnelManager | undefined
   let publicUrl: string | undefined
+  delete process.env.NINE1BOT_PUBLIC_URL
 
   if (enableTunnel) {
     // 安全警告：隧道会将服务暴露到公网
@@ -80,8 +82,10 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
     try {
       tunnel = await createTunnel(config.tunnel)
       publicUrl = await tunnel.start(serverConfig.port)
+      process.env.NINE1BOT_PUBLIC_URL = publicUrl
     } catch (error: any) {
       console.warn(`Failed to create tunnel: ${error.message}`)
+      delete process.env.NINE1BOT_PUBLIC_URL
       // 清理可能已部分初始化的隧道资源
       if (tunnel) {
         try {

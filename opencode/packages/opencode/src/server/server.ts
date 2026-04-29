@@ -48,6 +48,7 @@ import { BrowserRoutes } from "./routes/browser"
 import { Nine1BotAgentRoutes } from "./routes/nine1bot-agent"
 import { MetricsRoutes } from "./routes/metrics"
 import { RuntimeMetricsStore } from "@/runtime/metrics/store"
+import { WebhookPublicRoutes, WebhookRoutes } from "./routes/webhooks"
 import { MDNS } from "./mdns"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
@@ -96,6 +97,7 @@ export namespace Server {
             status: 500,
           })
         })
+        .route("/webhooks", WebhookPublicRoutes())
         .use(async (c, next) => {
           const password = Flag.OPENCODE_SERVER_PASSWORD
           if (!password) return next()
@@ -212,6 +214,8 @@ export namespace Server {
         )
         .use(validator("query", z.object({ directory: z.string().optional() })))
         .route("/nine1bot", Nine1BotAgentRoutes())
+        .route("/nine1bot/metrics", MetricsRoutes())
+        .route("/webhooks", WebhookRoutes())
         .route("/nine1bot/metrics", MetricsRoutes())
         .route("/project", ProjectRoutes())
         .route("/pty", PtyRoutes())

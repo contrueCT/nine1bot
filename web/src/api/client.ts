@@ -99,7 +99,11 @@ async function fetchWithTimeout(
   timeout: number = DEFAULT_TIMEOUT
 ): Promise<Response> {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), timeout)
+  let timedOut = false
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeout)
   const preparedUrl = applyDirectoryToUrl(url)
   const preparedOptions = applyDirectoryHeaders(options)
 
@@ -109,6 +113,11 @@ async function fetchWithTimeout(
       signal: controller.signal
     })
     return response
+  } catch (error) {
+    if (timedOut || controller.signal.aborted) {
+      throw new Error(`Request timed out after ${Math.round(timeout / 1000)}s: ${preparedUrl}`)
+    }
+    throw error
   } finally {
     clearTimeout(timeoutId)
   }
@@ -386,6 +395,104 @@ export interface ProjectSharedFile {
   size: number
   modified: number
   mime?: string
+}
+
+export interface WebhookSource {
+  id: string
+  name: string
+  enabled: boolean
+  projectID: string
+  requestMapping: Record<string, string>
+  promptTemplate: string
+  runtimeProfile: WebhookRuntimeProfile
+  permissionPolicy: WebhookPermissionPolicy
+  requestGuards: WebhookRequestGuards
+  secretMasked: string
+  time: { created: number; updated: number }
+  deletedAt?: number
+}
+
+export interface WebhookRuntimeProfile {
+  modelMode: 'default' | 'custom'
+  model?: { providerID: string; modelID: string }
+  resourcesMode: 'default' | 'default-plus-selected'
+  mcpServers: string[]
+}
+
+export interface WebhookPermissionPolicy {
+  mode: 'default' | 'full'
+}
+
+export interface WebhookRequestGuards {
+  dedupe: {
+    enabled: boolean
+    keyTemplate?: string
+    ttlSeconds: number
+  }
+  rateLimit: {
+    enabled: boolean
+    maxRequests: number
+    windowSeconds: number
+  }
+  cooldown: {
+    enabled: boolean
+    seconds: number
+  }
+  replayProtection: {
+    enabled: boolean
+    timestampHeader?: string
+    maxSkewSeconds: number
+  }
+}
+
+export interface WebhookSourceCreateResponse {
+  source: WebhookSource
+  secret: string
+}
+
+export interface WebhookRun {
+  id: string
+  sourceID: string
+  projectID: string
+  sessionID?: string
+  turnSnapshotId?: string
+  status: 'received' | 'accepted' | 'running' | 'succeeded' | 'failed' | 'rejected'
+  httpStatus?: number
+  requestSummary?: unknown
+  renderedPromptPreview?: string
+  guardType?: 'dedupe' | 'rateLimit' | 'cooldown' | 'replayProtection'
+  guardReason?: string
+  dedupeKey?: string
+  responseBody?: unknown
+  error?: string
+  time: {
+    received: number
+    started?: number
+    finished?: number
+  }
+}
+
+export interface WebhookStatus {
+  listening: boolean
+  localUrl: string
+  publicUrl?: string
+  localWebhookUrl: string
+  publicWebhookUrl?: string
+  tunnel: {
+    enabled: boolean
+    status: 'active' | 'disabled' | 'error' | string
+  }
+}
+
+export interface WebhookSourceInput {
+  name: string
+  enabled?: boolean
+  projectID: string
+  requestMapping?: Record<string, string>
+  promptTemplate?: string
+  runtimeProfile?: WebhookRuntimeProfile
+  permissionPolicy?: WebhookPermissionPolicy
+  requestGuards?: WebhookRequestGuards
 }
 
 // 后端返回格式: { info: MessageInfo, parts: Part[] }
@@ -1227,6 +1334,97 @@ export const projectApi = {
       throw new Error(data.error || `Failed to delete project shared file: ${res.status}`)
     }
     return true
+  },
+}
+
+export const webhookApi = {
+  async status(): Promise<WebhookStatus> {
+    const res = await fetchWithTimeout(`${BASE_URL}/webhooks/status`)
+    if (!res.ok) {
+      throw new Error(`Failed to get webhook status: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async sources(): Promise<WebhookSource[]> {
+    const res = await fetchWithTimeout(`${BASE_URL}/webhooks/sources`)
+    if (!res.ok) {
+      throw new Error(`Failed to list webhook sources: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async createSource(input: WebhookSourceInput): Promise<WebhookSourceCreateResponse> {
+    const res = await fetchWithTimeout(`${BASE_URL}/webhooks/sources`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to create webhook source: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async updateSource(sourceID: string, input: Partial<WebhookSourceInput>): Promise<WebhookSource> {
+    const res = await fetchWithTimeout(`${BASE_URL}/webhooks/sources/${encodeURIComponent(sourceID)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to update webhook source: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async refreshSecret(sourceID: string): Promise<WebhookSourceCreateResponse> {
+    const res = await fetchWithTimeout(`${BASE_URL}/webhooks/sources/${encodeURIComponent(sourceID)}/secret/refresh`, {
+      method: 'POST',
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to refresh webhook secret: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async deleteSource(sourceID: string): Promise<WebhookSource> {
+    const res = await fetchWithTimeout(`${BASE_URL}/webhooks/sources/${encodeURIComponent(sourceID)}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to delete webhook source: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async runs(opts: { sourceID?: string; limit?: number } = {}): Promise<WebhookRun[]> {
+    const params = new URLSearchParams()
+    if (opts.sourceID) params.set('sourceID', opts.sourceID)
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+    const suffix = params.toString() ? `?${params}` : ''
+    const res = await fetchWithTimeout(`${BASE_URL}/webhooks/runs${suffix}`)
+    if (!res.ok) {
+      throw new Error(`Failed to list webhook runs: ${res.status}`)
+    }
+    return res.json()
+  },
+
+  async sendTest(url: string, payload: unknown): Promise<{ status: number; body: unknown }> {
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const body = await res.json().catch(() => ({}))
+    return {
+      status: res.status,
+      body,
+    }
   },
 }
 
