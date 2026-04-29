@@ -216,7 +216,6 @@ export namespace Server {
         .route("/nine1bot", Nine1BotAgentRoutes())
         .route("/nine1bot/metrics", MetricsRoutes())
         .route("/webhooks", WebhookRoutes())
-        .route("/nine1bot/metrics", MetricsRoutes())
         .route("/project", ProjectRoutes())
         .route("/pty", PtyRoutes())
         .route("/browser", BrowserRoutes())
