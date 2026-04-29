@@ -171,10 +171,6 @@ function loadFormFromTask(task: ScheduleTask | null) {
   fullPermissionConfirmed.value = task.permissionPolicy.mode === 'full'
 }
 
-watch(selectedTask, (task) => {
-  if (!showCreateForm.value) loadFormFromTask(task)
-})
-
 watch(
   () => props.projects,
   () => {
@@ -202,6 +198,7 @@ async function loadAll() {
   isLoading.value = true
   error.value = ''
   try {
+    const previousTaskId = selectedTaskId.value
     const [nextTasks, nextRuns, providerResult, nextMcpServers] = await Promise.all([
       scheduleApi.tasks(),
       scheduleApi.runs({ limit: 100 }),
@@ -212,10 +209,12 @@ async function loadAll() {
     runs.value = nextRuns
     providers.value = providerResult.providers
     mcpServers.value = nextMcpServers
-    if (!selectedTaskId.value && nextTasks[0]) {
+    if (selectedTaskId.value && !nextTasks.some((task) => task.id === selectedTaskId.value)) {
+      selectedTaskId.value = nextTasks[0]?.id || ''
+    } else if (!selectedTaskId.value && nextTasks[0]) {
       selectedTaskId.value = nextTasks[0].id
     }
-    if (!showCreateForm.value) {
+    if (!showCreateForm.value && selectedTaskId.value !== previousTaskId) {
       loadFormFromTask(selectedTask.value)
     }
   } catch (err) {
@@ -304,10 +303,12 @@ async function saveTask() {
       tasks.value = await scheduleApi.tasks()
       selectedTaskId.value = created.id
       showCreateForm.value = false
+      loadFormFromTask(created)
       notice.value = 'Scheduled task created.'
     } else if (selectedTask.value) {
       const updated = await scheduleApi.updateTask(selectedTask.value.id, payload)
       tasks.value = tasks.value.map((task) => task.id === updated.id ? updated : task)
+      loadFormFromTask(updated)
       notice.value = 'Scheduled task saved.'
     }
   } catch (err) {
@@ -383,10 +384,12 @@ function beginCreate() {
 }
 
 function selectTask(task: ScheduleTask) {
+  const changed = showCreateForm.value || selectedTaskId.value !== task.id
   showCreateForm.value = false
   selectedTaskId.value = task.id
   selectedRunId.value = ''
   showMcpPicker.value = false
+  if (changed) loadFormFromTask(task)
 }
 
 function selectRun(run: ScheduleRun) {
