@@ -82,6 +82,9 @@ const detailDebugLoading = ref(false)
 const detailDebugError = ref('')
 
 let refreshTimer: ReturnType<typeof setInterval> | null = null
+let metricsRequestId = 0
+let detailRequestId = 0
+let detailDebugRequestId = 0
 
 const providerOptions = computed(() =>
   [...new Set(models.value.map((row) => row.providerID).filter(Boolean))].sort(),
@@ -317,18 +320,22 @@ const detailSessionId = computed(() => {
 })
 
 async function loadMetrics() {
+  const requestId = ++metricsRequestId
   isLoading.value = true
   error.value = ''
   try {
     const payload: MetricsDashboardPayload = await api.getMetricsDashboard(selectedWindow.value)
+    if (requestId !== metricsRequestId) return
     overview.value = payload.overview
     models.value = payload.models
     tools.value = payload.tools
     resources.value = payload.resources
     timeline.value = payload.timeline
   } catch (err) {
+    if (requestId !== metricsRequestId) return
     error.value = err instanceof Error ? err.message : 'Failed to load metrics'
   } finally {
+    if (requestId !== metricsRequestId) return
     isLoading.value = false
   }
 }
@@ -376,29 +383,38 @@ async function openResourceDetail(row: ResourceMetricsRow) {
 
 async function loadDetail() {
   if (!detailSelection.value) return
+  const requestId = ++detailRequestId
   detailLoading.value = true
   detailError.value = ''
   detailDebug.value = null
+  detailDebugLoading.value = false
   detailDebugError.value = ''
   try {
-    detailEvents.value = await api.getMetricsEvents({
+    const events = await api.getMetricsEvents({
       ...detailSelection.value.params,
       window: selectedWindow.value,
       limit: 40,
     })
+    if (requestId !== detailRequestId) return
+    detailEvents.value = events
   } catch (err) {
+    if (requestId !== detailRequestId) return
     detailError.value = err instanceof Error ? err.message : 'Failed to load detail events'
     detailEvents.value = []
   } finally {
+    if (requestId !== detailRequestId) return
     detailLoading.value = false
   }
 }
 
 function closeDetail() {
+  detailRequestId += 1
+  detailDebugRequestId += 1
   detailSelection.value = null
   detailEvents.value = []
   detailError.value = ''
   detailDebug.value = null
+  detailDebugLoading.value = false
   detailDebugError.value = ''
 }
 
@@ -409,14 +425,19 @@ function openDetailSession() {
 
 async function loadDetailDebug() {
   if (!detailSessionId.value) return
+  const requestId = ++detailDebugRequestId
   detailDebugLoading.value = true
   detailDebugError.value = ''
   try {
-    detailDebug.value = await api.getSessionDebug(detailSessionId.value)
+    const debug = await api.getSessionDebug(detailSessionId.value)
+    if (requestId !== detailDebugRequestId || !detailSelection.value) return
+    detailDebug.value = debug
   } catch (err) {
+    if (requestId !== detailDebugRequestId) return
     detailDebugError.value = err instanceof Error ? err.message : 'Failed to load session debug'
     detailDebug.value = null
   } finally {
+    if (requestId !== detailDebugRequestId) return
     detailDebugLoading.value = false
   }
 }
@@ -428,6 +449,7 @@ function syncAutoRefresh() {
   }
   if (!autoRefresh.value || !props.visible) return
   refreshTimer = setInterval(() => {
+    if (isLoading.value) return
     void loadMetrics()
   }, 15000)
 }

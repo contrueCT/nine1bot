@@ -45,7 +45,7 @@ const props = defineProps<{
   isSessionRunning: (sessionId: string) => boolean
   runningCount: number
   maxParallelAgents: number
-  activePage: 'chat' | 'projects' | 'metrics' | 'webhooks'
+  activePage: 'chat' | 'projects' | 'metrics' | 'automations'
 }>()
 
 const emit = defineEmits<{
@@ -64,7 +64,7 @@ const emit = defineEmits<{
   'select-project': [projectId: string]
   'open-projects': []
   'open-metrics': []
-  'open-webhooks': []
+  'open-automations': []
 }>()
 
 // Session mode mapping
@@ -201,9 +201,9 @@ function contextMenuDelete() {
         <BarChart3 :size="18" />
         <span>Metrics</span>
       </button>
-      <button class="nav-item" :class="{ active: activePage === 'webhooks' }" @click="emit('open-webhooks')">
+      <button class="nav-item" :class="{ active: activePage === 'automations' }" @click="emit('open-automations')">
         <Webhook :size="18" />
-        <span>Webhooks</span>
+        <span>Automations</span>
       </button>
     </nav>
 
@@ -221,7 +221,7 @@ function contextMenuDelete() {
       <button class="nav-item-icon" :class="{ active: activePage === 'metrics' }" @click="emit('open-metrics')" title="Metrics">
         <BarChart3 :size="18" />
       </button>
-      <button class="nav-item-icon" :class="{ active: activePage === 'webhooks' }" @click="emit('open-webhooks')" title="Webhooks">
+      <button class="nav-item-icon" :class="{ active: activePage === 'automations' }" @click="emit('open-automations')" title="Automations">
         <Webhook :size="18" />
       </button>
     </nav>

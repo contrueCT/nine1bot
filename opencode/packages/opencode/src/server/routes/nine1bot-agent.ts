@@ -1,6 +1,7 @@
 import { Hono } from "hono"
 import { streamSSE } from "hono/streaming"
 import { describeRoute, resolver, validator } from "hono-openapi"
+import { HTTPException } from "hono/http-exception"
 import z from "zod"
 import { Bus } from "@/bus"
 import { Instance } from "@/project/instance"
@@ -21,6 +22,9 @@ import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import { Log } from "@/util/log"
 import { lazy } from "@/util/lazy"
+import { NamedError } from "@opencode-ai/util/error"
+import { Provider } from "@/provider/provider"
+import { Storage } from "@/storage/storage"
 import { ulid } from "ulid"
 
 const log = Log.create({ service: "server.nine1bot-agent" })
@@ -107,16 +111,44 @@ async function withControllerMetrics<T>(input: {
     })
     return result
   } catch (error) {
+    const failure = controllerMetricFailure(error)
     await emitControllerMetrics({
       route: input.route,
       method: input.method,
       entry: input.entry,
       protocolVersion: input.protocolVersion,
       startedAt,
-      status: 500,
-      errorType: RuntimeMetricsEvents.normalizeErrorType(error),
+      status: failure.status,
+      accepted: failure.accepted,
+      busy: failure.busy,
+      errorType: failure.errorType,
     })
     throw error
+  }
+}
+
+function controllerMetricFailure(error: unknown) {
+  let status = 500
+  let accepted: boolean | undefined
+  let busy: boolean | undefined
+
+  if (error instanceof Session.BusyError) {
+    status = 409
+    accepted = false
+    busy = true
+  } else if (error instanceof HTTPException) {
+    status = error.status
+  } else if (error instanceof NamedError) {
+    if (error instanceof Storage.NotFoundError) status = 404
+    else if (error instanceof Provider.ModelNotFoundError) status = 400
+    else if (error.name.startsWith("Worktree")) status = 400
+  }
+
+  return {
+    status,
+    accepted,
+    busy,
+    errorType: RuntimeMetricsEvents.normalizeErrorType(error),
   }
 }
 

@@ -39,9 +39,12 @@ import {
   type WebhookPresetId,
 } from '../utils/webhooks'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   projects: ProjectInfo[]
-}>()
+  embedded?: boolean
+}>(), {
+  embedded: false,
+})
 
 const emit = defineEmits<{
   selectSession: [session: Session]
@@ -86,6 +89,7 @@ const endpointPanel = ref<HTMLElement | null>(null)
 
 const form = ref(defaultForm())
 
+const isEmbedded = computed(() => props.embedded)
 const selectedSource = computed(() => sources.value.find((source) => source.id === selectedSourceId.value) || null)
 const selectedRuns = computed(() => {
   if (!selectedSourceId.value) return runs.value
@@ -468,8 +472,18 @@ async function refreshRuns() {
 
 async function copyText(text: string) {
   if (!text) return
-  await navigator.clipboard?.writeText(text).catch(() => undefined)
-  notice.value = 'Copied.'
+  error.value = ''
+  notice.value = ''
+  if (!navigator.clipboard?.writeText) {
+    error.value = 'Clipboard is not available in this browser.'
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    notice.value = 'Copied.'
+  } catch {
+    error.value = 'Unable to copy to clipboard.'
+  }
 }
 
 async function openRunSession(run: WebhookRun) {
@@ -596,8 +610,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="webhooks-page">
-    <header class="webhooks-header">
+  <div class="webhooks-page" :class="{ embedded: isEmbedded }">
+    <header v-if="!isEmbedded" class="webhooks-header">
       <div>
         <h1>Webhooks</h1>
         <div class="header-meta">
@@ -1137,6 +1151,11 @@ onUnmounted(() => {
   overflow: auto;
 }
 
+.webhooks-page.embedded {
+  padding: 0;
+  overflow: visible;
+}
+
 .webhooks-header,
 .detail-header,
 .header-actions,
@@ -1162,7 +1181,7 @@ onUnmounted(() => {
   margin: 0;
   font-family: var(--font-sans);
   font-weight: 650;
-  line-height: 1.15;
+  line-height: 1.2;
 }
 
 .webhooks-header h1 {
@@ -1277,19 +1296,15 @@ onUnmounted(() => {
   gap: var(--space-sm);
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 650;
   text-transform: uppercase;
   margin-bottom: var(--space-sm);
 }
 
-code,
-textarea {
-  font-family: var(--font-sans);
-}
-
 code {
+  font-family: var(--font-mono);
   word-break: break-all;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   line-height: 1.45;
 }
@@ -1327,6 +1342,7 @@ code {
   font-size: 15px;
   font-family: var(--font-sans);
   font-weight: 650;
+  line-height: 1.2;
 }
 
 .panel h3 {
@@ -1378,7 +1394,11 @@ code {
 }
 
 .source-copy span,
-.source-runs,
+.source-runs {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .detail-header p,
 .muted-text,
 .hint,
@@ -1386,18 +1406,18 @@ code {
 .mcp-group span,
 .summary-line {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .detail-header {
   justify-content: space-between;
   gap: var(--space-md);
-  padding: var(--space-lg);
+  padding: var(--space-md);
   border-bottom: 0.5px solid var(--border-default);
 }
 
 .detail-header p {
-  margin: var(--space-xs) 0 0;
+  margin: 2px 0 0;
 }
 
 .detail-grid {
@@ -1437,7 +1457,7 @@ code {
   margin: var(--space-md) 0 var(--space-sm);
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 650;
 }
 
 .help-tip {
@@ -1516,13 +1536,16 @@ code {
 label {
   display: grid;
   gap: var(--space-xs);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 label span,
 .section-title {
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 650;
 }
 
 input,
@@ -1530,11 +1553,12 @@ select,
 textarea,
 .endpoint-row {
   width: 100%;
+  min-width: 0;
   border: 0.5px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: var(--font-sans);
+  font: inherit;
   font-size: 13px;
 }
 
@@ -1547,7 +1571,7 @@ textarea:focus {
 
 input,
 select {
-  height: 38px;
+  height: 36px;
   padding: 0 var(--space-sm);
 }
 
@@ -1555,6 +1579,7 @@ textarea {
   min-height: 120px;
   padding: var(--space-sm);
   resize: vertical;
+  line-height: 1.45;
 }
 
 .prompt-template {
@@ -1758,14 +1783,14 @@ textarea {
 
 .preview-card pre,
 .run-detail pre {
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   margin: var(--space-xs) 0 0;
   max-height: 230px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .chips {
@@ -1774,11 +1799,14 @@ textarea {
 }
 
 .chip {
-  border: 0.5px solid var(--border-default);
-  border-radius: 999px;
-  padding: 4px 9px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 24px;
+  border-radius: var(--radius-full);
+  padding: 0 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -1838,7 +1866,7 @@ textarea {
   border: 0;
   background: transparent;
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 650;
   cursor: pointer;
 }
 
@@ -1862,36 +1890,35 @@ textarea {
 .pill {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  border-radius: 999px;
-  padding: 0 9px;
+  justify-content: center;
+  min-height: 22px;
+  border-radius: var(--radius-full);
+  padding: 0 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
   font-size: 12px;
-  font-family: var(--font-sans);
-  border: 0.5px solid var(--border-default);
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .pill.ok {
   color: var(--success);
   background: var(--success-subtle);
-  border-color: transparent;
 }
 
 .pill.warn {
   color: var(--warning);
   background: var(--warning-subtle);
-  border-color: transparent;
 }
 
 .pill.danger {
   color: var(--error);
   background: var(--error-subtle);
-  border-color: transparent;
 }
 
 .pill.blue {
   color: var(--accent);
   background: var(--accent-subtle);
-  border-color: transparent;
 }
 
 .pill.muted {
@@ -1902,6 +1929,10 @@ textarea {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-elevated);
+  border: 0.5px solid var(--border-default);
+  border-radius: var(--radius-md);
   margin-bottom: var(--space-md);
   color: var(--success);
 }
