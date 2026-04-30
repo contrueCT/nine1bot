@@ -285,7 +285,7 @@ const filteredTools = computed(() => {
     })
     .filter((row) => !keyword || row.tool.toLowerCase().includes(keyword))
     .sort((a, b) => {
-      if (toolSort.value === 'successRate') return a.successRate - b.successRate
+      if (toolSort.value === 'successRate') return b.successRate - a.successRate
       if (toolSort.value === 'latency') return numberOrZero(b.p95DurationMs) - numberOrZero(a.p95DurationMs)
       if (toolSort.value === 'failures') return toolFailureRate(b) - toolFailureRate(a)
       return b.calls - a.calls
@@ -1269,7 +1269,7 @@ onUnmounted(() => {
           <span>{{ detailError }}</span>
         </div>
 
-        <div v-if="detailLoading" class="detail-empty">
+        <div v-else-if="detailLoading" class="detail-empty">
           Loading recent events...
         </div>
 
