@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { dirname } from 'path'
 import type { PlatformManagerConfig } from './manager'
+import { stripJsonComments, upsertTopLevelJsoncProperty } from '../config/jsonc'
 
 export class PlatformConfigPathMissingError extends Error {
   constructor() {
@@ -38,13 +39,26 @@ export async function writePlatformManagerConfig(
   platforms: PlatformManagerConfig,
   configPath = getPlatformConfigPath(),
 ): Promise<PlatformConfigDocument> {
+  const originalText = await readFile(configPath, 'utf-8').catch((error: any) => {
+    if (error?.code === 'ENOENT') return ''
+    throw error
+  })
   const document = await readPlatformConfigDocument(configPath)
+  const normalizedPlatforms = normalizePlatforms(platforms)
   const nextDocument: PlatformConfigDocument = {
     ...document,
-    platforms: normalizePlatforms(platforms),
+    platforms: normalizedPlatforms,
   }
   await mkdir(dirname(configPath), { recursive: true })
-  await writeFile(configPath, `${JSON.stringify(nextDocument, null, 2)}\n`, 'utf-8')
+  await writeFile(
+    configPath,
+    upsertTopLevelJsoncProperty({
+      jsonc: originalText,
+      key: 'platforms',
+      value: normalizedPlatforms,
+    }),
+    'utf-8',
+  )
   return nextDocument
 }
 
@@ -71,60 +85,4 @@ function normalizePlatforms(input: unknown): PlatformManagerConfig {
     }
   }
   return normalized
-}
-
-function stripJsonComments(jsonc: string): string {
-  let result = ''
-  let inString = false
-  let inSingleLineComment = false
-  let inMultiLineComment = false
-  let index = 0
-
-  while (index < jsonc.length) {
-    const char = jsonc[index]
-    const nextChar = jsonc[index + 1]
-
-    if (!inSingleLineComment && !inMultiLineComment && char === '"' && jsonc[index - 1] !== '\\') {
-      inString = !inString
-      result += char
-      index++
-      continue
-    }
-
-    if (inString) {
-      result += char
-      index++
-      continue
-    }
-
-    if (!inMultiLineComment && char === '/' && nextChar === '/') {
-      inSingleLineComment = true
-      index += 2
-      continue
-    }
-
-    if (!inSingleLineComment && char === '/' && nextChar === '*') {
-      inMultiLineComment = true
-      index += 2
-      continue
-    }
-
-    if (inSingleLineComment && char === '\n') {
-      inSingleLineComment = false
-      result += char
-      index++
-      continue
-    }
-
-    if (inMultiLineComment && char === '*' && nextChar === '/') {
-      inMultiLineComment = false
-      index += 2
-      continue
-    }
-
-    if (!inSingleLineComment && !inMultiLineComment) result += char
-    index++
-  }
-
-  return result
 }

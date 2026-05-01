@@ -136,16 +136,21 @@ export function useSettings() {
     platformError.value = ''
     try {
       platforms.value = await platformApi.list()
-      if (!selectedPlatformId.value && platforms.value.length > 0) {
+      const selectedStillExists = platforms.value.some((platform) => platform.id === selectedPlatformId.value)
+      if (platforms.value.length === 0) {
+        selectedPlatformId.value = ''
+        selectedPlatform.value = null
+        return
+      }
+      if (!selectedPlatformId.value || !selectedStillExists) {
         selectedPlatformId.value = platforms.value[0].id
       }
-      if (selectedPlatformId.value) {
-        await loadPlatformDetail(selectedPlatformId.value)
-      }
+      await loadPlatformDetail(selectedPlatformId.value)
     } catch (e: any) {
       console.error('Failed to load platforms:', e)
       platformError.value = e?.message || '加载平台适配失败'
       platforms.value = []
+      selectedPlatformId.value = ''
       selectedPlatform.value = null
     } finally {
       loadingPlatforms.value = false

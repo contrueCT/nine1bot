@@ -384,6 +384,31 @@ describe('PlatformAdapterManager', () => {
     })
   })
 
+  it('treats null setting patch values as field clears', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', { defaultEnabled: true })],
+      config: {
+        demo: {
+          enabled: true,
+          settings: {
+            apiEnrichment: 'auto',
+            allowedHosts: ['gitlab.com'],
+          },
+        },
+      },
+    })
+
+    await manager.updateConfig('demo', {
+      settings: {
+        apiEnrichment: null,
+      },
+    })
+
+    expect(manager.configSnapshot().demo?.settings).toEqual({
+      allowedHosts: ['gitlab.com'],
+    })
+  })
+
   it('guards platform actions by descriptor and confirmation', async () => {
     const manager = new PlatformAdapterManager({
       contributions: [{

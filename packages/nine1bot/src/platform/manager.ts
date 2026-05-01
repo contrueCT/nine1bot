@@ -573,6 +573,10 @@ export class PlatformAdapterManager {
           })
         }
       }
+
+      for (const [key, value] of Object.entries(incomingSettings)) {
+        if (value === null) delete nextSettings[key]
+      }
     }
 
     return {

@@ -173,7 +173,7 @@ function parseField(field: PlatformConfigField): { include: boolean; value?: unk
   }
 
   if (field.type === 'json') {
-    if (typeof value !== 'string' || !value.trim()) return { include: true, value: undefined }
+    if (typeof value !== 'string' || !value.trim()) return { include: true, value: null }
     try {
       return { include: true, value: JSON.parse(value) }
     } catch {
@@ -182,11 +182,11 @@ function parseField(field: PlatformConfigField): { include: boolean; value?: unk
   }
 
   if (field.type === 'select') {
-    return { include: true, value: typeof value === 'string' && value.trim() ? value.trim() : undefined }
+    return { include: true, value: typeof value === 'string' && value.trim() ? value.trim() : null }
   }
 
   if (field.type === 'number') {
-    if (value === '') return { include: true, value: undefined }
+    if (value === '') return { include: true, value: null }
     const numberValue = Number(value)
     if (!Number.isFinite(numberValue)) return { include: false, error: '请输入有效数字' }
     return { include: true, value: numberValue }
