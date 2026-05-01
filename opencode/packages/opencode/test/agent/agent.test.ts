@@ -1,8 +1,30 @@
-import { test, expect } from "bun:test"
+import { afterAll, beforeAll, test, expect } from "bun:test"
 import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { Agent } from "../../src/agent/agent"
 import { PermissionNext } from "../../src/permission/next"
+import path from "path"
+
+const originalDisablePluginInstall = process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL
+const originalDisableGlobalConfig = process.env.OPENCODE_DISABLE_GLOBAL_CONFIG
+
+beforeAll(() => {
+  process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL = "true"
+  process.env.OPENCODE_DISABLE_GLOBAL_CONFIG = "true"
+})
+
+afterAll(() => {
+  restoreEnv("OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL", originalDisablePluginInstall)
+  restoreEnv("OPENCODE_DISABLE_GLOBAL_CONFIG", originalDisableGlobalConfig)
+})
+
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key]
+    return
+  }
+  process.env[key] = value
+}
 
 // Helper to evaluate permission for a tool with wildcard pattern
 function evalPerm(agent: Agent.Info | undefined, permission: string): PermissionNext.Action | undefined {
@@ -53,7 +75,9 @@ test("plan agent denies edits except .opencode/plans/*", async () => {
       // Wildcard is denied
       expect(evalPerm(plan, "edit")).toBe("deny")
       // But specific path is allowed
-      expect(PermissionNext.evaluate("edit", ".opencode/plans/foo.md", plan!.permission).action).toBe("allow")
+      expect(PermissionNext.evaluate("edit", path.join(".opencode", "plans", "foo.md"), plan!.permission).action).toBe(
+        "allow",
+      )
     },
   })
 })

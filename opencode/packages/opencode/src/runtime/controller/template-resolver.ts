@@ -40,6 +40,13 @@ export namespace ControllerTemplateResolver {
     skippedPlatforms: RuntimePlatformAdapterRegistry.PlatformSkipAudit[]
     resourceMergeMode: "additive-only"
     contextBlocks: Array<{ id: string; source: string; enabled: boolean }>
+    agentRecommendation?: {
+      requested?: string
+      resolved: string
+      accepted: boolean
+      platform?: string
+      reason?: "not-found"
+    }
     resources: {
       builtinGroups: string[]
       builtinTools: string[]
@@ -100,6 +107,7 @@ export namespace ControllerTemplateResolver {
     })
     const templateIds = RuntimePlatformAdapterRegistry.activeTemplateIds(rawTemplateIds)
     const agent = await resolveAgent(input.sessionChoice?.agent)
+    const agentRecommendation = await recommendedAgent(templateIds, agent.name)
     const defaultModel = agent.model ?? (await Provider.defaultModel())
     const resources = (await RuntimeFeatureFlags.resourceResolverEnabled())
       ? mergeResources(
@@ -123,6 +131,7 @@ export namespace ControllerTemplateResolver {
         source: block.source,
         enabled: block.enabled,
       })),
+      agentRecommendation: agentRecommendation.audit,
       resources: {
         builtinGroups: resources.builtinTools.enabledGroups ?? [],
         builtinTools: resources.builtinTools.enabledTools ?? [],
@@ -138,7 +147,7 @@ export namespace ControllerTemplateResolver {
         name: agent.name,
         source: input.sessionChoice?.agent ? "session-choice" : "default-user-template",
       },
-      recommendedAgent: recommendedAgent(templateIds, agent.name),
+      recommendedAgent: agentRecommendation.value,
       defaultModel: {
         providerID: defaultModel.providerID,
         modelID: defaultModel.modelID,
@@ -175,7 +184,7 @@ export namespace ControllerTemplateResolver {
 
   async function resolveAgent(agentName?: string) {
     const name = agentName ?? (await Agent.defaultAgent())
-    const agent = await Agent.get(name)
+    const agent = await Agent.get(name, agentName ? { includeDeclaredOnly: true, includeRecommendable: true } : undefined)
     if (!agent) throw new Error(`Agent not found: ${name}`)
     return agent
   }
@@ -332,8 +341,41 @@ export namespace ControllerTemplateResolver {
     return page ? RuntimeContextEvents.normalizePagePayload(page) : undefined
   }
 
-  function recommendedAgent(templateIds: string[], fallback: string) {
-    return RuntimePlatformAdapterRegistry.recommendedAgent({ templateIds, fallback })
+  async function recommendedAgent(templateIds: string[], fallback: string) {
+    const recommendation = RuntimePlatformAdapterRegistry.recommendAgent({ templateIds, fallback })
+    if (!recommendation.requested) {
+      return {
+        value: fallback,
+        audit: undefined,
+      }
+    }
+
+    const agent = await Agent.get(recommendation.requested, {
+      includeDeclaredOnly: true,
+      includeRecommendable: true,
+    })
+    if (agent) {
+      return {
+        value: agent.name,
+        audit: {
+          requested: recommendation.requested,
+          resolved: agent.name,
+          accepted: true,
+          platform: recommendation.platform,
+        },
+      }
+    }
+
+    return {
+      value: fallback,
+      audit: {
+        requested: recommendation.requested,
+        resolved: fallback,
+        accepted: false,
+        platform: recommendation.platform,
+        reason: "not-found" as const,
+      },
+    }
   }
 
   function dedupeBlocks(blocks: ContextBlock[]) {

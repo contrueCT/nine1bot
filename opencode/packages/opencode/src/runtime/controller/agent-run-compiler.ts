@@ -17,6 +17,7 @@ import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import type { Session } from "@/session"
 import type { SessionPrompt } from "@/session/prompt"
 import { Log } from "@/util/log"
+import { Bus } from "@/bus"
 import { ulid } from "ulid"
 
 export namespace ControllerAgentRunCompiler {
@@ -42,7 +43,7 @@ export namespace ControllerAgentRunCompiler {
             source: "legacy-resumed",
           })
         : undefined)
-    const agent = await resolveAgent(input.session, profile)
+    const agent = await resolveAgent(input.session, profile, input.turnSnapshotId)
     const ignoredAgentOverride =
       body.agent && body.agent !== agent.name
         ? {
@@ -171,10 +172,35 @@ export namespace ControllerAgentRunCompiler {
     return RuntimePromptBridgeCompiler.compilePrompt(await compileTurnSnapshot(input))
   }
 
-  async function resolveAgent(session: Session.Info, profile?: SessionProfileSnapshot) {
+  async function resolveAgent(session: Session.Info, profile: SessionProfileSnapshot | undefined, turnSnapshotId: string) {
     const name = profile?.agent.name ?? session.runtime?.agent ?? (await Agent.defaultAgent())
-    const agent = await Agent.get(name)
-    if (!agent) throw new Error(`Agent not found: ${name}`)
+    const agent = await Agent.get(name, { includeDeclaredOnly: true, includeRecommendable: true })
+    if (!agent) {
+      if (profile?.agent.name ?? session.runtime?.agent) {
+        const message = `Agent "${name}" is disabled or missing in the current runtime sources.`
+        await Bus.publish(Agent.Unavailable, {
+          sessionID: session.id,
+          turnSnapshotId,
+          agent: name,
+          status: "unavailable",
+          reason: "disabled-by-current-config",
+          message,
+          recoverable: true,
+          action: {
+            type: "open-settings",
+            label: "Open platform settings",
+          },
+        }).catch((error) => {
+          log.warn("failed to publish agent unavailable event", { error, sessionID: session.id, agent: name })
+        })
+        throw new Agent.UnavailableError({
+          agent: name,
+          reason: "disabled-by-current-config",
+          message,
+        })
+      }
+      throw new Error(`Agent not found: ${name}`)
+    }
     return agent
   }
 

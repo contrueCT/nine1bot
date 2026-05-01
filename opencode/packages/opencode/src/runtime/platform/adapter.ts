@@ -130,13 +130,29 @@ export namespace RuntimePlatformAdapterRegistry {
     })
   }
 
-  export function recommendedAgent(input: { templateIds: string[]; fallback: string }): string {
+  export function recommendAgent(input: { templateIds: string[]; fallback: string }): {
+    requested?: string
+    fallback: string
+    platform?: string
+  } {
     const templateIds = activeTemplateIds(input.templateIds)
     for (const adapter of adapters.values()) {
       const recommended = adapter.recommendedAgent?.({ ...input, templateIds })
-      if (recommended) return recommended
+      if (recommended) {
+        return {
+          requested: recommended,
+          fallback: input.fallback,
+          platform: adapter.id,
+        }
+      }
     }
-    return input.fallback
+    return {
+      fallback: input.fallback,
+    }
+  }
+
+  export function recommendedAgent(input: { templateIds: string[]; fallback: string }): string {
+    return recommendAgent(input).requested ?? input.fallback
   }
 
   export function activeTemplateIds(templateIds: string[]) {

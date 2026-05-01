@@ -89,7 +89,7 @@ export namespace SessionProfileCompiler {
 
   export async function resolveAgent(agentName?: string) {
     const name = agentName ?? (await Agent.defaultAgent())
-    const agent = await Agent.get(name)
+    const agent = await Agent.get(name, agentName ? { includeDeclaredOnly: true, includeRecommendable: true } : undefined)
     if (!agent) throw new Error(`Agent not found: ${name}`)
     return agent
   }

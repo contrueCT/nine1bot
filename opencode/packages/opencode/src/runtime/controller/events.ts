@@ -422,6 +422,15 @@ export namespace RuntimeControllerEvents {
           }),
         ]
         break
+      case "runtime.agent.unavailable":
+        projected = [
+          envelope({
+            ...base,
+            type: "runtime.agent.unavailable",
+            data: properties,
+          }),
+        ]
+        break
       case "runtime.resources.resolved":
         projected = [
           envelope({

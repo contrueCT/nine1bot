@@ -198,6 +198,7 @@ export namespace RuntimeControllerProtocol {
     "runtime.interaction.answered",
     "runtime.artifact.available",
     "runtime.artifact.closed",
+    "runtime.agent.unavailable",
     "runtime.resource.failed",
     "runtime.resources.resolved",
     "runtime.context.compiled",

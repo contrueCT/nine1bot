@@ -18,8 +18,26 @@ import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@/global"
 import path from "path"
 import { Plugin } from "@/plugin"
+import { RuntimeSourceRegistry } from "@/runtime/source/registry"
+import { ConfigMarkdown } from "@/config/markdown"
+import { Filesystem } from "@/util/filesystem"
+import { Log } from "@/util/log"
+import { BusEvent } from "@/bus/bus-event"
+import { NamedError } from "@opencode-ai/util/error"
 
 export namespace Agent {
+  const log = Log.create({ service: "agent" })
+
+  export const Source = z.object({
+    owner: z.object({
+      id: z.string(),
+      kind: z.enum(["core", "user", "project", "platform", "capability"]),
+    }),
+    sourceID: z.string(),
+    visibility: z.enum(["declared-only", "recommendable", "user-selectable"]),
+  })
+  export type Source = z.infer<typeof Source>
+
   export const Info = z
     .object({
       name: z.string(),
@@ -40,13 +58,52 @@ export namespace Agent {
       prompt: z.string().optional(),
       options: z.record(z.string(), z.any()),
       steps: z.number().int().positive().optional(),
+      source: Source.optional(),
     })
     .meta({
       ref: "Agent",
     })
   export type Info = z.infer<typeof Info>
+  export type ListOptions = {
+    includeRecommendable?: boolean
+    includeDeclaredOnly?: boolean
+  }
 
-  const state = Instance.state(async () => {
+  export const Unavailable = BusEvent.define(
+    "runtime.agent.unavailable",
+    z.object({
+      sessionID: z.string(),
+      turnSnapshotId: z.string().optional(),
+      agent: z.string(),
+      owner: z.string().optional(),
+      sourceID: z.string().optional(),
+      status: z.literal("unavailable"),
+      reason: z.enum(["disabled-by-current-config", "missing-source", "invalid-agent"]),
+      message: z.string(),
+      recoverable: z.boolean(),
+      action: z
+        .object({
+          type: z.enum(["open-settings", "new-session"]),
+          label: z.string(),
+        })
+        .optional(),
+    }),
+  )
+
+  export const UnavailableError = NamedError.create(
+    "AgentUnavailableError",
+    z.object({
+      agent: z.string(),
+      reason: z.enum(["disabled-by-current-config", "missing-source", "invalid-agent"]),
+      message: z.string(),
+    }),
+  )
+
+  const PLATFORM_AGENT_GLOB = new Bun.Glob("**/*.agent.md")
+  let cachedAgents: Record<string, Info> | undefined
+  let cachedAgentKey: string | undefined
+
+  async function loadAgents(): Promise<Record<string, Info>> {
     const cfg = await Config.get()
 
     const defaults = PermissionNext.fromConfig({
@@ -200,32 +257,10 @@ export namespace Agent {
     }
 
     for (const [key, value] of Object.entries(cfg.agent ?? {})) {
-      if (value.disable) {
-        delete result[key]
-        continue
-      }
-      let item = result[key]
-      if (!item)
-        item = result[key] = {
-          name: key,
-          mode: "all",
-          permission: PermissionNext.merge(defaults, user),
-          options: {},
-          native: false,
-        }
-      if (value.model) item.model = Provider.parseModel(value.model)
-      item.prompt = value.prompt ?? item.prompt
-      item.description = value.description ?? item.description
-      item.temperature = value.temperature ?? item.temperature
-      item.topP = value.top_p ?? item.topP
-      item.mode = value.mode ?? item.mode
-      item.color = value.color ?? item.color
-      item.hidden = value.hidden ?? item.hidden
-      item.name = value.name ?? item.name
-      item.steps = value.steps ?? item.steps
-      item.options = mergeDeep(item.options, value.options ?? {})
-      item.permission = PermissionNext.merge(item.permission, PermissionNext.fromConfig(value.permission ?? {}))
+      applyConfigAgent(result, key, value, defaults, user)
     }
+
+    await scanRuntimeAgentSources(result, defaults, user)
 
     // Ensure Truncate.DIR is allowed unless explicitly configured
     for (const name in result) {
@@ -244,17 +279,171 @@ export namespace Agent {
     }
 
     return result
-  })
-
-  export async function get(agent: string) {
-    return state().then((x) => x[agent])
   }
 
-  export async function list() {
+  async function scanRuntimeAgentSources(
+    result: Record<string, Info>,
+    defaults: PermissionNext.Ruleset,
+    user: PermissionNext.Ruleset,
+  ) {
+    for (const runtimeSource of RuntimeSourceRegistry.list().agents) {
+      if (!runtimeSource.owner.enabled) continue
+      if (!(await Filesystem.isDir(runtimeSource.directory))) {
+        log.debug("skip missing runtime agent source directory", {
+          owner: runtimeSource.owner.id,
+          source: runtimeSource.id,
+          directory: runtimeSource.directory,
+        })
+        continue
+      }
+
+      const matches = await Array.fromAsync(
+        PLATFORM_AGENT_GLOB.scan({
+          cwd: runtimeSource.directory,
+          absolute: true,
+          onlyFiles: true,
+          followSymlinks: true,
+        }),
+      ).catch((error) => {
+        log.error("failed runtime agent source directory scan", {
+          owner: runtimeSource.owner.id,
+          source: runtimeSource.id,
+          directory: runtimeSource.directory,
+          error,
+        })
+        return []
+      })
+
+      const source: Source = {
+        owner: {
+          id: runtimeSource.owner.id,
+          kind: runtimeSource.owner.kind,
+        },
+        sourceID: runtimeSource.id,
+        visibility: runtimeSource.visibility,
+      }
+
+      for (const match of matches) {
+        const md = await ConfigMarkdown.parse(match).catch((error) => {
+          log.error("failed to load runtime agent source item", { agent: match, error })
+          return undefined
+        })
+        if (!md) continue
+
+        const name = typeof md.data.name === "string" && md.data.name.trim()
+          ? md.data.name.trim()
+          : path.basename(match, ".agent.md")
+        const config = {
+          name,
+          ...md.data,
+          prompt: md.content.trim(),
+        }
+        const parsed = Config.Agent.safeParse(config)
+        if (!parsed.success) {
+          log.error("invalid runtime agent source item", { agent: match, issues: parsed.error.issues })
+          continue
+        }
+
+        const existing = result[name]
+        if (existing && existing.source?.owner.kind !== "platform") {
+          log.debug("skip platform agent override over non-platform agent", {
+            name,
+            existing: existing.name,
+            skipped: match,
+          })
+          continue
+        }
+        if (existing) {
+          log.debug("platform agent override", {
+            name,
+            previous: existing.name,
+            newLocation: match,
+          })
+        }
+
+        applyConfigAgent(result, name, parsed.data, defaults, user, source)
+      }
+    }
+  }
+
+  function applyConfigAgent(
+    result: Record<string, Info>,
+    key: string,
+    value: Config.Agent,
+    defaults: PermissionNext.Ruleset,
+    user: PermissionNext.Ruleset,
+    source?: Source,
+  ) {
+    if (value.disable) {
+      delete result[key]
+      return
+    }
+    let item = result[key]
+    if (!item) {
+      item = result[key] = {
+        name: key,
+        mode: "all",
+        permission: PermissionNext.merge(defaults, user),
+        options: {},
+        native: false,
+        source,
+      }
+    }
+    if (source) item.source = source
+    if (value.model) item.model = Provider.parseModel(value.model)
+    item.prompt = value.prompt ?? item.prompt
+    item.description = value.description ?? item.description
+    item.temperature = value.temperature ?? item.temperature
+    item.topP = value.top_p ?? item.topP
+    item.mode = value.mode ?? item.mode
+    item.color = value.color ?? item.color
+    item.hidden = value.hidden ?? item.hidden
+    item.name = value.name ?? item.name
+    item.steps = value.steps ?? item.steps
+    item.options = mergeDeep(item.options, value.options ?? {})
+    item.permission = PermissionNext.merge(item.permission, PermissionNext.fromConfig(value.permission ?? {}))
+  }
+
+  async function state() {
+    const cacheKey = agentCacheKey()
+    if (cachedAgents && cachedAgentKey === cacheKey) return cachedAgents
+    cachedAgents = await loadAgents()
+    cachedAgentKey = cacheKey
+    return cachedAgents
+  }
+
+  function agentCacheKey() {
+    return JSON.stringify({
+      directory: Instance.directory,
+      worktree: Instance.worktree,
+      config: RuntimeSourceRegistry.version(),
+    })
+  }
+
+  function isVisible(agent: Info, options?: ListOptions) {
+    const visibility = agent.source?.visibility
+    if (!visibility || visibility === "user-selectable") return true
+    if (visibility === "recommendable") return options?.includeRecommendable || options?.includeDeclaredOnly
+    if (visibility === "declared-only") return options?.includeDeclaredOnly
+    return false
+  }
+
+  function isPlatformAgent(agent: Info) {
+    return agent.source?.owner.kind === "platform"
+  }
+
+  export async function get(agent: string, options?: ListOptions): Promise<Info> {
+    const item = await state().then((x) => x[agent])
+    if (!item) return undefined as unknown as Info
+    return isVisible(item, options) ? item : undefined as unknown as Info
+  }
+
+  export async function list(options?: ListOptions) {
     const cfg = await Config.get()
     return pipe(
       await state(),
       values(),
+      (items) => items.filter((item) => isVisible(item, options)),
       sortBy([(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"]),
     )
   }
@@ -266,12 +455,15 @@ export namespace Agent {
     if (cfg.default_agent) {
       const agent = agents[cfg.default_agent]
       if (!agent) throw new Error(`default agent "${cfg.default_agent}" not found`)
+      if (isPlatformAgent(agent)) throw new Error(`default agent "${cfg.default_agent}" is a platform agent`)
       if (agent.mode === "subagent") throw new Error(`default agent "${cfg.default_agent}" is a subagent`)
       if (agent.hidden === true) throw new Error(`default agent "${cfg.default_agent}" is hidden`)
       return agent.name
     }
 
-    const primaryVisible = Object.values(agents).find((a) => a.mode !== "subagent" && a.hidden !== true)
+    const primaryVisible = Object.values(agents).find(
+      (a) => a.mode !== "subagent" && a.hidden !== true && !isPlatformAgent(a),
+    )
     if (!primaryVisible) throw new Error("no primary visible agent found")
     return primaryVisible.name
   }
