@@ -210,8 +210,10 @@ describe('PlatformAdapterManager', () => {
 
   it('skips built-in GitLab when config disables it', () => {
     registerBuiltinPlatformAdapters({
-      gitlab: {
-        enabled: false,
+      config: {
+        gitlab: {
+          enabled: false,
+        },
       },
     })
 

@@ -35,6 +35,8 @@ const jsonErrors = reactive<Record<string, string>>({})
 const configFields = computed(() => {
   return props.selectedPlatform?.config?.sections.flatMap((section) => section.fields) ?? []
 })
+const operationLocked = computed(() => props.saving || Boolean(props.actionRunning))
+const healthRefreshing = computed(() => props.actionRunning === 'health')
 
 watch(
   () => props.selectedPlatform,
@@ -153,8 +155,16 @@ function textValue(key: string) {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : ''
 }
 
-function setTextValue(key: string, event: Event) {
-  formValues[key] = (event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value
+function setTextValue(field: PlatformConfigField, event: Event) {
+  formValues[field.key] = (event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value
+  if (isSecretField(field)) {
+    secretClears[field.key] = false
+  }
+}
+
+function clearSecretField(field: PlatformConfigField) {
+  secretClears[field.key] = true
+  formValues[field.key] = ''
 }
 
 function parseField(field: PlatformConfigField): { include: boolean; value?: unknown; error?: string } {
@@ -286,9 +296,9 @@ function runAction(action: PlatformActionDescriptor) {
                 {{ selectedPlatform.packageName }}{{ selectedPlatform.version ? ` · ${selectedPlatform.version}` : '' }}
               </p>
             </div>
-            <button class="btn btn-ghost btn-sm" :disabled="actionRunning === 'health'" @click="refreshStatus">
+            <button class="btn btn-ghost btn-sm" :disabled="operationLocked" @click="refreshStatus">
               <RefreshCw :size="14" />
-              <span>{{ actionRunning === 'health' ? '刷新中' : '刷新状态' }}</span>
+              <span>{{ healthRefreshing ? '刷新中' : '刷新状态' }}</span>
             </button>
           </div>
 
@@ -345,7 +355,7 @@ function runAction(action: PlatformActionDescriptor) {
                   v-if="field.type === 'select'"
                   :value="textValue(field.key)"
                   class="input platform-input"
-                  @change="setTextValue(field.key, $event)"
+                  @change="setTextValue(field, $event)"
                 >
                   <option v-for="option in field.options || []" :key="option" :value="option">{{ option }}</option>
                 </select>
@@ -360,7 +370,7 @@ function runAction(action: PlatformActionDescriptor) {
                   :value="textValue(field.key)"
                   class="input platform-textarea"
                   :placeholder="field.type === 'string-list' ? '每行一个值' : '{}'"
-                  @input="setTextValue(field.key, $event)"
+                  @input="setTextValue(field, $event)"
                 ></textarea>
 
                 <input
@@ -369,12 +379,12 @@ function runAction(action: PlatformActionDescriptor) {
                   class="input platform-input"
                   :type="fieldInputType(field)"
                   :placeholder="isSecretField(field) ? secretStatus(field) || '输入新值' : ''"
-                  @input="setTextValue(field.key, $event)"
+                  @input="setTextValue(field, $event)"
                 />
 
                 <div v-if="isSecretField(field)" class="platform-secret-row">
                   <span class="text-muted text-sm">{{ secretStatus(field) }}</span>
-                  <button type="button" class="btn btn-ghost btn-sm" @click="secretClears[field.key] = true">
+                  <button type="button" class="btn btn-ghost btn-sm" @click="clearSecretField(field)">
                     <Trash2 :size="13" />
                     <span>清除</span>
                   </button>
@@ -384,7 +394,7 @@ function runAction(action: PlatformActionDescriptor) {
             </div>
 
             <div class="platform-actions-row">
-              <button class="btn btn-primary btn-sm" type="submit" :disabled="saving">
+              <button class="btn btn-primary btn-sm" type="submit" :disabled="operationLocked">
                 <Save :size="14" />
                 <span>{{ saving ? '保存中' : '保存配置' }}</span>
               </button>
@@ -402,7 +412,7 @@ function runAction(action: PlatformActionDescriptor) {
                 <button
                   class="btn btn-secondary btn-sm"
                   :class="{ danger: action.danger }"
-                  :disabled="Boolean(actionRunning)"
+                  :disabled="operationLocked"
                   @click="runAction(action)"
                 >
                   <Play :size="13" />

@@ -14,16 +14,7 @@ export type BuiltinPlatformManagerOptions = {
   env?: Record<string, string | undefined>
 }
 
-function normalizeOptions(input?: PlatformManagerConfig | BuiltinPlatformManagerOptions): BuiltinPlatformManagerOptions {
-  if (!input) return {}
-  if ('config' in input || 'secrets' in input || 'env' in input) {
-    return input as BuiltinPlatformManagerOptions
-  }
-  return { config: input as PlatformManagerConfig }
-}
-
-export function getBuiltinPlatformManager(input?: PlatformManagerConfig | BuiltinPlatformManagerOptions) {
-  const options = normalizeOptions(input)
+export function getBuiltinPlatformManager(options: BuiltinPlatformManagerOptions = {}) {
   if (!builtinPlatformManager) {
     builtinPlatformManager = new PlatformAdapterManager({
       contributions: builtinPlatformContributions,
@@ -49,8 +40,8 @@ export function getBuiltinPlatformManager(input?: PlatformManagerConfig | Builti
   return builtinPlatformManager
 }
 
-export function registerBuiltinPlatformAdapters(input?: PlatformManagerConfig | BuiltinPlatformManagerOptions) {
-  return getBuiltinPlatformManager(input).registerRuntimeAdapters()
+export function registerBuiltinPlatformAdapters(options: BuiltinPlatformManagerOptions = {}) {
+  return getBuiltinPlatformManager(options).registerRuntimeAdapters()
 }
 
 export function unregisterBuiltinPlatformAdapters() {
