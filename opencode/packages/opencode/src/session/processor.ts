@@ -301,7 +301,7 @@ export namespace SessionProcessor {
                     ) {
                       const doomLoopCount = incrementDoomLoopCount(input.sessionID)
                       const config = await Config.get()
-                      const agent = await Agent.get(input.assistantMessage.agent)
+                      const agent = await Agent.mustGet(input.assistantMessage.agent)
 
                       // In autonomous mode with allowDoomLoop, handle doom loops progressively
                       if (config.autonomous?.enabled !== false && config.autonomous?.allowDoomLoop !== false) {

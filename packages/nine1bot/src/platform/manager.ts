@@ -578,7 +578,7 @@ export class PlatformAdapterManager {
         namespace: source.namespace,
         visibility: source.visibility,
         status: registeredAgents.has(source.id) ? 'registered' : status,
-        error: status === 'error' ? record.error : undefined,
+        error: runtimeSourceError(record, source.id, status),
       })),
       skills: (sources.skills ?? []).map((source) => ({
         id: source.id,
@@ -586,7 +586,7 @@ export class PlatformAdapterManager {
         namespace: source.namespace,
         visibility: source.visibility,
         status: registeredSkills.has(source.id) ? 'registered' : status,
-        error: status === 'error' ? record.error : undefined,
+        error: runtimeSourceError(record, source.id, status),
       })),
     }
   }
@@ -791,7 +791,17 @@ function lifecycleStatusFromRuntime(status: PlatformRuntimeStatus['status']): Pl
 function runtimeSourceStatus(record: PlatformManagerRecord): PlatformRuntimeSourceSummary['status'] {
   if (!record.enabled) return 'disabled'
   if (record.lifecycleStatus === 'error') return 'error'
-  return 'disabled'
+  if (!record.registered) return 'disabled'
+  return 'error'
+}
+
+function runtimeSourceError(
+  record: PlatformManagerRecord,
+  sourceID: string,
+  status: PlatformRuntimeSourceSummary['status'],
+): string | undefined {
+  if (status !== 'error') return undefined
+  return record.error ?? `Runtime source "${sourceID}" was declared but not registered.`
 }
 
 function secretFields(config?: PlatformConfigDescriptor): PlatformConfigField[] {

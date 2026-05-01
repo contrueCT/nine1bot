@@ -188,6 +188,84 @@ test("platform agent source unregister invalidates agent lookup cache", async ()
   })
 })
 
+test("platform agent source normalizes frontmatter names", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      const agentsDir = path.join(dir, "agents")
+      await Bun.write(
+        path.join(agentsDir, "trimmed.agent.md"),
+        `---
+name: " gitlab.trimmed "
+description: Trimmed GitLab agent.
+mode: primary
+permission:
+  read: allow
+---
+
+You are a trimmed platform agent.
+`,
+      )
+      return { agentsDir }
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      registerAgentSource({
+        id: "gitlab-agents",
+        directory: tmp.extra.agentsDir,
+        visibility: "declared-only",
+      })
+
+      expect(await Agent.get("gitlab.trimmed", { includeDeclaredOnly: true })).toMatchObject({
+        name: "gitlab.trimmed",
+      })
+      expect(await Agent.get(" gitlab.trimmed ", { includeDeclaredOnly: true })).toBeUndefined()
+    },
+  })
+})
+
+test("platform agent cache is cleared when the current instance is disposed", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      const agentsDir = path.join(dir, "agents")
+      await writeAgent(agentsDir, "review.agent.md", {
+        name: "gitlab.review",
+        description: "First description.",
+      })
+      return { agentsDir }
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      registerAgentSource({
+        id: "gitlab-agents",
+        directory: tmp.extra.agentsDir,
+        visibility: "declared-only",
+      })
+
+      expect(await Agent.get("gitlab.review", { includeDeclaredOnly: true })).toMatchObject({
+        description: "First description.",
+      })
+
+      await writeAgent(tmp.extra.agentsDir, "review.agent.md", {
+        name: "gitlab.review",
+        description: "Second description.",
+      })
+      await Instance.dispose()
+
+      expect(await Agent.get("gitlab.review", { includeDeclaredOnly: true })).toMatchObject({
+        description: "Second description.",
+      })
+    },
+  })
+})
+
 test("session choice can freeze a declared-only platform agent into the profile", async () => {
   await using tmp = await tmpdir({
     git: true,

@@ -266,6 +266,33 @@ describe('PlatformAdapterManager', () => {
     })
   })
 
+  it('reports enabled registered source drift as error instead of disabled', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        sources: runtimeSources(),
+      })],
+    })
+
+    manager.registerRuntimeAdapters()
+    RuntimeSourceRegistry.unregisterOwner('demo')
+
+    await expect(manager.getDetail('demo')).resolves.toMatchObject({
+      runtimeSources: {
+        agents: [{
+          id: 'demo-agents',
+          status: 'error',
+          error: 'Runtime source "demo-agents" was declared but not registered.',
+        }],
+        skills: [{
+          id: 'demo-skills',
+          status: 'error',
+          error: 'Runtime source "demo-skills" was declared but not registered.',
+        }],
+      },
+    })
+  })
+
   it('does not register runtime sources for disabled platforms', async () => {
     const manager = new PlatformAdapterManager({
       contributions: [contribution('demo', {

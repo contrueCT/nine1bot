@@ -697,7 +697,7 @@ export namespace SessionPrompt {
           { args: taskArgs },
         )
         let executionError: Error | undefined
-        const taskAgent = await Agent.get(task.agent)
+        const taskAgent = await Agent.mustGet(task.agent)
         const taskCtx: Tool.Context = {
           agent: task.agent,
           messageID: assistantMessage.id,
@@ -867,7 +867,7 @@ export namespace SessionPrompt {
       const agent = await RuntimeTiming.measure(
         timing,
         "agent.resolve",
-        () => Agent.get(lastUser.agent, { includeDeclaredOnly: true, includeRecommendable: true }),
+        () => Agent.mustGet(lastUser.agent, { includeDeclaredOnly: true, includeRecommendable: true }),
         {
           step,
           agent: lastUser.agent,
@@ -1311,7 +1311,7 @@ export namespace SessionPrompt {
   }
 
   async function createUserMessage(input: PromptInput, session: Session.Info) {
-    const agent = await Agent.get(input.agent ?? (await Agent.defaultAgent()), {
+    const agent = await Agent.mustGet(input.agent ?? (await Agent.defaultAgent()), {
       includeDeclaredOnly: true,
       includeRecommendable: true,
     })
@@ -1721,7 +1721,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     if (session.revert) {
       await SessionRevert.cleanup(session)
     }
-    const agent = await Agent.get(input.agent, { includeDeclaredOnly: true, includeRecommendable: true })
+    const agent = await Agent.mustGet(input.agent, { includeDeclaredOnly: true, includeRecommendable: true })
     const model = input.model ?? agent.model ?? (await lastModel(input.sessionID))
     const userMsg: MessageV2.User = {
       id: Identifier.ascending("message"),

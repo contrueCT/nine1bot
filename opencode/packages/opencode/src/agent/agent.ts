@@ -24,6 +24,7 @@ import { Filesystem } from "@/util/filesystem"
 import { Log } from "@/util/log"
 import { BusEvent } from "@/bus/bus-event"
 import { NamedError } from "@opencode-ai/util/error"
+import { GlobalBus } from "@/bus/global"
 
 export namespace Agent {
   const log = Log.create({ service: "agent" })
@@ -102,6 +103,12 @@ export namespace Agent {
   const PLATFORM_AGENT_GLOB = new Bun.Glob("**/*.agent.md")
   let cachedAgents: Record<string, Info> | undefined
   let cachedAgentKey: string | undefined
+
+  GlobalBus.on("event", (event) => {
+    if (event.payload?.type !== "server.instance.disposed") return
+    cachedAgents = undefined
+    cachedAgentKey = undefined
+  })
 
   async function loadAgents(): Promise<Record<string, Info>> {
     const cfg = await Config.get()
@@ -334,8 +341,8 @@ export namespace Agent {
           ? md.data.name.trim()
           : path.basename(match, ".agent.md")
         const config = {
-          name,
           ...md.data,
+          name,
           prompt: md.content.trim(),
         }
         const parsed = Config.Agent.safeParse(config)
@@ -432,10 +439,16 @@ export namespace Agent {
     return agent.source?.owner.kind === "platform"
   }
 
-  export async function get(agent: string, options?: ListOptions): Promise<Info> {
+  export async function get(agent: string, options?: ListOptions): Promise<Info | undefined> {
     const item = await state().then((x) => x[agent])
-    if (!item) return undefined as unknown as Info
-    return isVisible(item, options) ? item : undefined as unknown as Info
+    if (!item) return undefined
+    return isVisible(item, options) ? item : undefined
+  }
+
+  export async function mustGet(agent: string, options?: ListOptions): Promise<Info> {
+    const item = await get(agent, options)
+    if (!item) throw new Error(`Agent not found: ${agent}`)
+    return item
   }
 
   export async function list(options?: ListOptions) {
