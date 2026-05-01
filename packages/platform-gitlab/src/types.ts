@@ -1,15 +1,12 @@
+import type {
+  PlatformContextBlock as ProtocolPlatformContextBlock,
+  PlatformPagePayload,
+  PlatformResourceContribution as ProtocolPlatformResourceContribution,
+} from '@nine1bot/platform-protocol'
+
 export type KnownGitLabPageType = 'gitlab-repo' | 'gitlab-file' | 'gitlab-mr' | 'gitlab-issue'
 
-export interface PageContextPayload {
-  platform: string
-  url?: string
-  title?: string
-  pageType?: string
-  objectKey?: string
-  selection?: string
-  visibleSummary?: string
-  raw?: Record<string, unknown>
-}
+export type PageContextPayload = PlatformPagePayload
 
 export interface GitLabUrlInfo {
   host: string
@@ -23,33 +20,6 @@ export interface GitLabUrlInfo {
   route: 'repo' | 'blob' | 'tree' | 'merge_request' | 'issue'
 }
 
-export type PlatformContextBlock = {
-  id: string
-  layer: 'platform' | 'page'
-  source: string
-  enabled: boolean
-  priority: number
-  lifecycle: 'session' | 'turn'
-  visibility: 'system-required' | 'developer-toggle'
-  mergeKey?: string
-  observedAt?: number
-  content: string
-}
+export type PlatformContextBlock = ProtocolPlatformContextBlock
 
-export type PlatformResourceContribution = {
-  builtinTools: {
-    enabledGroups?: string[]
-    enabledTools?: string[]
-  }
-  mcp: {
-    servers: string[]
-    tools?: Record<string, string[]>
-    lifecycle: 'session'
-    mergeMode: 'additive-only'
-  }
-  skills: {
-    skills: string[]
-    lifecycle: 'session'
-    mergeMode: 'additive-only'
-  }
-}
+export type PlatformResourceContribution = ProtocolPlatformResourceContribution

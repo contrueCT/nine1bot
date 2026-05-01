@@ -27,6 +27,17 @@ export namespace SessionProcessor {
   // Session-level doom loop counter (persists across processor instances)
   const sessionDoomLoopCounts: Map<string, number> = new Map()
 
+  function assistantErrorMessage(error: MessageV2.Assistant["error"] | undefined) {
+    if (!error) return undefined
+    const directMessage = "message" in error ? error.message : undefined
+    if (typeof directMessage === "string") return directMessage
+    const data = "data" in error ? error.data : undefined
+    if (data && typeof data === "object" && "message" in data && typeof data.message === "string") {
+      return data.message
+    }
+    return undefined
+  }
+
   export function getDoomLoopCount(sessionID: string): number {
     return sessionDoomLoopCounts.get(sessionID) || 0
   }
@@ -108,7 +119,7 @@ export namespace SessionProcessor {
         providerID: input.model.providerID,
         modelID: input.model.id,
         errorType: error?.name ?? RuntimeMetricsEvents.normalizeErrorType(error),
-        errorMessage: error?.message,
+        errorMessage: assistantErrorMessage(error),
         durationMs: Math.max(0, failedAt - input.assistantMessage.time.created),
         failedAt,
       })
@@ -583,6 +594,7 @@ Possible questions to ask:
           const p = await MessageV2.parts(input.assistantMessage.id)
           for (const part of p) {
             if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
+              const start = "time" in part.state ? part.state.time.start : Date.now()
               const updated = (await Session.updatePart({
                 ...part,
                 state: {
@@ -590,7 +602,7 @@ Possible questions to ask:
                   status: "error",
                   error: "Tool execution aborted",
                   time: {
-                    start: part.state.time.start ?? Date.now(),
+                    start,
                     end: Date.now(),
                   },
                 },

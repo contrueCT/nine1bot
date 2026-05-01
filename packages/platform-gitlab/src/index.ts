@@ -7,6 +7,8 @@ export {
 } from './browser'
 export {
   createGitLabPlatformAdapter,
+  gitlabPlatformContribution,
+  gitlabPlatformDescriptor,
   normalizeGitLabPagePayload,
 } from './runtime'
 export type { GitLabPlatformAdapter } from './runtime'

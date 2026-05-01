@@ -5,9 +5,10 @@ import {
   normalizeGitLabPagePayload,
   parseGitLabUrl,
 } from './shared'
+import type { PlatformAdapterContribution, PlatformDescriptor, PlatformRuntimeAdapter } from '@nine1bot/platform-protocol'
 import type { PageContextPayload, PlatformContextBlock, PlatformResourceContribution } from './types'
 
-export type GitLabPlatformAdapter = {
+export type GitLabPlatformAdapter = PlatformRuntimeAdapter & {
   id: 'gitlab'
   matchPage: (page: PageContextPayload) => boolean
   normalizePage: (page: PageContextPayload) => PageContextPayload | undefined
@@ -16,6 +17,68 @@ export type GitLabPlatformAdapter = {
   templateContextBlocks: (input: { templateIds: string[]; page?: PageContextPayload }) => PlatformContextBlock[]
   resourceContributions: (input: { templateIds: string[] }) => PlatformResourceContribution | undefined
 }
+
+export const gitlabPlatformDescriptor = {
+  id: 'gitlab',
+  name: 'GitLab',
+  packageName: '@nine1bot/platform-gitlab',
+  version: '0.1.0',
+  defaultEnabled: true,
+  capabilities: {
+    pageContext: true,
+    templates: ['browser-gitlab', 'gitlab-repo', 'gitlab-file', 'gitlab-mr', 'gitlab-issue'],
+    resources: true,
+    browserExtension: true,
+    auth: 'token',
+    settingsPage: true,
+    statusPage: true,
+  },
+  config: {
+    sections: [
+      {
+        id: 'hosts',
+        title: 'Access scope',
+        fields: [
+          {
+            key: 'allowedHosts',
+            type: 'string-list',
+            label: 'Allowed GitLab hosts',
+            description: 'GitLab hosts that can contribute page context.',
+          },
+          {
+            key: 'apiEnrichment',
+            type: 'select',
+            label: 'API enrichment',
+            description: 'Optionally enrich browser page context with GitLab API data.',
+            options: ['auto', 'disabled'],
+          },
+        ],
+      },
+    ],
+  },
+  detailPage: {
+    sections: [
+      { id: 'status', type: 'status-cards', title: 'Status' },
+      { id: 'settings', type: 'settings-form', title: 'Settings' },
+      { id: 'actions', type: 'action-list', title: 'Actions' },
+      { id: 'recent-events', type: 'event-list', title: 'Recent events' },
+    ],
+  },
+  actions: [
+    {
+      id: 'connection.test',
+      label: 'Test connection',
+      kind: 'button',
+    },
+  ],
+} satisfies PlatformDescriptor
+
+export const gitlabPlatformContribution = {
+  descriptor: gitlabPlatformDescriptor,
+  runtime: {
+    createAdapter: createGitLabPlatformAdapter,
+  },
+} satisfies PlatformAdapterContribution
 
 export function createGitLabPlatformAdapter(): GitLabPlatformAdapter {
   return {

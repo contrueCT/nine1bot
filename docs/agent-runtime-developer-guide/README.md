@@ -18,7 +18,8 @@
 7. [Context Pipeline 实现设计](./07-context-pipeline-implementation-design.md)
 8. [Resource Resolver 实现设计](./08-resource-resolver-implementation-design.md)
 9. [Platform Adapter 边界与 GitLab 样板](./09-platform-adapter-boundary.md)
-10. [Controller API 与 Runtime Event 协议](./11-controller-api-runtime-events.md)
+10. [Platform Adapter Manager 与可插拔平台适配](./10-platform-adapter-manager.md)
+11. [Controller API 与 Runtime Event 协议](./11-controller-api-runtime-events.md)
 
 ## 核心原则
 
@@ -29,6 +30,7 @@
 - tools / MCP / skills 通过 resource resolver 解析，profileSnapshot 只声明资源身份，当前配置作为 live gate 控制实际可用性。
 - 权限、交互、文件、图片、预览、资源失败等能力通过 runtime event envelope 表达。
 - 第三方平台深度适配应放在 `packages/platform-*`，runtime core 只保留通用 registry / protocol / pipeline，不直接写 GitLab、Jira、GitHub 等平台语义。
+- 平台适配的启用、禁用、状态展示和平台自有配置页由 Nine1Bot 产品层 Platform Adapter Manager 负责，Web 配置页应提供“多平台适配 > 具体平台”的可扩展入口。
 
 ## 不包含的内容
 
