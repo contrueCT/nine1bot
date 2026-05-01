@@ -17,9 +17,8 @@
 6. [运行时稳定性、能力协商与资源漂移](./06-runtime-stability-capability-drift.md)
 7. [Context Pipeline 实现设计](./07-context-pipeline-implementation-design.md)
 8. [Resource Resolver 实现设计](./08-resource-resolver-implementation-design.md)
-9. [Platform Adapter 边界与 GitLab 样板](./09-platform-adapter-boundary.md)
-10. [Platform Adapter Manager 与可插拔平台适配](./10-platform-adapter-manager.md)
-11. [Controller API 与 Runtime Event 协议](./11-controller-api-runtime-events.md)
+9. [多平台适配层开发参考](./09-platform-adapter-development-guide.md)
+10. [Controller API 与 Runtime Event 协议](./11-controller-api-runtime-events.md)
 
 ## 核心原则
 
