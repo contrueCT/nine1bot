@@ -37,6 +37,7 @@ export namespace ControllerTemplateResolver {
     requestedTemplateIds: string[]
     inferredTemplateIds: string[]
     templates: string[]
+    skippedPlatforms: RuntimePlatformAdapterRegistry.PlatformSkipAudit[]
     resourceMergeMode: "additive-only"
     contextBlocks: Array<{ id: string; source: string; enabled: boolean }>
     resources: {
@@ -87,11 +88,17 @@ export namespace ControllerTemplateResolver {
   export async function resolve(input: Input = {}): Promise<Resolved> {
     const requestedTemplateIds = normalizeTemplateIds(input.entry?.templateIds ?? [])
     const inferredTemplateIds = inferTemplateIds(input)
-    const templateIds = normalizeTemplateIds([
+    const rawTemplateIds = normalizeTemplateIds([
       "default-user-template",
       ...(requestedTemplateIds.length > 0 ? requestedTemplateIds : inferredTemplateIds),
       ...inferredTemplateIds,
     ])
+    const page = normalizePage(input.page)
+    const skippedPlatforms = RuntimePlatformAdapterRegistry.disabledAudits({
+      page,
+      templateIds: rawTemplateIds,
+    })
+    const templateIds = RuntimePlatformAdapterRegistry.activeTemplateIds(rawTemplateIds)
     const agent = await resolveAgent(input.sessionChoice?.agent)
     const defaultModel = agent.model ?? (await Provider.defaultModel())
     const resources = (await RuntimeFeatureFlags.resourceResolverEnabled())
@@ -109,6 +116,7 @@ export namespace ControllerTemplateResolver {
       requestedTemplateIds,
       inferredTemplateIds,
       templates: templateIds,
+      skippedPlatforms,
       resourceMergeMode: "additive-only",
       contextBlocks: contextBlocks.map((block) => ({
         id: block.id,

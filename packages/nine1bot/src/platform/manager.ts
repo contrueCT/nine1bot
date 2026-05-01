@@ -215,7 +215,18 @@ export class PlatformAdapterManager {
   registerRuntimeAdapters(): PlatformManagerRecord[] {
     for (const contribution of this.contributions.values()) {
       const record = this.records.get(contribution.descriptor.id)
-      if (!record || !record.enabled || record.registered) continue
+      if (!record) continue
+      if (!record.enabled) {
+        RuntimePlatformAdapterRegistry.markDisabled({
+          id: record.id,
+          templateIds: record.descriptor.capabilities.templates,
+          reason: 'platform-disabled-by-current-config',
+          message: `Platform "${record.descriptor.name}" is disabled by the current configuration.`,
+        })
+        continue
+      }
+      if (record.registered) continue
+      RuntimePlatformAdapterRegistry.unmarkDisabled(record.id)
       if (!contribution.runtime?.createAdapter) {
         this.markHealthy(record.id)
         continue
@@ -262,6 +273,7 @@ export class PlatformAdapterManager {
       if (record.registered) {
         RuntimePlatformAdapterRegistry.unregister(record.id)
       }
+      RuntimePlatformAdapterRegistry.unmarkDisabled(record.id)
       const nextStatus: PlatformRuntimeStatus = !record.installed
         ? { status: 'missing', message: `Platform package is not installed: ${record.id}` }
         : record.enabled

@@ -145,4 +145,126 @@ describe("platform page context registry", () => {
     })
     RuntimePlatformAdapterRegistry.clearForTesting()
   })
+
+  test("falls back and audits when page platform is disabled by current config", async () => {
+    RuntimePlatformAdapterRegistry.clearForTesting()
+    RuntimePlatformAdapterRegistry.markDisabled({
+      id: "gitlab",
+      templateIds: ["browser-gitlab", "gitlab-mr"],
+    })
+
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const sessionID = `test_gitlab_disabled_${Date.now()}`
+        const projectID = `project_${sessionID}`
+        await RuntimeContextEvents.removeAll({ sessionID, projectID })
+
+        const page = {
+          platform: "gitlab",
+          url: "https://gitlab.com/nine1/nine1bot/-/merge_requests/42",
+          title: "Improve runtime",
+          pageType: "gitlab-mr",
+          objectKey: "gitlab.com:nine1/nine1bot:mr:42",
+          visibleSummary: "MR overview",
+        }
+        const prepared = await RuntimeContextEvents.preparePageEvent({ sessionID, projectID, page })
+
+        expect(prepared?.event?.source).toBe("page-context.gitlab.platform-disabled-by-current-config")
+        expect(prepared?.event?.summary).toContain("platform-disabled-by-current-config")
+        expect(prepared?.event?.audit).toEqual([
+          expect.objectContaining({
+            platform: "gitlab",
+            reason: "platform-disabled-by-current-config",
+          }),
+        ])
+        expect(prepared?.event?.blocks[0]).toMatchObject({
+          id: "platform:gitlab",
+          source: "page-context.gitlab.platform-disabled-by-current-config",
+        })
+        expect(String(prepared?.event?.blocks[0]?.content)).toContain("Platform adapter skipped")
+
+        await RuntimeContextEvents.commitPageEvent({ sessionID, projectID, prepared: prepared! })
+        const events = await RuntimeContextEvents.list({ sessionID, projectID })
+        expect(events[0]?.audit?.[0]?.reason).toBe("platform-disabled-by-current-config")
+        const blocks = RuntimeContextEvents.blocksFromEvents(events)
+        expect(blocks[0]?.source).toBe("page-context.gitlab.platform-disabled-by-current-config")
+        expect(String(blocks[0]?.content)).toContain("Platform adapter skipped")
+
+        await RuntimeContextEvents.removeAll({ sessionID, projectID })
+      },
+    })
+
+    RuntimePlatformAdapterRegistry.clearForTesting()
+  })
+
+  test("keeps old page history when a platform is disabled later", async () => {
+    RuntimePlatformAdapterRegistry.clearForTesting()
+    RuntimePlatformAdapterRegistry.register({
+      id: "gitlab",
+      matchPage: (page) => page.platform === "gitlab",
+      normalizePage: (page) => page,
+      blocksFromPage: (page, observedAt) => [
+        {
+          id: "platform:gitlab",
+          layer: "platform",
+          source: "page-context.gitlab",
+          content: `GitLab page: ${page.title}`,
+          lifecycle: "turn",
+          visibility: "developer-toggle",
+          enabled: true,
+          priority: 65,
+          mergeKey: page.objectKey,
+          observedAt,
+        },
+      ],
+    })
+
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const sessionID = `test_gitlab_history_${Date.now()}`
+        const projectID = `project_${sessionID}`
+        await RuntimeContextEvents.removeAll({ sessionID, projectID })
+
+        const first = await RuntimeContextEvents.preparePageEvent({
+          sessionID,
+          projectID,
+          page: {
+            platform: "gitlab",
+            pageType: "gitlab-repo",
+            objectKey: "gitlab.com:nine1/nine1bot:repo",
+            title: "nine1bot",
+          },
+        })
+        await RuntimeContextEvents.commitPageEvent({ sessionID, projectID, prepared: first! })
+
+        RuntimePlatformAdapterRegistry.markDisabled({
+          id: "gitlab",
+          templateIds: ["browser-gitlab", "gitlab-mr"],
+        })
+        const second = await RuntimeContextEvents.preparePageEvent({
+          sessionID,
+          projectID,
+          page: {
+            platform: "gitlab",
+            pageType: "gitlab-mr",
+            objectKey: "gitlab.com:nine1/nine1bot:mr:42",
+            title: "Improve runtime",
+          },
+        })
+        await RuntimeContextEvents.commitPageEvent({ sessionID, projectID, prepared: second! })
+
+        const events = await RuntimeContextEvents.list({ sessionID, projectID })
+        expect(events.map((event) => event.source)).toEqual([
+          "page-context.gitlab",
+          "page-context.gitlab.platform-disabled-by-current-config",
+        ])
+
+        await RuntimeContextEvents.removeAll({ sessionID, projectID })
+      },
+    })
+
+    RuntimePlatformAdapterRegistry.clearForTesting()
+  })
 })

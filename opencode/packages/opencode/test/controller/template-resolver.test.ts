@@ -175,4 +175,45 @@ describe("controller template resolver", () => {
       },
     })
   })
+
+  test("filters disabled platform templates and resource contributions with audit", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        RuntimePlatformAdapterRegistry.markDisabled({
+          id: "gitlab",
+          templateIds: ["browser-gitlab", "gitlab-mr"],
+        })
+
+        const resolved = await ControllerTemplateResolver.resolve({
+          entry: {
+            source: "browser-extension",
+            platform: "gitlab",
+            mode: "browser-sidepanel",
+            templateIds: ["default-user-template", "browser-generic", "browser-gitlab", "gitlab-mr"],
+          },
+          page: {
+            platform: "gitlab",
+            url: "https://gitlab.com/nine1/nine1bot/-/merge_requests/42",
+            title: "Improve runtime",
+          },
+        })
+
+        expect(resolved.templateIds).toEqual(["default-user-template", "browser-generic"])
+        expect(resolved.contextPreview.map((block) => block.source)).not.toContain("template.browser-gitlab")
+        expect(resolved.resourcesPreview.builtinGroups).not.toContain("gitlab-context")
+        expect(resolved.audit.skippedPlatforms).toEqual([
+          expect.objectContaining({
+            platform: "gitlab",
+            reason: "platform-disabled-by-current-config",
+            matchedTemplateIds: ["browser-gitlab", "gitlab-mr"],
+          }),
+        ])
+      },
+    })
+  })
 })

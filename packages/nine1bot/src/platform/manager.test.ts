@@ -16,6 +16,7 @@ afterEach(resetPlatformState)
 function contribution(id: string, options: {
   defaultEnabled?: boolean
   throws?: boolean
+  templates?: string[]
 } = {}): PlatformAdapterContribution {
   return {
     descriptor: {
@@ -26,6 +27,7 @@ function contribution(id: string, options: {
       defaultEnabled: options.defaultEnabled,
       capabilities: {
         pageContext: true,
+        templates: options.templates,
       },
     },
     runtime: {
@@ -81,7 +83,7 @@ describe('PlatformAdapterManager', () => {
 
   it('skips explicitly disabled contributions', () => {
     const manager = new PlatformAdapterManager({
-      contributions: [contribution('demo', { defaultEnabled: true })],
+      contributions: [contribution('demo', { defaultEnabled: true, templates: ['browser-demo'] })],
       config: {
         demo: {
           enabled: false,
@@ -92,6 +94,14 @@ describe('PlatformAdapterManager', () => {
     manager.registerRuntimeAdapters()
 
     expect(RuntimePlatformAdapterRegistry.list()).toEqual([])
+    expect(RuntimePlatformAdapterRegistry.listDisabled()).toEqual([
+      expect.objectContaining({
+        id: 'demo',
+        reason: 'platform-disabled-by-current-config',
+        templateIds: ['browser-demo'],
+      }),
+    ])
+    expect(RuntimePlatformAdapterRegistry.activeTemplateIds(['web-chat', 'browser-demo'])).toEqual(['web-chat'])
     expect(manager.get('demo')).toMatchObject({
       enabled: false,
       registered: false,
@@ -273,7 +283,7 @@ describe('PlatformAdapterManager', () => {
 
   it('updates config and re-registers runtime adapters', async () => {
     const manager = new PlatformAdapterManager({
-      contributions: [contribution('demo', { defaultEnabled: true })],
+      contributions: [contribution('demo', { defaultEnabled: true, templates: ['browser-demo'] })],
     })
     manager.registerRuntimeAdapters()
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('demo')
@@ -281,6 +291,7 @@ describe('PlatformAdapterManager', () => {
     await manager.updateConfig('demo', { enabled: false })
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).not.toContain('demo')
+    expect(RuntimePlatformAdapterRegistry.isDisabled('demo')).toBe(true)
     expect(manager.get('demo')).toMatchObject({
       enabled: false,
       registered: false,
@@ -290,6 +301,7 @@ describe('PlatformAdapterManager', () => {
     await manager.updateConfig('demo', { enabled: true })
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('demo')
+    expect(RuntimePlatformAdapterRegistry.isDisabled('demo')).toBe(false)
     expect(manager.get('demo')).toMatchObject({
       enabled: true,
       registered: true,
