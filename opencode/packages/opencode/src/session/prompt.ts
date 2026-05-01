@@ -1310,11 +1310,23 @@ export namespace SessionPrompt {
     return tools
   }
 
+  async function resolveUserMessageAgent(input: PromptInput, session: Session.Info) {
+    const name = input.agent ?? (await Agent.defaultAgent())
+    const frozenAgentName = input.runtimeProfileSnapshot?.agent.name ?? session.runtime?.agent
+    const isFrozenRuntimeAgent = !!input.agent && input.agent === frozenAgentName
+    return Agent.mustGet(
+      name,
+      isFrozenRuntimeAgent
+        ? {
+            includeDeclaredOnly: true,
+            includeRecommendable: true,
+          }
+        : undefined,
+    )
+  }
+
   async function createUserMessage(input: PromptInput, session: Session.Info) {
-    const agent = await Agent.mustGet(input.agent ?? (await Agent.defaultAgent()), {
-      includeDeclaredOnly: true,
-      includeRecommendable: true,
-    })
+    const agent = await resolveUserMessageAgent(input, session)
     const needsSkillHint = input.parts.some(
       (part) => part.type === "file" && uploadedFileTypeMap[part.mime]?.skill,
     )

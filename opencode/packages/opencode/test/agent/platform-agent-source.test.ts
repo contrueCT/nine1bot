@@ -8,6 +8,7 @@ import { ControllerTemplateResolver } from "../../src/runtime/controller/templat
 import { RuntimeSourceRegistry } from "../../src/runtime/source/registry"
 import { SessionProfileCompiler } from "../../src/runtime/session/profile-compiler"
 import { Session } from "../../src/session"
+import { SessionPrompt } from "../../src/session/prompt"
 import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
 
@@ -419,12 +420,106 @@ test("controller compiler fails closed when a profiled platform agent source is 
               sessionID: session.id,
               turnSnapshotId: "turn_platform_agent_unavailable",
               agent: "gitlab.review",
-              reason: "disabled-by-current-config",
+              reason: "missing-source",
             }),
           }),
         ])
       } finally {
         unsubscribe()
+      }
+    },
+  })
+})
+
+test("direct prompt agent override cannot select declared-only platform agents", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      const agentsDir = path.join(dir, "agents")
+      await writeAgent(agentsDir, "review.agent.md", {
+        name: "gitlab.review",
+        description: "GitLab review agent.",
+      })
+      return { agentsDir }
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      registerAgentSource({
+        id: "gitlab-agents",
+        directory: tmp.extra.agentsDir,
+        visibility: "declared-only",
+      })
+      const session = await Session.createNext({
+        directory: tmp.path,
+      })
+
+      try {
+        await expect(SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "gitlab.review",
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        })).rejects.toThrow("Agent not found: gitlab.review")
+
+        expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+      } finally {
+        await Session.remove(session.id)
+      }
+    },
+  })
+})
+
+test("controller prompt can persist the frozen declared-only platform agent", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      const agentsDir = path.join(dir, "agents")
+      await writeAgent(agentsDir, "review.agent.md", {
+        name: "gitlab.review",
+        description: "GitLab review agent.",
+      })
+      return { agentsDir }
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      registerAgentSource({
+        id: "gitlab-agents",
+        directory: tmp.extra.agentsDir,
+        visibility: "declared-only",
+      })
+      const profile = await SessionProfileCompiler.compile({
+        source: "new-session",
+        agentName: "gitlab.review",
+      })
+      const session = await Session.createNext({
+        directory: tmp.path,
+        runtimeProfile: profile,
+      })
+
+      try {
+        const prompt = await ControllerAgentRunCompiler.compilePrompt({
+          session,
+          turnSnapshotId: "turn_platform_agent_prompt",
+          body: {
+            noReply: true,
+            parts: [{ type: "text", text: "hello" }],
+            entry: {
+              source: "browser-extension",
+              platform: "gitlab",
+            },
+          },
+        })
+        const message = await SessionPrompt.prompt(prompt)
+
+        expect(message.info.agent).toBe("gitlab.review")
+      } finally {
+        await Session.remove(session.id)
       }
     },
   })

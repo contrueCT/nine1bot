@@ -177,13 +177,14 @@ export namespace ControllerAgentRunCompiler {
     const agent = await Agent.get(name, { includeDeclaredOnly: true, includeRecommendable: true })
     if (!agent) {
       if (profile?.agent.name ?? session.runtime?.agent) {
-        const message = `Agent "${name}" is disabled or missing in the current runtime sources.`
+        const reason = "missing-source" as const
+        const message = `Agent "${name}" is unavailable in the current runtime sources. It may have been removed, failed to load, or belongs to a disabled platform.`
         await Bus.publish(Agent.Unavailable, {
           sessionID: session.id,
           turnSnapshotId,
           agent: name,
           status: "unavailable",
-          reason: "disabled-by-current-config",
+          reason,
           message,
           recoverable: true,
           action: {
@@ -195,7 +196,7 @@ export namespace ControllerAgentRunCompiler {
         })
         throw new Agent.UnavailableError({
           agent: name,
-          reason: "disabled-by-current-config",
+          reason,
           message,
         })
       }
