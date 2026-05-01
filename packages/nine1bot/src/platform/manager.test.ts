@@ -41,6 +41,25 @@ function contribution(id: string, options: {
   }
 }
 
+function memorySecrets() {
+  const values = new Map<string, string>()
+  const access: PlatformSecretAccess = {
+    async get(ref) {
+      return ref.provider === 'nine1bot-local' ? values.get(ref.key) : undefined
+    },
+    async set(ref, value) {
+      if (ref.provider === 'nine1bot-local') values.set(ref.key, value)
+    },
+    async delete(ref) {
+      if (ref.provider === 'nine1bot-local') values.delete(ref.key)
+    },
+    async has(ref) {
+      return ref.provider === 'nine1bot-local' && values.has(ref.key)
+    },
+  }
+  return { access, values }
+}
+
 describe('PlatformAdapterManager', () => {
   it('registers default-enabled contributions', () => {
     const manager = new PlatformAdapterManager({
@@ -193,5 +212,224 @@ describe('PlatformAdapterManager', () => {
     registerGitLabPlatformAdapter()
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('gitlab')
+  })
+
+  it('returns summaries and redacted details', async () => {
+    const secrets = memorySecrets()
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        descriptor: {
+          ...contribution('demo', { defaultEnabled: true }).descriptor,
+          config: {
+            sections: [{
+              id: 'auth',
+              title: 'Auth',
+              fields: [{
+                key: 'token',
+                label: 'Token',
+                type: 'password',
+                secret: true,
+              }],
+            }],
+          },
+        },
+      }],
+      config: {
+        demo: {
+          settings: {
+            token: {
+              provider: 'nine1bot-local',
+              key: 'platform:demo:default:token',
+            },
+          },
+        },
+      },
+      secrets: secrets.access,
+    })
+    await secrets.access.set({
+      provider: 'nine1bot-local',
+      key: 'platform:demo:default:token',
+    }, 'secret-value')
+    manager.registerRuntimeAdapters()
+
+    expect(manager.listSummaries()[0]).toMatchObject({
+      id: 'demo',
+      enabled: true,
+      registered: true,
+      status: 'available',
+    })
+    await expect(manager.getDetail('demo')).resolves.toMatchObject({
+      id: 'demo',
+      settings: {
+        token: {
+          redacted: true,
+          hasValue: true,
+          provider: 'nine1bot-local',
+        },
+      },
+    })
+  })
+
+  it('updates config and re-registers runtime adapters', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', { defaultEnabled: true })],
+    })
+    manager.registerRuntimeAdapters()
+    expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('demo')
+
+    await manager.updateConfig('demo', { enabled: false })
+
+    expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).not.toContain('demo')
+    expect(manager.get('demo')).toMatchObject({
+      enabled: false,
+      registered: false,
+      lifecycleStatus: 'disabled',
+    })
+
+    await manager.updateConfig('demo', { enabled: true })
+
+    expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('demo')
+    expect(manager.get('demo')).toMatchObject({
+      enabled: true,
+      registered: true,
+      lifecycleStatus: 'healthy',
+    })
+  })
+
+  it('rejects invalid config without changing manager config', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        validateConfig: async () => ({
+          ok: false,
+          message: 'bad config',
+          fieldErrors: {
+            token: 'invalid',
+          },
+        }),
+      }],
+      config: {
+        demo: {
+          enabled: true,
+        },
+      },
+    })
+
+    await expect(manager.updateConfig('demo', {
+      settings: {
+        token: 'bad',
+      },
+    })).rejects.toThrow('bad config')
+    expect(manager.configSnapshot().demo?.settings).toEqual({})
+  })
+
+  it('stores secret config fields as secret refs and redacts detail output', async () => {
+    const secrets = memorySecrets()
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        descriptor: {
+          ...contribution('demo', { defaultEnabled: true }).descriptor,
+          config: {
+            sections: [{
+              id: 'auth',
+              title: 'Auth',
+              fields: [{
+                key: 'token',
+                label: 'Token',
+                type: 'password',
+                secret: true,
+              }],
+            }],
+          },
+        },
+      }],
+      secrets: secrets.access,
+    })
+
+    await manager.updateConfig('demo', {
+      settings: {
+        token: 'secret-value',
+      },
+    })
+
+    expect(manager.configSnapshot().demo?.settings?.token).toEqual({
+      provider: 'nine1bot-local',
+      key: 'platform:demo:default:token',
+    })
+    await expect(secrets.access.get({
+      provider: 'nine1bot-local',
+      key: 'platform:demo:default:token',
+    })).resolves.toBe('secret-value')
+    await expect(manager.getDetail('demo')).resolves.toMatchObject({
+      settings: {
+        token: {
+          redacted: true,
+          hasValue: true,
+        },
+      },
+    })
+  })
+
+  it('guards platform actions by descriptor and confirmation', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        descriptor: {
+          ...contribution('demo', { defaultEnabled: true }).descriptor,
+          actions: [{
+            id: 'danger.reset',
+            label: 'Reset',
+            kind: 'button',
+            danger: true,
+          }],
+        },
+        handleAction: async () => ({
+          status: 'ok',
+          message: 'done',
+        }),
+      }],
+    })
+    manager.registerRuntimeAdapters()
+
+    await expect(manager.executeAction('demo', 'missing')).rejects.toThrow('Platform action not found')
+    await expect(manager.executeAction('demo', 'danger.reset')).rejects.toThrow('requires confirmation')
+    await expect(manager.executeAction('demo', 'danger.reset', { confirm: true })).resolves.toEqual({
+      status: 'ok',
+      message: 'done',
+    })
+  })
+
+  it('turns handler action failures into failed results and error status', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        descriptor: {
+          ...contribution('demo', { defaultEnabled: true }).descriptor,
+          actions: [{
+            id: 'connection.test',
+            label: 'Test',
+            kind: 'button',
+          }],
+        },
+        handleAction: async () => {
+          throw new Error('connection failed')
+        },
+      }],
+    })
+    manager.registerRuntimeAdapters()
+
+    await expect(manager.executeAction('demo', 'connection.test')).resolves.toMatchObject({
+      status: 'failed',
+      message: 'connection failed',
+    })
+    expect(manager.get('demo')).toMatchObject({
+      lifecycleStatus: 'error',
+      runtimeStatus: {
+        status: 'error',
+        message: 'connection failed',
+      },
+    })
   })
 })

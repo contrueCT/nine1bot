@@ -46,6 +46,7 @@ import { PreferencesRoutes } from "./routes/preferences"
 import { AgentTerminalRoutes } from "./routes/agent-terminal"
 import { BrowserRoutes } from "./routes/browser"
 import { Nine1BotAgentRoutes } from "./routes/nine1bot-agent"
+import { Nine1BotPlatformRoutes } from "./routes/nine1bot-platforms"
 import { MetricsRoutes } from "./routes/metrics"
 import { RuntimeMetricsStore } from "@/runtime/metrics/store"
 import { ScheduleRoutes } from "./routes/schedules"
@@ -310,6 +311,7 @@ export namespace Server {
         )
         .use(validator("query", z.object({ directory: z.string().optional() })))
         .route("/nine1bot", Nine1BotAgentRoutes())
+        .route("/nine1bot/platforms", Nine1BotPlatformRoutes())
         .route("/nine1bot/metrics", MetricsRoutes())
         .route("/webhooks", WebhookRoutes())
         .route("/schedules", ScheduleRoutes())

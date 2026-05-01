@@ -647,9 +647,16 @@ Phase 2 接入配置与本地 secret store：
 - 新增 `platform-secrets.json` 本地 secret store，并通过 `PlatformSecretRef` 引用敏感值。
 - 不新增 Platform API、Web 配置页和 action 执行。
 
-后续阶段再暴露产品配置面：
+Phase 3 暴露后端 Platform API 与 action 执行层：
 
 - 增加平台列表、平台详情、平台 action API。
+- API 路径为 `/nine1bot/platforms`，只管理平台适配配置，不修改 Web 配置、MCP、auth、preferences 等外围旧 API。
+- `PATCH /nine1bot/platforms/:id` 只写入 `platforms` 字段，并在保存后重新配置 Platform Manager 和 runtime registry。
+- `POST /nine1bot/platforms/:id/actions/:actionId` 只允许执行 descriptor 中声明过的 action，危险 action 需要显式确认。
+- 平台 secret 字段写入本地 secret store，配置文件只保存 `PlatformSecretRef`，详情 API 只返回 redacted 状态。
+
+后续阶段再暴露 Web 产品配置面：
+
 - Web 配置页增加“多平台适配 > GitLab”，并使用 descriptor 渲染 GitLab 自己的配置/状态内容。
 - 支持更多内置平台详情页。
 - 支持平台自定义组件插槽。
