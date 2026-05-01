@@ -639,9 +639,16 @@ Phase 1 先做内置 Manager 注册链路：
 - 保持 GitLab 默认启用，不新增用户配置 schema。
 - 不新增 Platform API、Web 配置页和 secret store。
 
-后续阶段再暴露产品配置面：
+Phase 2 接入配置与本地 secret store：
 
 - 增加 `platforms.gitlab.enabled` 配置。
+- 将 `platforms` 作为 Nine1Bot-only 字段，不传入 opencode config。
+- 启动时 Platform Manager 使用 `fullConfig.platforms` 决定内置平台是否注册。
+- 新增 `platform-secrets.json` 本地 secret store，并通过 `PlatformSecretRef` 引用敏感值。
+- 不新增 Platform API、Web 配置页和 action 执行。
+
+后续阶段再暴露产品配置面：
+
 - 增加平台列表、平台详情、平台 action API。
 - Web 配置页增加“多平台适配 > GitLab”，并使用 descriptor 渲染 GitLab 自己的配置/状态内容。
 - 支持更多内置平台详情页。

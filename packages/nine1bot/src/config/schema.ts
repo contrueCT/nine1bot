@@ -74,6 +74,14 @@ export const RuntimeConfigSchema = z.object({
   resourceResolver: RuntimeFeatureFlagSchema.default({}),
 })
 
+export const PlatformConfigEntrySchema = z.object({
+  enabled: z.boolean().optional(),
+  features: z.record(z.boolean()).default({}),
+  settings: z.record(z.unknown()).default({}),
+})
+
+export const PlatformsConfigSchema = z.record(PlatformConfigEntrySchema).default({})
+
 export const FeishuConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -228,6 +236,7 @@ export const Nine1BotConfigSchema = z.object({
   skills: SkillsConfigSchema.default({}),
   browser: BrowserConfigSchema.default({}),
   runtime: RuntimeConfigSchema.default({}),
+  platforms: PlatformsConfigSchema.default({}),
   feishu: FeishuConfigSchema.default({}),
 
 
@@ -301,6 +310,8 @@ export type IsolationConfig = z.infer<typeof IsolationConfigSchema>
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>
 export type BrowserConfig = z.infer<typeof BrowserConfigSchema>
 export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>
+export type PlatformConfigEntry = z.infer<typeof PlatformConfigEntrySchema>
+export type PlatformsConfig = z.infer<typeof PlatformsConfigSchema>
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>
 export type CustomProvider = z.infer<typeof CustomProviderSchema>
 export type CustomProviderModel = z.infer<typeof CustomProviderModelSchema>

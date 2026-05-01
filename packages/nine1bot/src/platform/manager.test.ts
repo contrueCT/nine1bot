@@ -1,14 +1,17 @@
-import { afterEach, describe, expect, it } from 'bun:test'
-import type { PlatformAdapterContribution } from '@nine1bot/platform-protocol'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import type { PlatformAdapterContext, PlatformAdapterContribution, PlatformSecretAccess } from '@nine1bot/platform-protocol'
 import { RuntimePlatformAdapterRegistry } from '../../../../opencode/packages/opencode/src/runtime/platform/adapter'
 import { PlatformAdapterManager } from './manager'
 import { registerBuiltinPlatformAdapters, resetBuiltinPlatformManagerForTesting } from './builtin'
 import { registerGitLabPlatformAdapter } from './gitlab'
 
-afterEach(() => {
+function resetPlatformState() {
   resetBuiltinPlatformManagerForTesting()
   RuntimePlatformAdapterRegistry.clearForTesting()
-})
+}
+
+beforeEach(resetPlatformState)
+afterEach(resetPlatformState)
 
 function contribution(id: string, options: {
   defaultEnabled?: boolean
@@ -118,10 +121,72 @@ describe('PlatformAdapterManager', () => {
     })
   })
 
+  it('passes configured settings, features, and secrets into adapter context', async () => {
+    let capturedContext: PlatformAdapterContext | undefined
+    const secrets: PlatformSecretAccess = {
+      async get() {
+        return 'secret-value'
+      },
+      async set() {},
+      async delete() {},
+      async has() {
+        return true
+      },
+    }
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        runtime: {
+          createAdapter(context) {
+            capturedContext = context
+            return {
+              id: 'demo',
+            }
+          },
+        },
+      }],
+      config: {
+        demo: {
+          enabled: true,
+          features: {
+            pageContext: false,
+          },
+          settings: {
+            allowedHosts: ['gitlab.com'],
+          },
+        },
+      },
+      secrets,
+    })
+
+    manager.registerRuntimeAdapters()
+
+    expect(capturedContext?.features).toEqual({
+      pageContext: false,
+    })
+    expect(capturedContext?.settings).toEqual({
+      allowedHosts: ['gitlab.com'],
+    })
+    expect(await capturedContext?.secrets.get({
+      provider: 'nine1bot-local',
+      key: 'demo',
+    })).toBe('secret-value')
+  })
+
   it('registers built-in GitLab through the manager', () => {
     registerBuiltinPlatformAdapters()
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('gitlab')
+  })
+
+  it('skips built-in GitLab when config disables it', () => {
+    registerBuiltinPlatformAdapters({
+      gitlab: {
+        enabled: false,
+      },
+    })
+
+    expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).not.toContain('gitlab')
   })
 
   it('keeps the GitLab compatibility registration entry working', () => {

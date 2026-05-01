@@ -168,6 +168,15 @@ export function getMcpAuthPath(): string {
 }
 
 /**
+ * 获取平台适配密钥文件路径
+ * - Windows: %LOCALAPPDATA%\nine1bot\platform-secrets.json
+ * - Unix: ~/.local/share/nine1bot/platform-secrets.json
+ */
+export function getPlatformSecretsPath(): string {
+  return join(getDataDir(), 'platform-secrets.json')
+}
+
+/**
  * 获取项目环境变量目录路径
  * 与 auth.json 同级目录，便于统一管理 Nine1Bot 私有数据
  * - Windows: %LOCALAPPDATA%\nine1bot\project-env

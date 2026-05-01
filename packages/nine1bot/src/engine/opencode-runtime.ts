@@ -12,6 +12,7 @@ export const NINE1BOT_ONLY_FIELDS = [
   'skills',
   'sandbox',
   'browser',
+  'platforms',
   'feishu',
   'customProviders',
 ] as const

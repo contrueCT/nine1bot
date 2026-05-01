@@ -49,6 +49,54 @@ describe('loadConfig remote MCP oauth support', () => {
   })
 })
 
+describe('loadConfig platform config support', () => {
+  it('defaults platforms to an empty object', async () => {
+    const configPath = await writeConfig({})
+
+    const config = await loadConfig(configPath)
+
+    expect(config.platforms).toEqual({})
+  })
+
+  it('loads platform enabled flag, features, settings, and secret refs', async () => {
+    const configPath = await writeConfig({
+      platforms: {
+        gitlab: {
+          enabled: false,
+          features: {
+            pageContext: true,
+            resources: false,
+          },
+          settings: {
+            allowedHosts: ['gitlab.com'],
+            tokenRef: {
+              provider: 'nine1bot-local',
+              key: 'platform:gitlab:default:token',
+            },
+          },
+        },
+      },
+    })
+
+    const config = await loadConfig(configPath)
+
+    expect(config.platforms.gitlab).toEqual({
+      enabled: false,
+      features: {
+        pageContext: true,
+        resources: false,
+      },
+      settings: {
+        allowedHosts: ['gitlab.com'],
+        tokenRef: {
+          provider: 'nine1bot-local',
+          key: 'platform:gitlab:default:token',
+        },
+      },
+    })
+  })
+})
+
 describe('loadConfig browser migration guards', () => {
   it('loads supported embedded browser config with defaults', async () => {
     const configPath = await writeConfig({

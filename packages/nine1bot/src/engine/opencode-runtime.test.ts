@@ -22,6 +22,14 @@ describe('sanitizeOpencodeConfig', () => {
         appId: 'cli_xxx',
         appSecret: 'secret',
       },
+      platforms: {
+        gitlab: {
+          enabled: false,
+          settings: {
+            allowedHosts: ['gitlab.com'],
+          },
+        },
+      },
       customProviders: {
         demo: {
           name: 'Demo',
@@ -40,6 +48,7 @@ describe('sanitizeOpencodeConfig', () => {
     const { config: opencodeConfig } = sanitizeOpencodeConfig(config)
 
     expect(opencodeConfig).not.toHaveProperty('feishu')
+    expect(opencodeConfig).not.toHaveProperty('platforms')
     expect(opencodeConfig).not.toHaveProperty('browser')
     expect(opencodeConfig).not.toHaveProperty('server')
     expect(opencodeConfig.provider.demo).toEqual({
