@@ -45,6 +45,7 @@ export namespace RuntimeSourceRegistry {
   }
 
   const owners = new Map<string, OwnerSources>()
+  let revision = 0
 
   export function registerOwner(input: {
     owner: SourceOwner
@@ -62,10 +63,17 @@ export namespace RuntimeSourceRegistry {
         owner,
       })),
     })
+    revision++
   }
 
   export function unregisterOwner(ownerID: string) {
-    owners.delete(ownerID)
+    if (owners.delete(ownerID)) {
+      revision++
+    }
+  }
+
+  export function version() {
+    return revision
   }
 
   export function list(): OwnerSources {
@@ -85,7 +93,10 @@ export namespace RuntimeSourceRegistry {
   }
 
   export function clearForTesting() {
-    owners.clear()
+    if (owners.size > 0) {
+      owners.clear()
+      revision++
+    }
   }
 
   function normalizeSources<T extends { id: string }>(sources: T[]) {

@@ -103,9 +103,9 @@ export namespace RuntimeResourceResolver {
     return [...new Set(values)].sort((a, b) => a.localeCompare(b))
   }
 
-  async function listSkills(): Promise<SkillInfo[]> {
+  async function listSkills(options?: { includeDeclaredOnly?: boolean }): Promise<SkillInfo[]> {
     const { Skill } = await import("@/skill")
-    return Skill.all()
+    return Skill.all(options)
   }
 
   export function resourceTemplateId() {
@@ -288,7 +288,7 @@ export namespace RuntimeResourceResolver {
 
   async function resolveSkills(spec: SkillResourceSpec) {
     const declaredSkills = uniqueSorted(spec.skills)
-    const registry = new Map((await listSkills()).map((skill) => [skill.name, skill]))
+    const registry = new Map((await listSkills({ includeDeclaredOnly: true })).map((skill) => [skill.name, skill]))
     const availableSkills: SkillInfo[] = []
     const availability: Record<string, ResourceAvailability> = {}
     const failures: ResourceFailure[] = []

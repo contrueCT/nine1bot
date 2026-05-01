@@ -123,4 +123,37 @@ describe("RuntimeSourceRegistry", () => {
       skills: [],
     })
   })
+
+  test("tracks registry version for cache invalidation", () => {
+    const initial = RuntimeSourceRegistry.version()
+
+    RuntimeSourceRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      sources: {
+        skills: [{
+          id: "demo-skills",
+          directory: "/tmp/demo/skills",
+          visibility: "declared-only",
+          lifecycle: "platform-enabled",
+        }],
+      },
+    })
+    expect(RuntimeSourceRegistry.version()).toBe(initial + 1)
+
+    RuntimeSourceRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      sources: {},
+    })
+    expect(RuntimeSourceRegistry.version()).toBe(initial + 2)
+
+    RuntimeSourceRegistry.unregisterOwner("demo")
+    expect(RuntimeSourceRegistry.version()).toBe(initial + 3)
+
+    RuntimeSourceRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      sources: {},
+    })
+    RuntimeSourceRegistry.clearForTesting()
+    expect(RuntimeSourceRegistry.version()).toBe(initial + 5)
+  })
 })
