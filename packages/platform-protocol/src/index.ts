@@ -148,10 +148,34 @@ export type PlatformActionResult = {
   updatedSettings?: unknown
 }
 
+export type PlatformRuntimeSourceLifecycle = 'platform-enabled'
+
+export type PlatformSkillSourceDescriptor = {
+  id: string
+  directory: string
+  namespace?: string
+  visibility: 'default' | 'declared-only'
+  lifecycle: PlatformRuntimeSourceLifecycle
+}
+
+export type PlatformAgentSourceDescriptor = {
+  id: string
+  directory: string
+  namespace?: string
+  visibility: 'declared-only' | 'recommendable' | 'user-selectable'
+  lifecycle: PlatformRuntimeSourceLifecycle
+}
+
+export type PlatformRuntimeSourcesDescriptor = {
+  agents?: PlatformAgentSourceDescriptor[]
+  skills?: PlatformSkillSourceDescriptor[]
+}
+
 export type PlatformAdapterContribution = {
   descriptor: PlatformDescriptor
   runtime?: {
     createAdapter: (ctx: PlatformAdapterContext) => PlatformRuntimeAdapter
+    sources?: PlatformRuntimeSourcesDescriptor
   }
   getStatus?: (ctx: PlatformAdapterContext) => Promise<PlatformRuntimeStatus>
   validateConfig?: (settings: unknown, ctx: PlatformAdapterContext) => Promise<PlatformValidationResult>

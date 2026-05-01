@@ -8,12 +8,14 @@ import type {
   PlatformConfigDescriptor,
   PlatformConfigField,
   PlatformDescriptor,
+  PlatformRuntimeSourcesDescriptor,
   PlatformRuntimeStatus,
   PlatformSecretAccess,
   PlatformSecretRef,
   PlatformValidationResult,
 } from '@nine1bot/platform-protocol'
 import { RuntimePlatformAdapterRegistry } from '../../../../opencode/packages/opencode/src/runtime/platform/adapter'
+import { RuntimeSourceRegistry } from '../../../../opencode/packages/opencode/src/runtime/source/registry'
 
 export type PlatformLifecycleStatus =
   | 'discovered'
@@ -75,6 +77,21 @@ export type PlatformManagerDetail = PlatformManagerSummary & {
   features: Record<string, boolean>
   settings: Record<string, unknown>
   runtimeStatus: PlatformRuntimeStatus
+  runtimeSources?: PlatformRuntimeSourcesSummary
+}
+
+export type PlatformRuntimeSourceSummary = {
+  id: string
+  directory: string
+  namespace?: string
+  visibility: string
+  status: 'registered' | 'disabled' | 'error'
+  error?: string
+}
+
+export type PlatformRuntimeSourcesSummary = {
+  agents: PlatformRuntimeSourceSummary[]
+  skills: PlatformRuntimeSourceSummary[]
 }
 
 export type PlatformConfigPatch = {
@@ -209,6 +226,7 @@ export class PlatformAdapterManager {
       features: { ...record.features },
       settings: await this.redactSettings(record),
       runtimeStatus: cloneJson(record.runtimeStatus),
+      runtimeSources: this.runtimeSourcesForRecord(record),
     }
   }
 
@@ -223,6 +241,7 @@ export class PlatformAdapterManager {
           reason: 'platform-disabled-by-current-config',
           message: `Platform "${record.descriptor.name}" is disabled by the current configuration.`,
         })
+        RuntimeSourceRegistry.unregisterOwner(record.id)
         continue
       }
       if (record.registered) continue
@@ -235,6 +254,7 @@ export class PlatformAdapterManager {
       try {
         const adapter = contribution.runtime.createAdapter(this.createContext(record))
         RuntimePlatformAdapterRegistry.register(adapter)
+        this.registerRuntimeSources(record, contribution.runtime.sources)
         this.records.set(record.id, {
           ...record,
           registered: true,
@@ -273,6 +293,7 @@ export class PlatformAdapterManager {
       if (record.registered) {
         RuntimePlatformAdapterRegistry.unregister(record.id)
       }
+      RuntimeSourceRegistry.unregisterOwner(record.id)
       RuntimePlatformAdapterRegistry.unmarkDisabled(record.id)
       const nextStatus: PlatformRuntimeStatus = !record.installed
         ? { status: 'missing', message: `Platform package is not installed: ${record.id}` }
@@ -524,6 +545,52 @@ export class PlatformAdapterManager {
     }
   }
 
+  private registerRuntimeSources(record: PlatformManagerRecord, sources?: PlatformRuntimeSourcesDescriptor) {
+    RuntimeSourceRegistry.registerOwner({
+      owner: {
+        id: record.id,
+        kind: 'platform',
+        enabled: record.enabled,
+      },
+      sources: sources
+        ? {
+            agents: sources.agents?.map((source) => ({ ...source })),
+            skills: sources.skills?.map((source) => ({ ...source })),
+          }
+        : undefined,
+    })
+  }
+
+  private runtimeSourcesForRecord(record: PlatformManagerRecord): PlatformRuntimeSourcesSummary | undefined {
+    const contribution = this.contributions.get(record.id)
+    const sources = contribution?.runtime?.sources
+    if (!sources?.agents?.length && !sources?.skills?.length) return undefined
+
+    const registered = RuntimeSourceRegistry.listOwner(record.id)
+    const status = runtimeSourceStatus(record)
+    const registeredAgents = new Set(registered.agents.map((source) => source.id))
+    const registeredSkills = new Set(registered.skills.map((source) => source.id))
+
+    return {
+      agents: (sources.agents ?? []).map((source) => ({
+        id: source.id,
+        directory: source.directory,
+        namespace: source.namespace,
+        visibility: source.visibility,
+        status: registeredAgents.has(source.id) ? 'registered' : status,
+        error: status === 'error' ? record.error : undefined,
+      })),
+      skills: (sources.skills ?? []).map((source) => ({
+        id: source.id,
+        directory: source.directory,
+        namespace: source.namespace,
+        visibility: source.visibility,
+        status: registeredSkills.has(source.id) ? 'registered' : status,
+        error: status === 'error' ? record.error : undefined,
+      })),
+    }
+  }
+
   private async prepareConfigEntry(
     record: PlatformManagerRecord,
     previousEntry: PlatformConfigEntry,
@@ -719,6 +786,12 @@ function lifecycleStatusFromRuntime(status: PlatformRuntimeStatus['status']): Pl
   if (status === 'disabled') return 'disabled'
   if (status === 'error') return 'error'
   return 'degraded'
+}
+
+function runtimeSourceStatus(record: PlatformManagerRecord): PlatformRuntimeSourceSummary['status'] {
+  if (!record.enabled) return 'disabled'
+  if (record.lifecycleStatus === 'error') return 'error'
+  return 'disabled'
 }
 
 function secretFields(config?: PlatformConfigDescriptor): PlatformConfigField[] {

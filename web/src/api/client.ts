@@ -1838,6 +1838,20 @@ export interface PlatformRuntimeStatus {
   recentEvents?: PlatformRecentEvent[]
 }
 
+export interface PlatformRuntimeSourceSummary {
+  id: string
+  directory: string
+  namespace?: string
+  visibility: string
+  status: 'registered' | 'disabled' | 'error'
+  error?: string
+}
+
+export interface PlatformRuntimeSourcesSummary {
+  agents: PlatformRuntimeSourceSummary[]
+  skills: PlatformRuntimeSourceSummary[]
+}
+
 export interface PlatformSecretFieldValue {
   redacted: true
   hasValue: boolean
@@ -1871,6 +1885,7 @@ export interface PlatformDetail extends PlatformSummary {
   features: Record<string, boolean>
   settings: Record<string, unknown>
   runtimeStatus: PlatformRuntimeStatus
+  runtimeSources?: PlatformRuntimeSourcesSummary
 }
 
 export interface PlatformConfigPatch {

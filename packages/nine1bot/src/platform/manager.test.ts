@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import type { PlatformAdapterContext, PlatformAdapterContribution, PlatformSecretAccess } from '@nine1bot/platform-protocol'
+import type { PlatformAdapterContext, PlatformAdapterContribution, PlatformRuntimeSourcesDescriptor, PlatformSecretAccess } from '@nine1bot/platform-protocol'
 import { RuntimePlatformAdapterRegistry } from '../../../../opencode/packages/opencode/src/runtime/platform/adapter'
+import { RuntimeSourceRegistry } from '../../../../opencode/packages/opencode/src/runtime/source/registry'
 import { PlatformAdapterManager } from './manager'
 import { registerBuiltinPlatformAdapters, resetBuiltinPlatformManagerForTesting } from './builtin'
 import { registerGitLabPlatformAdapter } from './gitlab'
@@ -8,6 +9,7 @@ import { registerGitLabPlatformAdapter } from './gitlab'
 function resetPlatformState() {
   resetBuiltinPlatformManagerForTesting()
   RuntimePlatformAdapterRegistry.clearForTesting()
+  RuntimeSourceRegistry.clearForTesting()
 }
 
 beforeEach(resetPlatformState)
@@ -17,6 +19,7 @@ function contribution(id: string, options: {
   defaultEnabled?: boolean
   throws?: boolean
   templates?: string[]
+  sources?: PlatformRuntimeSourcesDescriptor
 } = {}): PlatformAdapterContribution {
   return {
     descriptor: {
@@ -39,6 +42,7 @@ function contribution(id: string, options: {
           id,
         }
       },
+      sources: options.sources,
     },
   }
 }
@@ -60,6 +64,25 @@ function memorySecrets() {
     },
   }
   return { access, values }
+}
+
+function runtimeSources(): PlatformRuntimeSourcesDescriptor {
+  return {
+    agents: [{
+      id: 'demo-agents',
+      directory: '/tmp/demo/agents',
+      namespace: 'demo.agent',
+      visibility: 'recommendable',
+      lifecycle: 'platform-enabled',
+    }],
+    skills: [{
+      id: 'demo-skills',
+      directory: '/tmp/demo/skills',
+      namespace: 'demo.skill',
+      visibility: 'declared-only',
+      lifecycle: 'platform-enabled',
+    }],
+  }
 }
 
 describe('PlatformAdapterManager', () => {
@@ -200,6 +223,147 @@ describe('PlatformAdapterManager', () => {
       provider: 'nine1bot-local',
       key: 'demo',
     })).toBe('secret-value')
+  })
+
+  it('registers runtime sources for enabled platforms', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        sources: runtimeSources(),
+      })],
+    })
+
+    manager.registerRuntimeAdapters()
+
+    expect(RuntimeSourceRegistry.listOwner('demo')).toMatchObject({
+      owner: {
+        id: 'demo',
+        kind: 'platform',
+        enabled: true,
+      },
+      agents: [{
+        id: 'demo-agents',
+        directory: '/tmp/demo/agents',
+        visibility: 'recommendable',
+      }],
+      skills: [{
+        id: 'demo-skills',
+        directory: '/tmp/demo/skills',
+        visibility: 'declared-only',
+      }],
+    })
+    await expect(manager.getDetail('demo')).resolves.toMatchObject({
+      runtimeSources: {
+        agents: [{
+          id: 'demo-agents',
+          status: 'registered',
+        }],
+        skills: [{
+          id: 'demo-skills',
+          status: 'registered',
+        }],
+      },
+    })
+  })
+
+  it('does not register runtime sources for disabled platforms', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        sources: runtimeSources(),
+      })],
+      config: {
+        demo: {
+          enabled: false,
+        },
+      },
+    })
+
+    manager.registerRuntimeAdapters()
+
+    expect(RuntimeSourceRegistry.listOwner('demo')).toEqual({
+      owner: undefined,
+      agents: [],
+      skills: [],
+    })
+    await expect(manager.getDetail('demo')).resolves.toMatchObject({
+      runtimeSources: {
+        agents: [{
+          id: 'demo-agents',
+          status: 'disabled',
+        }],
+        skills: [{
+          id: 'demo-skills',
+          status: 'disabled',
+        }],
+      },
+    })
+  })
+
+  it('clears runtime sources when unregistering or reconfiguring platforms', () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        sources: runtimeSources(),
+      })],
+    })
+
+    manager.registerRuntimeAdapters()
+    expect(RuntimeSourceRegistry.listOwner('demo').agents.map((source) => source.id)).toEqual(['demo-agents'])
+
+    manager.unregisterRuntimeAdapters()
+    expect(RuntimeSourceRegistry.listOwner('demo').agents).toEqual([])
+
+    manager.configure({
+      demo: {
+        enabled: true,
+      },
+    })
+    expect(RuntimeSourceRegistry.listOwner('demo').agents).toEqual([])
+  })
+
+  it('does not leave runtime sources behind when adapter creation fails', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [
+        contribution('bad', {
+          defaultEnabled: true,
+          throws: true,
+          sources: {
+            agents: [{
+              id: 'bad-agents',
+              directory: '/tmp/bad/agents',
+              visibility: 'recommendable',
+              lifecycle: 'platform-enabled',
+            }],
+          },
+        }),
+        contribution('good', {
+          defaultEnabled: true,
+          sources: {
+            skills: [{
+              id: 'good-skills',
+              directory: '/tmp/good/skills',
+              visibility: 'declared-only',
+              lifecycle: 'platform-enabled',
+            }],
+          },
+        }),
+      ],
+    })
+
+    manager.registerRuntimeAdapters()
+
+    expect(RuntimeSourceRegistry.listOwner('bad').agents).toEqual([])
+    expect(RuntimeSourceRegistry.listOwner('good').skills.map((source) => source.id)).toEqual(['good-skills'])
+    await expect(manager.getDetail('bad')).resolves.toMatchObject({
+      runtimeSources: {
+        agents: [{
+          id: 'bad-agents',
+          status: 'error',
+          error: 'bad failed',
+        }],
+      },
+    })
   })
 
   it('registers built-in GitLab through the manager', () => {
