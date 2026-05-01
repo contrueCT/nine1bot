@@ -1735,6 +1735,158 @@ export interface CustomProvider {
   }
 }
 
+// === Platform Adapter Types ===
+export type PlatformRuntimeStatusValue =
+  | 'available'
+  | 'disabled'
+  | 'missing'
+  | 'auth-required'
+  | 'degraded'
+  | 'error'
+
+export interface PlatformCapabilities {
+  pageContext?: boolean
+  templates?: string[]
+  resources?: boolean
+  browserExtension?: boolean
+  auth?: 'none' | 'token' | 'oauth' | 'external'
+  settingsPage?: boolean
+  statusPage?: boolean
+}
+
+export interface PlatformConfigField {
+  key: string
+  label: string
+  type: 'string' | 'password' | 'boolean' | 'number' | 'select' | 'string-list' | 'json'
+  description?: string
+  required?: boolean
+  options?: string[]
+  secret?: boolean
+}
+
+export interface PlatformConfigSection {
+  id: string
+  title: string
+  description?: string
+  fields: PlatformConfigField[]
+}
+
+export interface PlatformConfigDescriptor {
+  sections: PlatformConfigSection[]
+}
+
+export interface PlatformDetailPageSection {
+  id: string
+  title: string
+  type: 'status-cards' | 'settings-form' | 'action-list' | 'event-list' | 'capability-list' | 'custom'
+  componentKey?: string
+}
+
+export interface PlatformDetailPageDescriptor {
+  sections: PlatformDetailPageSection[]
+}
+
+export interface PlatformActionDescriptor {
+  id: string
+  label: string
+  description?: string
+  kind: 'button' | 'form' | 'link'
+  inputSchema?: PlatformConfigDescriptor
+  danger?: boolean
+}
+
+export interface PlatformDescriptor {
+  id: string
+  name: string
+  packageName: string
+  version: string
+  description?: string
+  defaultEnabled?: boolean
+  capabilities: PlatformCapabilities
+  config?: PlatformConfigDescriptor
+  detailPage?: PlatformDetailPageDescriptor
+  actions?: PlatformActionDescriptor[]
+  browser?: {
+    safeExports?: string[]
+  }
+  web?: {
+    componentKeys?: string[]
+  }
+}
+
+export interface PlatformStatusCard {
+  id: string
+  label: string
+  value: string
+  tone?: 'neutral' | 'success' | 'warning' | 'danger'
+}
+
+export interface PlatformRecentEvent {
+  id: string
+  at: string
+  level: 'debug' | 'info' | 'warn' | 'error'
+  message: string
+  stage?: string
+  reason?: string
+  data?: Record<string, unknown>
+}
+
+export interface PlatformRuntimeStatus {
+  status: PlatformRuntimeStatusValue
+  message?: string
+  cards?: PlatformStatusCard[]
+  recentEvents?: PlatformRecentEvent[]
+}
+
+export interface PlatformSecretFieldValue {
+  redacted: true
+  hasValue: boolean
+  provider?: 'nine1bot-local' | 'env' | 'external'
+}
+
+export interface PlatformSummary {
+  id: string
+  name: string
+  packageName: string
+  version?: string
+  installed: boolean
+  builtIn: boolean
+  enabled: boolean
+  registered: boolean
+  lifecycleStatus: string
+  status: PlatformRuntimeStatusValue
+  capabilities: PlatformCapabilities
+  lastError?: {
+    code: string
+    message: string
+    at: string
+  }
+}
+
+export interface PlatformDetail extends PlatformSummary {
+  descriptor: PlatformDescriptor
+  config?: PlatformConfigDescriptor
+  detailPage?: PlatformDetailPageDescriptor
+  actions: PlatformActionDescriptor[]
+  features: Record<string, boolean>
+  settings: Record<string, unknown>
+  runtimeStatus: PlatformRuntimeStatus
+}
+
+export interface PlatformConfigPatch {
+  enabled?: boolean
+  features?: Record<string, boolean>
+  settings?: Record<string, unknown>
+}
+
+export interface PlatformActionResult {
+  status: 'ok' | 'failed' | 'pending' | 'requires-user-action'
+  message?: string
+  openUrl?: string
+  updatedStatus?: PlatformRuntimeStatus
+  updatedSettings?: unknown
+}
+
 // === Skill Types ===
 export interface Skill {
   name: string
@@ -1963,6 +2115,75 @@ export const customProviderApi = {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.error || `Failed to remove custom provider: ${res.status}`)
     }
+  }
+}
+
+export const platformApi = {
+  async list(): Promise<PlatformSummary[]> {
+    const res = await fetchWithTimeout(`${BASE_URL}/nine1bot/platforms`)
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to load platforms: ${res.status}`)
+    }
+    const data = await res.json()
+    return Array.isArray(data.platforms) ? data.platforms : []
+  },
+
+  async get(id: string): Promise<PlatformDetail> {
+    const res = await fetchWithTimeout(`${BASE_URL}/nine1bot/platforms/${encodeURIComponent(id)}`)
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error || `Failed to load platform: ${res.status}`)
+    }
+    return data
+  },
+
+  async update(id: string, patch: PlatformConfigPatch): Promise<PlatformDetail> {
+    const res = await fetchWithTimeout(`${BASE_URL}/nine1bot/platforms/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const error = new Error(data.error || `Failed to update platform: ${res.status}`) as Error & {
+        fieldErrors?: Record<string, string>
+      }
+      error.fieldErrors = data.fieldErrors
+      throw error
+    }
+    return data
+  },
+
+  async health(id: string): Promise<{ runtimeStatus: PlatformRuntimeStatus; platform?: PlatformDetail }> {
+    const res = await fetchWithTimeout(`${BASE_URL}/nine1bot/platforms/${encodeURIComponent(id)}/health`, {
+      method: 'POST'
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data.error || `Failed to refresh platform status: ${res.status}`)
+    }
+    return data
+  },
+
+  async action(id: string, actionId: string, body: { input?: unknown; confirm?: boolean } = {}): Promise<PlatformActionResult> {
+    const res = await fetchWithTimeout(
+      `${BASE_URL}/nine1bot/platforms/${encodeURIComponent(id)}/actions/${encodeURIComponent(actionId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }
+    )
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const error = new Error(data.error || `Failed to execute platform action: ${res.status}`) as Error & {
+        fieldErrors?: Record<string, string>
+      }
+      error.fieldErrors = data.fieldErrors
+      throw error
+    }
+    return data
   }
 }
 

@@ -1,10 +1,10 @@
 import { ref, computed } from 'vue'
-import { providerApi, configApi, mcpApi, skillApi, authApi, nine1botConfigApi, customProviderApi, importAuthFromOpencode as importAuthFromOpencodeApi } from '../api/client'
-import type { Provider, McpServer, Skill, Config, McpConfig, CustomProvider, AuthImportResult } from '../api/client'
+import { providerApi, configApi, mcpApi, skillApi, authApi, nine1botConfigApi, customProviderApi, platformApi, importAuthFromOpencode as importAuthFromOpencodeApi } from '../api/client'
+import type { Provider, McpServer, Skill, Config, McpConfig, CustomProvider, AuthImportResult, PlatformSummary, PlatformDetail, PlatformConfigPatch, PlatformActionResult } from '../api/client'
 import { authenticateMcpWithPopup } from '../utils/mcp-auth'
 
 const showSettings = ref(false)
-const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth' | 'preferences' | 'profile'>('models')
+const activeTab = ref<'models' | 'mcp' | 'skills' | 'auth' | 'preferences' | 'platforms' | 'profile'>('models')
 
 // Providers and models
 const providers = ref<Provider[]>([])
@@ -35,6 +35,16 @@ const loadingMcp = ref(false)
 const skills = ref<Skill[]>([])
 const loadingSkills = ref(false)
 
+// Platform adapters
+const platforms = ref<PlatformSummary[]>([])
+const selectedPlatformId = ref<string>('')
+const selectedPlatform = ref<PlatformDetail | null>(null)
+const loadingPlatforms = ref(false)
+const savingPlatform = ref(false)
+const platformActionRunning = ref<string>('')
+const platformError = ref('')
+const platformActionResult = ref<PlatformActionResult | null>(null)
+
 // Config
 const config = ref<Config>({})
 
@@ -49,6 +59,7 @@ export function useSettings() {
     loadCustomProviders().then(() => loadProviders())
     loadMcpServers()
     loadSkills()
+    loadPlatforms()
     loadConfig()
     loadNine1botConfig()
   }
@@ -117,6 +128,91 @@ export function useSettings() {
       console.error('Failed to load skills:', e)
     } finally {
       loadingSkills.value = false
+    }
+  }
+
+  async function loadPlatforms() {
+    loadingPlatforms.value = true
+    platformError.value = ''
+    try {
+      platforms.value = await platformApi.list()
+      if (!selectedPlatformId.value && platforms.value.length > 0) {
+        selectedPlatformId.value = platforms.value[0].id
+      }
+      if (selectedPlatformId.value) {
+        await loadPlatformDetail(selectedPlatformId.value)
+      }
+    } catch (e: any) {
+      console.error('Failed to load platforms:', e)
+      platformError.value = e?.message || '加载平台适配失败'
+      platforms.value = []
+      selectedPlatform.value = null
+    } finally {
+      loadingPlatforms.value = false
+    }
+  }
+
+  async function loadPlatformDetail(id: string) {
+    platformError.value = ''
+    selectedPlatformId.value = id
+    try {
+      selectedPlatform.value = await platformApi.get(id)
+    } catch (e: any) {
+      console.error('Failed to load platform detail:', e)
+      platformError.value = e?.message || '加载平台详情失败'
+      selectedPlatform.value = null
+    }
+  }
+
+  async function updatePlatform(id: string, patch: PlatformConfigPatch) {
+    savingPlatform.value = true
+    platformError.value = ''
+    try {
+      selectedPlatform.value = await platformApi.update(id, patch)
+      platforms.value = await platformApi.list()
+    } catch (e: any) {
+      console.error('Failed to update platform:', e)
+      platformError.value = e?.message || '保存平台配置失败'
+      throw e
+    } finally {
+      savingPlatform.value = false
+    }
+  }
+
+  async function refreshPlatformStatus(id: string) {
+    platformActionRunning.value = 'health'
+    platformError.value = ''
+    try {
+      const result = await platformApi.health(id)
+      if (result.platform) selectedPlatform.value = result.platform
+      platforms.value = await platformApi.list()
+    } catch (e: any) {
+      console.error('Failed to refresh platform status:', e)
+      platformError.value = e?.message || '刷新平台状态失败'
+      throw e
+    } finally {
+      platformActionRunning.value = ''
+    }
+  }
+
+  async function executePlatformAction(id: string, actionId: string, input?: unknown, confirm?: boolean) {
+    platformActionRunning.value = actionId
+    platformActionResult.value = null
+    platformError.value = ''
+    try {
+      platformActionResult.value = await platformApi.action(id, actionId, { input, confirm })
+      if (platformActionResult.value.openUrl) {
+        window.open(platformActionResult.value.openUrl, '_blank', 'noopener,noreferrer')
+      }
+      await loadPlatformDetail(id)
+      platforms.value = await platformApi.list()
+      return platformActionResult.value
+    } catch (e: any) {
+      console.error('Failed to execute platform action:', e)
+      platformError.value = e?.message || '执行平台操作失败'
+      throw e
+    } finally {
+      platformActionRunning.value = ''
     }
   }
 
@@ -370,6 +466,14 @@ export function useSettings() {
     loadingMcp,
     skills,
     loadingSkills,
+    platforms,
+    selectedPlatformId,
+    selectedPlatform,
+    loadingPlatforms,
+    savingPlatform,
+    platformActionRunning,
+    platformError,
+    platformActionResult,
     config,
     openSettings,
     closeSettings,
@@ -379,6 +483,11 @@ export function useSettings() {
     loadNine1botConfig,
     loadMcpServers,
     loadSkills,
+    loadPlatforms,
+    loadPlatformDetail,
+    updatePlatform,
+    refreshPlatformStatus,
+    executePlatformAction,
     selectModel,
     setDefaultModel,
     connectMcp,

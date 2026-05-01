@@ -655,9 +655,14 @@ Phase 3 暴露后端 Platform API 与 action 执行层：
 - `POST /nine1bot/platforms/:id/actions/:actionId` 只允许执行 descriptor 中声明过的 action，危险 action 需要显式确认。
 - 平台 secret 字段写入本地 secret store，配置文件只保存 `PlatformSecretRef`，详情 API 只返回 redacted 状态。
 
-后续阶段再暴露 Web 产品配置面：
+Phase 4 暴露 Web 产品配置面：
 
 - Web 配置页增加“多平台适配 > GitLab”，并使用 descriptor 渲染 GitLab 自己的配置/状态内容。
+- 第一版使用通用 descriptor renderer 展示平台列表、状态卡片、配置表单、action list 和最近事件。
+- `componentKey` 保留为后续复杂平台的内置组件扩展点；普通平台优先通过 descriptor 接入。
+
+后续阶段继续增强平台生态：
+
 - 支持更多内置平台详情页。
 - 支持平台自定义组件插槽。
 - 支持更完整的状态事件、审计和调试视图。

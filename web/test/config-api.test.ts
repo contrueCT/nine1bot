@@ -6,6 +6,7 @@ import {
   importAuthFromOpencode,
   mcpApi,
   nine1botConfigApi,
+  platformApi,
   preferencesApi,
   providerApi,
   setApiDirectory,
@@ -289,5 +290,138 @@ describe('web config APIs', () => {
     ])
     expect(calls[1].body).toEqual({ content: 'Prefer tests', scope: 'project', source: 'user' })
     expect(calls[2].body).toEqual({ content: 'Prefer focused tests' })
+  })
+
+  it('uses platform manager endpoints for platform adapter settings', async () => {
+    installFetchMock((url, init) => {
+      const method = init?.method || 'GET'
+      if (url === '/nine1bot/platforms' && method === 'GET') {
+        return jsonResponse({
+          platforms: [{
+            id: 'gitlab',
+            name: 'GitLab',
+            packageName: '@nine1bot/platform-gitlab',
+            enabled: true,
+            registered: true,
+            status: 'available',
+            lifecycleStatus: 'healthy',
+            capabilities: { pageContext: true },
+          }],
+        })
+      }
+      if (url === '/nine1bot/platforms/gitlab' && method === 'GET') {
+        return jsonResponse({
+          id: 'gitlab',
+          name: 'GitLab',
+          packageName: '@nine1bot/platform-gitlab',
+          enabled: true,
+          registered: true,
+          status: 'available',
+          lifecycleStatus: 'healthy',
+          capabilities: { pageContext: true },
+          descriptor: {
+            id: 'gitlab',
+            name: 'GitLab',
+            packageName: '@nine1bot/platform-gitlab',
+            version: '0.1.0',
+            capabilities: { pageContext: true },
+          },
+          actions: [{ id: 'connection.test', label: 'Test connection', kind: 'button' }],
+          features: {},
+          settings: {
+            token: { redacted: true, hasValue: true, provider: 'nine1bot-local' },
+          },
+          runtimeStatus: { status: 'available' },
+        })
+      }
+      if (url === '/nine1bot/platforms/gitlab' && method === 'PATCH') {
+        return jsonResponse({
+          id: 'gitlab',
+          name: 'GitLab',
+          packageName: '@nine1bot/platform-gitlab',
+          enabled: false,
+          registered: false,
+          status: 'disabled',
+          lifecycleStatus: 'disabled',
+          capabilities: { pageContext: true },
+          descriptor: {
+            id: 'gitlab',
+            name: 'GitLab',
+            packageName: '@nine1bot/platform-gitlab',
+            version: '0.1.0',
+            capabilities: { pageContext: true },
+          },
+          actions: [],
+          features: {},
+          settings: {},
+          runtimeStatus: { status: 'disabled' },
+        })
+      }
+      if (url === '/nine1bot/platforms/gitlab/health' && method === 'POST') {
+        return jsonResponse({ runtimeStatus: { status: 'available' } })
+      }
+      if (url === '/nine1bot/platforms/gitlab/actions/connection.test' && method === 'POST') {
+        return jsonResponse({ status: 'failed', message: 'Action is not implemented: connection.test' })
+      }
+      return jsonResponse({})
+    })
+
+    expect(await platformApi.list()).toEqual([
+      expect.objectContaining({ id: 'gitlab', status: 'available' }),
+    ])
+    expect(await platformApi.get('gitlab')).toMatchObject({
+      id: 'gitlab',
+      settings: {
+        token: { redacted: true, hasValue: true, provider: 'nine1bot-local' },
+      },
+    })
+    expect(await platformApi.update('gitlab', {
+      enabled: false,
+      settings: {
+        token: null,
+      },
+    })).toMatchObject({ id: 'gitlab', enabled: false })
+    expect(await platformApi.health('gitlab')).toEqual({ runtimeStatus: { status: 'available' } })
+    expect(await platformApi.action('gitlab', 'connection.test')).toEqual({
+      status: 'failed',
+      message: 'Action is not implemented: connection.test',
+    })
+
+    expect(callSummary()).toEqual([
+      ['GET', '/nine1bot/platforms'],
+      ['GET', '/nine1bot/platforms/gitlab'],
+      ['PATCH', '/nine1bot/platforms/gitlab'],
+      ['POST', '/nine1bot/platforms/gitlab/health'],
+      ['POST', '/nine1bot/platforms/gitlab/actions/connection.test'],
+    ])
+    expect(calls[2].body).toEqual({
+      enabled: false,
+      settings: {
+        token: null,
+      },
+    })
+    expect(calls[4].body).toEqual({})
+  })
+
+  it('surfaces platform field errors from the platform manager api', async () => {
+    installFetchMock((url, init) => {
+      if (url === '/nine1bot/platforms/gitlab' && init?.method === 'PATCH') {
+        return jsonResponse({
+          error: 'Invalid platform config',
+          fieldErrors: { apiEnrichment: 'Must be one of: auto, disabled' },
+        }, 400)
+      }
+      return jsonResponse({})
+    })
+
+    try {
+      await platformApi.update('gitlab', {
+        settings: { apiEnrichment: 'bad' },
+      })
+      throw new Error('Expected platform update to fail')
+    } catch (error: any) {
+      expect(error.message).toBe('Invalid platform config')
+      expect(error.fieldErrors).toEqual({ apiEnrichment: 'Must be one of: auto, disabled' })
+    }
   })
 })
