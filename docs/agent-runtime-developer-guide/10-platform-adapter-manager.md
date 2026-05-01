@@ -627,17 +627,23 @@ Platform action 具备足够自由度，因此必须由 Platform Manager 统一�
 
 ## 阶段性落地建议
 
-第一阶段先做内置平台插件式管理：
+Phase 0 先落地共享协议类型：
 
 - 新增 `@nine1bot/platform-protocol`，提供 Platform Descriptor / Contribution 类型。
+- 平台包导出 descriptor / contribution，但启动流程暂不消费。
+
+Phase 1 先做内置 Manager 注册链路：
+
 - 新增 Platform Manager。
-- 将 GitLab 注册改为 contribution + config-gated registration。
+- 将 GitLab 启动注册从专属注册点收敛到内置 contribution + Manager 注册。
+- 保持 GitLab 默认启用，不新增用户配置 schema。
+- 不新增 Platform API、Web 配置页和 secret store。
+
+后续阶段再暴露产品配置面：
+
 - 增加 `platforms.gitlab.enabled` 配置。
 - 增加平台列表、平台详情、平台 action API。
 - Web 配置页增加“多平台适配 > GitLab”，并使用 descriptor 渲染 GitLab 自己的配置/状态内容。
-
-第二阶段继续完善内置平台体验：
-
 - 支持更多内置平台详情页。
 - 支持平台自定义组件插槽。
 - 支持更完整的状态事件、审计和调试视图。

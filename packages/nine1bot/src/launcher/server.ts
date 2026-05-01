@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import type { ServerConfig, AuthConfig, Nine1BotConfig } from '../config/schema'
 import { getInstallDir, getGlobalSkillsDir, getAuthPath, getGlobalConfigDir, getMcpAuthPath, getProjectEnvDir } from '../config/loader'
 import { getGlobalPreferencesPath } from '../preferences'
-import { registerGitLabPlatformAdapter } from '../platform/gitlab'
+import { registerBuiltinPlatformAdapters } from '../platform/builtin'
 import { sanitizeOpencodeConfig } from '../engine/opencode-runtime'
 // 静态导入 OpenCode 服务器（编译时打包）
 import { Server as OpencodeServer } from '../../../../opencode/packages/opencode/src/server/server'
@@ -175,7 +175,7 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
 
   // 注册 Nine1Bot 产品层平台适配器。Runtime core 只感知通用 registry，
   // 不直接依赖 GitLab 等第三方平台语义。
-  registerGitLabPlatformAdapter()
+  registerBuiltinPlatformAdapters()
 
   // 设置捆绑的 ripgrep 路径（发行版中 bin/rg）
   const rgPath = resolve(installDir, 'bin', process.platform === 'win32' ? 'rg.exe' : 'rg')

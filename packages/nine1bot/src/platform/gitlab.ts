@@ -1,10 +1,8 @@
-import { createGitLabPlatformAdapter } from '@nine1bot/platform-gitlab/runtime'
-import { RuntimePlatformAdapterRegistry } from '../../../../opencode/packages/opencode/src/runtime/platform/adapter'
-
-let registered = false
+import { gitlabPlatformContribution } from '@nine1bot/platform-gitlab/runtime'
+import { PlatformAdapterManager } from './manager'
 
 export function registerGitLabPlatformAdapter() {
-  if (registered) return
-  RuntimePlatformAdapterRegistry.register(createGitLabPlatformAdapter())
-  registered = true
+  return new PlatformAdapterManager({
+    contributions: [gitlabPlatformContribution],
+  }).registerRuntimeAdapters()
 }

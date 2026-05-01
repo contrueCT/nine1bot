@@ -17,6 +17,7 @@
   "dependencies": {
     "@clack/prompts": "^0.9.1",
     "@nine1bot/platform-gitlab": "workspace:*",
+    "@nine1bot/platform-protocol": "workspace:*",
     "@hono/node-server": "^1.19.9",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@ngrok/ngrok": "^1.4.1",
