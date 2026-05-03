@@ -5,7 +5,7 @@
  * that need to run in the context of the page.
  */
 
-import { buildPageContextPayload } from '@nine1bot/platform-gitlab/browser'
+import { buildBrowserExtensionPageContextPayload } from './page-context'
 
 console.log('[Nine1Bot Content Script] Loaded on:', window.location.href)
 
@@ -89,14 +89,12 @@ async function handleContentRequest(action: string, params: unknown): Promise<un
 }
 
 function collectPageContext() {
-  return buildPageContextPayload({
+  return buildBrowserExtensionPageContextPayload({
     url: window.location.href,
     title: document.title,
     selection: window.getSelection()?.toString(),
     visibleSummary: collectVisibleTextSummary(),
-    raw: {
-      gitlab: collectGitLabDomHints(),
-    },
+    gitlab: collectGitLabDomHints(),
   })
 }
 

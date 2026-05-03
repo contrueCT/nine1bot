@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",
+    "@nine1bot/platform-feishu": "workspace:*",
     "@nine1bot/platform-gitlab": "workspace:*",
     "@nine1bot/platform-protocol": "workspace:*",
     "@hono/node-server": "^1.19.9",

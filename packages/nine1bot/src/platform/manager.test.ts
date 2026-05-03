@@ -454,6 +454,12 @@ describe('PlatformAdapterManager', () => {
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('gitlab')
   })
 
+  it('registers built-in Feishu through the manager', () => {
+    registerBuiltinPlatformAdapters()
+
+    expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('feishu')
+  })
+
   it('skips built-in GitLab when config disables it', () => {
     registerBuiltinPlatformAdapters({
       config: {
@@ -464,6 +470,19 @@ describe('PlatformAdapterManager', () => {
     })
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).not.toContain('gitlab')
+  })
+
+  it('skips built-in Feishu templates when config disables it', () => {
+    registerBuiltinPlatformAdapters({
+      config: {
+        feishu: {
+          enabled: false,
+        },
+      },
+    })
+
+    expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).not.toContain('feishu')
+    expect(RuntimePlatformAdapterRegistry.activeTemplateIds(['web-chat', 'browser-feishu', 'feishu-docx'])).toEqual(['web-chat'])
   })
 
   it('keeps the GitLab compatibility registration entry working', () => {

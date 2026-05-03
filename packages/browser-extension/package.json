@@ -15,6 +15,8 @@
     "vite": "^6.0.0"
   },
   "dependencies": {
-    "@nine1bot/platform-gitlab": "workspace:*"
+    "@nine1bot/platform-feishu": "workspace:*",
+    "@nine1bot/platform-gitlab": "workspace:*",
+    "@nine1bot/platform-protocol": "workspace:*"
   }
 }

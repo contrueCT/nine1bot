@@ -1,9 +1,11 @@
+import { feishuPlatformContribution } from '@nine1bot/platform-feishu/runtime'
 import { gitlabPlatformContribution } from '@nine1bot/platform-gitlab/runtime'
 import type { PlatformSecretAccess } from '@nine1bot/platform-protocol'
 import { PlatformAdapterManager, type PlatformManagerConfig } from './manager'
 
 export const builtinPlatformContributions = [
   gitlabPlatformContribution,
+  feishuPlatformContribution,
 ]
 
 let builtinPlatformManager: PlatformAdapterManager | undefined
