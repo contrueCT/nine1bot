@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, type TodoItem, questionApi, permissionApi, SessionBusyError, setApiDirectory } from '../api/client'
+import { api, type Session, type Message, type SSEEvent, type MessagePart, type QuestionRequest, type PermissionRequest, type TodoItem, type ContextEnrichmentSummary, questionApi, permissionApi, SessionBusyError, setApiDirectory } from '../api/client'
 import { collectActivePageContext } from '../api/page-context'
 import { useParallelSessions, MAX_PARALLEL_AGENTS } from './useParallelSessions'
 
@@ -66,6 +66,50 @@ export function useSession() {
 
   // 通知定时器追踪（用于清理）
   const notificationTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
+
+  function pushSessionNotification(input: {
+    sessionId: string
+    message: string
+    type?: 'success' | 'info'
+    ttlMs?: number
+  }) {
+    const session = sessions.value.find(s => s.id === input.sessionId) ?? currentSession.value
+    const notificationId = `${input.sessionId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    sessionNotifications.value.push({
+      id: notificationId,
+      sessionId: input.sessionId,
+      sessionTitle: session?.title || '会话',
+      message: input.message,
+      type: input.type ?? 'info'
+    })
+    const timerId = setTimeout(() => {
+      sessionNotifications.value = sessionNotifications.value.filter(n => n.id !== notificationId)
+      notificationTimers.delete(notificationId)
+    }, input.ttlMs ?? 5000)
+    notificationTimers.set(notificationId, timerId)
+  }
+
+  function showContextEnrichmentNotice(sessionId: string, summary?: ContextEnrichmentSummary) {
+    if (!summary || summary.platform !== 'feishu') return
+    if (summary.status === 'not_applicable') return
+    pushSessionNotification({
+      sessionId,
+      message: contextEnrichmentMessage(summary),
+      type: summary.status === 'loaded' ? 'success' : 'info',
+      ttlMs: summary.status === 'loaded' ? 3500 : 6000
+    })
+  }
+
+  function contextEnrichmentMessage(summary: ContextEnrichmentSummary) {
+    if (summary.status === 'loaded') return 'Feishu metadata loaded'
+    if (summary.status === 'visible_only') return 'Feishu visible context only'
+    if (summary.status === 'need_login') return 'Feishu metadata needs lark-cli login'
+    if (summary.status === 'need_config') return 'Feishu metadata needs lark-cli config'
+    if (summary.status === 'permission_denied') return 'Feishu metadata permission denied'
+    if (summary.status === 'timeout') return 'Feishu metadata lookup timed out'
+    if (summary.status === 'missing_cli') return 'lark-cli not found; using visible context'
+    return summary.message || 'Feishu metadata unavailable'
+  }
 
   // 外部事件处理器
   const externalEventHandlers: ((event: SSEEvent) => void)[] = []
@@ -300,7 +344,8 @@ export function useSession() {
           console.warn('Failed to collect active page context:', error)
           return undefined
         }))
-      await api.sendMessage(sessionId, content, files, pageContext)
+      const sendResult = await api.sendMessage(sessionId, content, files, pageContext)
+      showContextEnrichmentNotice(sessionId, sendResult.contextEnrichment)
     } catch (error: any) {
       // Ignore abort errors
       const errorMessage = error.message?.toLowerCase() || ''

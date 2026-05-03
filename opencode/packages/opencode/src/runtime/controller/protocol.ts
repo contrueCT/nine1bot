@@ -148,6 +148,16 @@ export namespace RuntimeControllerProtocol {
   })
   export type MessageSendRequest = z.infer<typeof MessageSendRequest>
 
+  export const ContextEnrichmentSummary = z
+    .object({
+      platform: z.string(),
+      status: z.string(),
+      message: z.string(),
+      tone: z.enum(["neutral", "success", "warning", "danger"]).optional(),
+    })
+    .passthrough()
+  export type ContextEnrichmentSummary = z.infer<typeof ContextEnrichmentSummary>
+
   export const MessageSendResponse = z.object({
     version: z.literal(VERSION),
     accepted: z.boolean(),
@@ -160,6 +170,7 @@ export namespace RuntimeControllerProtocol {
         label: z.string(),
       })
       .optional(),
+    contextEnrichment: ContextEnrichmentSummary.optional(),
   })
   export type MessageSendResponse = z.infer<typeof MessageSendResponse>
 

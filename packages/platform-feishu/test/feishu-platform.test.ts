@@ -6,7 +6,15 @@ import {
   feishuTemplateIdsForPage,
   parseFeishuUrl,
 } from '../src'
+import {
+  enrichFeishuPageContext,
+  getFeishuAuthStatus,
+  getFeishuCliVersion,
+  runFeishuCliJsonWithFile,
+  type FeishuCliRunner,
+} from '../src/node'
 import type { PlatformAdapterContext } from '@nine1bot/platform-protocol'
+import { join } from 'node:path'
 
 describe('Feishu platform adapter package', () => {
   test('parses Phase 1 Feishu URL routes', () => {
@@ -164,12 +172,262 @@ describe('Feishu platform adapter package', () => {
       },
     }
 
-    await expect(feishuPlatformContribution.getStatus?.(ctx)).resolves.toMatchObject({
-      status: 'missing',
-      cards: [
-        { id: 'cli', value: 'missing' },
-        { id: 'auth', value: 'unknown' },
-      ],
+    const status = await feishuPlatformContribution.getStatus?.(ctx)
+    expect(status).toMatchObject({ status: 'missing' })
+    expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'cli', value: 'missing' }))
+    expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'auth', value: 'unknown' }))
+    expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'context', value: 'auto' }))
+  })
+
+  test('uses verified lark-cli commands and parses auth states', async () => {
+    const runner: FeishuCliRunner = async (_command, args) => {
+      if (args[0] === '--version') {
+        return { exitCode: 0, stdout: 'lark-cli version 1.0.23\n', stderr: '' }
+      }
+      if (args.join(' ') === 'auth status') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            identity: 'user:ou_123',
+            tokenStatus: 'needs_refresh',
+            userName: 'Demo User',
+          }),
+          stderr: '',
+        }
+      }
+      return { exitCode: 1, stdout: '', stderr: 'unexpected command' }
+    }
+
+    await expect(getFeishuCliVersion({ cliPath: 'lark-cli', runner })).resolves.toMatchObject({
+      version: '1.0.23',
+    })
+    await expect(getFeishuAuthStatus({ cliPath: 'lark-cli', runner })).resolves.toMatchObject({
+      state: 'authenticated',
+      tokenStatus: 'needs_refresh',
+    })
+  })
+
+  test('passes JSON params through relative @file arguments', async () => {
+    const seen: Array<{ args: string[]; payload: unknown }> = []
+    const runner: FeishuCliRunner = async (_command, args, options) => {
+      const fileArg = args.find((arg) => arg.startsWith('@'))
+      const payload = fileArg && options.cwd
+        ? await Bun.file(join(options.cwd, fileArg.slice(1))).json()
+        : undefined
+      seen.push({ args, payload })
+      return { exitCode: 0, stdout: JSON.stringify({ code: 0, data: { node: { title: 'Wiki' } } }), stderr: '' }
+    }
+
+    await runFeishuCliJsonWithFile({
+      cliPath: 'lark-cli',
+      args: ['wiki', 'spaces', 'get_node'],
+      fileFlag: '--params',
+      fileName: 'params.json',
+      payload: { token: 'wikcn_token' },
+      timeoutMs: 2_000,
+      runner,
+    })
+
+    expect(seen[0]?.args).toEqual([
+      'wiki',
+      'spaces',
+      'get_node',
+      '--params',
+      '@params.json',
+      '--as',
+      'user',
+      '--format',
+      'json',
+    ])
+    expect(seen[0]?.payload).toEqual({ token: 'wikcn_token' })
+  })
+
+  test('enriches wiki pages with get_node metadata', async () => {
+    const calls: string[][] = []
+    const runner: FeishuCliRunner = async (_command, args) => {
+      calls.push(args)
+      if (args.join(' ') === 'auth status') {
+        return authOk()
+      }
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          code: 0,
+          data: {
+            node: {
+              title: 'Wiki Doc',
+              space_id: 'spc_123',
+              obj_type: 'docx',
+              obj_token: 'docx_token',
+              owner: { name: 'Owner' },
+              obj_create_time: 1710000000,
+              obj_edit_time: 1710000100,
+            },
+          },
+        }),
+        stderr: '',
+      }
+    }
+
+    const page = buildFeishuPageContextPayload({
+      url: 'https://gdut-topview.feishu.cn/wiki/GKw9w6TOliwkBXkqO8UcphiDnUg',
+      title: 'Visible Wiki Title',
+    })
+    const result = await enrichFeishuPageContext({
+      page,
+      settings: { cliPath: 'lark-cli' },
+      observedAt: 1000,
+      runner,
+    })
+
+    expect(calls[1]).toContain('--params')
+    expect(result.summary).toMatchObject({ status: 'loaded' })
+    expect(result.metadata).toMatchObject({
+      api: 'wiki.spaces.get_node',
+      title: 'Wiki Doc',
+      objType: 'docx',
+      objToken: 'docx_token',
+      objectKey: 'feishu:docx:docx_token',
+      spaceId: 'spc_123',
+    })
+    expect(result.page.raw?.feishu).toMatchObject({
+      enrichment: {
+        status: 'loaded',
+        resolvedObjType: 'docx',
+        resolvedObjToken: 'docx_token',
+      },
+    })
+    expect(result.blocks[0]?.id).toBe('page:feishu-metadata')
+    expect(result.blocks[0]?.content).toEqual(expect.stringContaining('Metadata API: wiki.spaces.get_node'))
+  })
+
+  test('maps direct Feishu pages to drive metas batch_query doc types', async () => {
+    const cases = [
+      ['https://gdut-topview.feishu.cn/docx/GeVqd0rdho2WbPxLCyWcXI8nnpg', 'docx'],
+      ['https://www.feishu.cn/sheets/shtcnI8QzfNsZk8B1RKJhtOEyHh', 'sheet'],
+      ['https://gdut-topview.feishu.cn/base/GOerbRw0LaPdCpsnfT1cMg39ntb?table=tbl&view=vew', 'bitable'],
+      ['https://gdut-topview.feishu.cn/slides/PKkosoB9RlwVFcdKj42cBRk2n3e', 'slides'],
+      ['https://gdut-topview.feishu.cn/drive/folder/WpF7fSL5PlZYUkdfxBqcQ6KJnSC', 'folder'],
+    ] as const
+
+    for (const [url, docType] of cases) {
+      let payload: any
+      const runner: FeishuCliRunner = async (_command, args, options) => {
+        if (args.join(' ') === 'auth status') return authOk()
+        const fileArg = args.find((arg) => arg.startsWith('@'))
+        payload = fileArg && options.cwd
+          ? await Bun.file(join(options.cwd, fileArg.slice(1))).json()
+          : undefined
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            code: 0,
+            data: {
+              metas: [{
+                title: `${docType} title`,
+                doc_type: docType,
+                doc_token: 'token_123',
+                url: 'https://example.feishu.cn/meta',
+                owner_id: 'ou_owner',
+                latest_modify_time: 1710000100,
+              }],
+            },
+          }),
+          stderr: '',
+        }
+      }
+      const result = await enrichFeishuPageContext({
+        page: buildFeishuPageContextPayload({ url, title: 'Visible' }),
+        settings: { cliPath: 'lark-cli' },
+        runner,
+      })
+
+      expect(payload.request_docs[0].doc_type).toBe(docType)
+      expect(result.summary).toMatchObject({ status: 'loaded' })
+      expect(result.metadata).toMatchObject({
+        api: 'drive.metas.batch_query',
+        objType: docType,
+        title: `${docType} title`,
+      })
+    }
+  })
+
+  test('degrades Feishu enrichment without secrets for missing CLI, login, permission, timeout, and visible-only', async () => {
+    const page = buildFeishuPageContextPayload({
+      url: 'https://gdut-topview.feishu.cn/docx/GeVqd0rdho2WbPxLCyWcXI8nnpg',
+      title: 'Docx',
+    })
+
+    await expect(enrichFeishuPageContext({
+      page,
+      settings: {},
+      env: { PATH: '' },
+    })).resolves.toMatchObject({
+      summary: { status: 'missing_cli' },
+      blocks: [{ id: 'page:feishu-metadata' }],
+    })
+
+    await expect(enrichFeishuPageContext({
+      page,
+      settings: { cliPath: 'lark-cli' },
+      runner: async () => ({ exitCode: 0, stdout: JSON.stringify({ tokenStatus: 'expired' }), stderr: '' }),
+    })).resolves.toMatchObject({
+      summary: { status: 'need_login' },
+    })
+
+    await expect(enrichFeishuPageContext({
+      page,
+      settings: { cliPath: 'lark-cli' },
+      runner: async (_command, args) => {
+        if (args.join(' ') === 'auth status') return authOk()
+        return { exitCode: 1, stdout: '', stderr: JSON.stringify({ error: { code: 99991663, message: 'Permission denied' } }) }
+      },
+    })).resolves.toMatchObject({
+      summary: { status: 'permission_denied' },
+    })
+
+    await expect(enrichFeishuPageContext({
+      page,
+      settings: { cliPath: 'lark-cli' },
+      runner: async (_command, args) => {
+        if (args.join(' ') === 'auth status') return authOk()
+        return { exitCode: null, stdout: '', stderr: '', timedOut: true }
+      },
+    })).resolves.toMatchObject({
+      summary: { status: 'timeout' },
+    })
+
+    const visibleOnlyRunner: FeishuCliRunner = async () => {
+      throw new Error('CLI should not run')
+    }
+    await expect(enrichFeishuPageContext({
+      page,
+      settings: { cliPath: 'lark-cli', contextEnrichment: 'visible-only' },
+      runner: visibleOnlyRunner,
+    })).resolves.toMatchObject({
+      summary: { status: 'visible_only' },
+      blocks: [],
+    })
+
+    await expect(enrichFeishuPageContext({
+      page,
+      settings: { cliPath: 'lark-cli', contextEnrichment: 'disabled' },
+      runner: visibleOnlyRunner,
+    })).resolves.toMatchObject({
+      summary: { status: 'not_applicable' },
+      blocks: [],
+      page,
     })
   })
 })
+
+function authOk() {
+  return {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      identity: 'user:ou_123',
+      tokenStatus: 'valid',
+    }),
+    stderr: '',
+  }
+}

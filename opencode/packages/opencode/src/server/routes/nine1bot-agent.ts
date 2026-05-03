@@ -26,6 +26,7 @@ import { NamedError } from "@opencode-ai/util/error"
 import { Provider } from "@/provider/provider"
 import { Storage } from "@/storage/storage"
 import { ulid } from "ulid"
+import { prepareFeishuControllerMessageContext } from "../../../../../../packages/nine1bot/src/platform/feishu-context"
 
 const log = Log.create({ service: "server.nine1bot-agent" })
 
@@ -272,8 +273,14 @@ async function compileControllerPrompt(input: {
 export async function sendControllerMessage(sessionID: string, body: RuntimeControllerProtocol.MessageSendRequest) {
   const turnSnapshotId = ulid()
   let prompt: SessionPrompt.PromptInput
+  let preparedBody = body
+  let contextEnrichment: RuntimeControllerProtocol.ContextEnrichmentSummary | undefined
   try {
-    prompt = await compileControllerPrompt({ sessionID, body, turnSnapshotId })
+    SessionPrompt.assertNotBusy(sessionID)
+    const prepared = await prepareFeishuControllerMessageContext(body)
+    preparedBody = prepared.body
+    contextEnrichment = prepared.contextEnrichment
+    prompt = await compileControllerPrompt({ sessionID, body: preparedBody, turnSnapshotId })
   } catch (error) {
     if (error instanceof Session.BusyError) {
       return {
@@ -284,7 +291,7 @@ export async function sendControllerMessage(sessionID: string, body: RuntimeCont
           turnSnapshotId,
           busy: true,
           fallbackAction:
-            body.clientCapabilities?.continueInWeb === false
+            preparedBody.clientCapabilities?.continueInWeb === false
               ? undefined
               : {
                   type: "continue-in-web" as const,
@@ -325,7 +332,7 @@ export async function sendControllerMessage(sessionID: string, body: RuntimeCont
           turnSnapshotId,
           busy: true,
           fallbackAction:
-            body.clientCapabilities?.continueInWeb === false
+            preparedBody.clientCapabilities?.continueInWeb === false
               ? undefined
               : {
                   type: "continue-in-web" as const,
@@ -344,6 +351,7 @@ export async function sendControllerMessage(sessionID: string, body: RuntimeCont
       accepted: true,
       sessionId: sessionID,
       turnSnapshotId,
+      contextEnrichment,
     },
     status: 202,
   }

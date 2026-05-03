@@ -1,6 +1,3 @@
-import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { delimiter, isAbsolute, join } from 'node:path'
 import {
   asRecord,
   feishuTemplateIdsForPage,
@@ -8,6 +5,12 @@ import {
   normalizeFeishuPagePayload,
   parseFeishuUrl,
 } from './shared'
+import {
+  getFeishuAuthStatus,
+  getFeishuCliVersion,
+  resolveFeishuCliPath,
+} from './cli'
+import { readFeishuContextEnrichmentSettings } from './enrichment'
 import type {
   PlatformAdapterContext,
   PlatformAdapterContribution,
@@ -64,6 +67,19 @@ export const feishuPlatformDescriptor = {
             label: 'lark-cli path',
             description: 'Optional explicit path to lark-cli. Leave empty to search PATH.',
           },
+          {
+            key: 'contextEnrichment',
+            type: 'select',
+            label: 'Context enrichment',
+            description: 'Controls read-only Feishu metadata enrichment for browser side panel messages.',
+            options: ['auto', 'visible-only', 'disabled'],
+          },
+          {
+            key: 'metadataTimeoutMs',
+            type: 'number',
+            label: 'Metadata timeout',
+            description: 'Timeout in milliseconds for read-only metadata lookups. Default: 2000.',
+          },
         ],
       },
     ],
@@ -113,7 +129,8 @@ export { feishuTemplateIdsForPage, normalizeFeishuPagePayload, parseFeishuUrl }
 async function getFeishuStatus(ctx: PlatformAdapterContext): Promise<PlatformRuntimeStatus> {
   const settings = asRecord(ctx.settings)
   const cliPathSetting = stringValue(settings?.cliPath)
-  const cliPath = findCliPath(cliPathSetting, ctx.env)
+  const cliPath = resolveFeishuCliPath(cliPathSetting, ctx.env)
+  const enrichmentSettings = readFeishuContextEnrichmentSettings(ctx.settings)
   const checkedAt = new Date().toISOString()
 
   if (!cliPath) {
@@ -123,6 +140,7 @@ async function getFeishuStatus(ctx: PlatformAdapterContext): Promise<PlatformRun
       cards: [
         { id: 'cli', label: 'CLI', value: 'missing', tone: 'danger' },
         { id: 'auth', label: 'Auth', value: 'unknown', tone: 'neutral' },
+        { id: 'context', label: 'Context', value: enrichmentSettings.contextEnrichment, tone: 'neutral' },
       ],
       recentEvents: [{
         id: `feishu-cli-missing-${Date.now()}`,
@@ -134,11 +152,18 @@ async function getFeishuStatus(ctx: PlatformAdapterContext): Promise<PlatformRun
     }
   }
 
-  const version = await runCli(cliPath, ['version'], ctx.env, 2_000)
-  const versionText = parseVersion(version.stdout) ?? 'unknown'
-  const auth = await runCli(cliPath, ['auth', 'status'], ctx.env, 3_000)
-  const parsedAuth = parseAuthStatus(auth.stdout || auth.stderr)
-  const authState = authStateFrom(parsedAuth, auth)
+  const version = await getFeishuCliVersion({
+    cliPath,
+    env: ctx.env,
+    timeoutMs: 2_000,
+  })
+  const versionText = version.version ?? 'unknown'
+  const auth = await getFeishuAuthStatus({
+    cliPath,
+    env: ctx.env,
+    timeoutMs: 3_000,
+  })
+  const authState = auth.state
 
   const status = authState === 'authenticated'
     ? 'available'
@@ -155,7 +180,8 @@ async function getFeishuStatus(ctx: PlatformAdapterContext): Promise<PlatformRun
         : 'lark-cli is available, but auth status could not be parsed.',
     cards: [
       { id: 'cli', label: 'CLI', value: `found · ${versionText}`, tone: version.exitCode === 0 ? 'success' : 'warning' },
-      { id: 'auth', label: 'Auth', value: authCardValue(parsedAuth, authState), tone: authTone(authState) },
+      { id: 'auth', label: 'Auth', value: authCardValue(auth, authState), tone: authTone(authState) },
+      { id: 'context', label: 'Context', value: enrichmentSettings.contextEnrichment, tone: contextTone(enrichmentSettings.contextEnrichment) },
     ],
     recentEvents: [{
       id: `feishu-status-${Date.now()}`,
@@ -166,7 +192,7 @@ async function getFeishuStatus(ctx: PlatformAdapterContext): Promise<PlatformRun
       data: {
         cliPath,
         version: versionText,
-        authExitCode: auth.exitCode,
+        authExitCode: auth.result.exitCode,
       },
     }],
   }
@@ -312,107 +338,29 @@ function emptyResources(enabledGroups: string[]): PlatformResourceContribution {
   }
 }
 
-function findCliPath(cliPathSetting: string | undefined, env: Record<string, string | undefined>): string | undefined {
-  if (cliPathSetting) {
-    if (hasPathSeparator(cliPathSetting) || isAbsolute(cliPathSetting)) return existsSync(cliPathSetting) ? cliPathSetting : undefined
-    return cliPathSetting
-  }
-
-  const pathValue = env.PATH ?? env.Path ?? env.path ?? process.env.PATH
-  if (!pathValue) return undefined
-  const names = process.platform === 'win32'
-    ? ['lark-cli.cmd', 'lark-cli.exe', 'lark-cli']
-    : ['lark-cli']
-  for (const directory of pathValue.split(delimiter)) {
-    if (!directory) continue
-    for (const name of names) {
-      const candidate = join(directory, name)
-      if (existsSync(candidate)) return candidate
-    }
-  }
-  return undefined
-}
-
-function runCli(command: string, args: string[], env: Record<string, string | undefined>, timeoutMs: number): Promise<{
-  exitCode: number | null
-  stdout: string
-  stderr: string
-}> {
-  return new Promise((resolve) => {
-    execFile(command, args, {
-      env: {
-        ...process.env,
-        ...env,
-      },
-      timeout: timeoutMs,
-      windowsHide: true,
-      shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(command),
-    }, (error, stdout, stderr) => {
-      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
-      const exitCode = typeof code === 'number' ? code : error ? 1 : 0
-      resolve({
-        exitCode,
-        stdout: String(stdout ?? ''),
-        stderr: String(stderr ?? ''),
-      })
-    })
-  })
-}
-
-function parseVersion(stdout: string): string | undefined {
-  const firstLine = stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean)
-  if (!firstLine) return undefined
-  const match = firstLine.match(/(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/)
-  return match?.[1] ?? firstLine
-}
-
-function parseAuthStatus(output: string): Record<string, unknown> | undefined {
-  const trimmed = output.trim()
-  if (!trimmed) return undefined
-  try {
-    return JSON.parse(trimmed) as Record<string, unknown>
-  } catch {
-    const start = trimmed.indexOf('{')
-    const end = trimmed.lastIndexOf('}')
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>
-      } catch {}
-    }
-    return undefined
-  }
-}
-
-function authStateFrom(parsed: Record<string, unknown> | undefined, result: { exitCode: number | null; stdout: string; stderr: string }) {
-  const tokenStatus = stringValue(parsed?.tokenStatus)?.toLowerCase()
-  const identity = stringValue(parsed?.identity)
-  if (result.exitCode === 0 && tokenStatus === 'valid' && identity) return 'authenticated'
-  if (tokenStatus === 'expired' || tokenStatus === 'invalid') return 'auth-required'
-  const output = `${result.stdout}\n${result.stderr}`.toLowerCase()
-  if (output.includes('login') || output.includes('auth') || output.includes('config') || output.includes('unauthorized')) return 'auth-required'
-  return 'unknown'
-}
-
-function authCardValue(parsed: Record<string, unknown> | undefined, authState: string) {
+function authCardValue(auth: { identity?: string; tokenStatus?: string }, authState: string) {
   if (authState === 'authenticated') {
-    return [stringValue(parsed?.identity), stringValue(parsed?.tokenStatus)].filter(Boolean).join(' · ') || 'authenticated'
+    return [auth.identity, auth.tokenStatus].filter(Boolean).join(' · ') || 'authenticated'
   }
-  if (authState === 'auth-required') return 'required'
+  if (authState === 'need_config') return 'configuration required'
+  if (authState === 'need_login') return 'login required'
   return 'unknown'
 }
 
 function authTone(authState: string) {
   if (authState === 'authenticated') return 'success' as const
-  if (authState === 'auth-required') return 'warning' as const
+  if (authState === 'need_config' || authState === 'need_login') return 'warning' as const
+  return 'neutral' as const
+}
+
+function contextTone(mode: string) {
+  if (mode === 'auto') return 'success' as const
+  if (mode === 'visible-only') return 'warning' as const
   return 'neutral' as const
 }
 
 function pageKeyFor(page: PageContextPayload) {
   return [page.platform, page.pageType || 'page', page.objectKey || page.url || page.title || 'unknown'].join(':')
-}
-
-function hasPathSeparator(input: string) {
-  return input.includes('/') || input.includes('\\')
 }
 
 function stringValue(input: unknown): string | undefined {

@@ -74,7 +74,6 @@ describe('Controller message page context', () => {
         source: 'browser-extension',
         platform: 'gitlab',
         mode: 'browser-sidepanel',
-        templateIds: ['default-user-template', 'browser-generic', 'browser-gitlab', 'gitlab-mr'],
       },
       context: {
         page,
@@ -84,6 +83,7 @@ describe('Controller message page context', () => {
         selectionContext: true,
       },
     })
+    expect(calls[0]?.body.entry.templateIds).toBeUndefined()
   })
 
   it('keeps standalone Web messages free of page context', async () => {
@@ -126,12 +126,59 @@ describe('Controller message page context', () => {
         source: 'browser-extension',
         platform: 'gitlab',
         mode: 'browser-sidepanel',
-        templateIds: ['default-user-template', 'browser-generic', 'browser-gitlab', 'gitlab-issue'],
       },
       clientCapabilities: {
         pageContext: true,
         selectionContext: false,
       },
+    })
+    expect(calls[0]?.body.entry.templateIds).toBeUndefined()
+  })
+
+  it('returns Feishu context enrichment summaries from message send', async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined
+      calls.push({
+        url,
+        method: init?.method || 'GET',
+        body,
+      })
+      return jsonResponse({
+        accepted: true,
+        sessionId: 'ses_1',
+        turnSnapshotId: 'turn_1',
+        contextEnrichment: {
+          platform: 'feishu',
+          status: 'need_login',
+          message: 'lark-cli needs Feishu login before metadata can be loaded.',
+          tone: 'warning',
+        },
+      })
+    }) as typeof fetch
+    const page: RequestPagePayload = {
+      platform: 'feishu',
+      url: 'https://gdut-topview.feishu.cn/wiki/GKw9w6TOliwkBXkqO8UcphiDnUg',
+      title: 'Wiki Doc',
+      pageType: 'feishu-wiki',
+      objectKey: 'feishu:wiki:GKw9w6TOliwkBXkqO8UcphiDnUg',
+    }
+
+    const result = await api.sendMessage('ses_1', 'hello', undefined, page)
+
+    expect(result.contextEnrichment).toMatchObject({
+      platform: 'feishu',
+      status: 'need_login',
+    })
+    expect(calls[0]?.body.entry).toEqual({
+      source: 'browser-extension',
+      platform: 'feishu',
+      mode: 'browser-sidepanel',
     })
   })
 })
