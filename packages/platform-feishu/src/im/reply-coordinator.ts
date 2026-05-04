@@ -33,6 +33,8 @@ export function createFeishuIMReplySinkFactory(
     replyMode: options.config.policy.replyMode,
     presentation: options.config.policy.replyPresentation,
     timeoutMs: options.config.policy.replyTimeoutMs,
+    streamingCardUpdateMs: options.config.policy.streamingCardUpdateMs,
+    streamingCardMaxChars: options.config.policy.streamingCardMaxChars,
     rootMessageId: input.rootMessageId,
     continueUrl: options.continueUrlForSession?.(input.binding.sessionId),
   })

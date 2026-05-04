@@ -13,6 +13,7 @@ export type FeishuCardActionType =
   | 'control.showCwd'
   | 'control.openWeb'
   | 'control.help'
+  | 'turn.abort'
 
 export type FeishuCardActionPayload = {
   v: 1
@@ -248,6 +249,7 @@ function actionType(input: unknown): FeishuCardActionType | undefined {
     'control.showCwd',
     'control.openWeb',
     'control.help',
+    'turn.abort',
   ].includes(input)
     ? input as FeishuCardActionType
     : undefined

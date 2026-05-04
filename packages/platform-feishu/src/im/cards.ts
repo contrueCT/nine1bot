@@ -22,6 +22,11 @@ export type FeishuTurnCardInput = {
   resourceFailure?: string
 }
 
+export type FeishuStreamingTurnCardInput = FeishuTurnCardInput & {
+  accountId: string
+  maxChars: number
+}
+
 export type FeishuInteractionCardInput = {
   accountId: string
   routeKey: FeishuIMRouteKey
@@ -53,6 +58,44 @@ export function renderFeishuTurnCard(input: FeishuTurnCardInput): FeishuIMCard {
       ].filter(Boolean).join('\n')),
       ...(input.continueUrl ? [actions([linkButton('Web 打开', input.continueUrl)])] : []),
     ],
+  })
+}
+
+export function renderFeishuStreamingTurnCard(input: FeishuStreamingTurnCardInput): FeishuIMCard {
+  const statusText = {
+    running: '生成中',
+    final: '已完成',
+    error: '失败',
+    timeout: '超时',
+  }[input.status]
+  const content = trimStreamingContent(input.content, input.maxChars)
+  const context = cardContext(input.accountId, input.routeKey, {
+    sessionId: input.sessionId,
+    turnSnapshotId: input.turnSnapshotId,
+  })
+  const actionItems = [
+    input.status === 'running' && input.sessionId
+      ? actionButton('停止', 'turn.abort', context, { type: 'danger' })
+      : undefined,
+    input.continueUrl ? linkButton(input.status === 'running' ? 'Web 继续' : 'Web 打开', input.continueUrl) : undefined,
+  ].filter(Boolean)
+  return card({
+    title: input.title ?? 'Nine1Bot 正在回复',
+    template: input.status === 'final' ? 'green' : input.status === 'running' ? 'blue' : 'red',
+    elements: [
+      markdown([
+        `**状态**：${statusText}`,
+        `**Session**：${input.sessionId ?? 'unknown'}`,
+        `**Route**：${serializeFeishuRouteKey(input.routeKey)}`,
+      ].join('\n')),
+      markdown(content.text || '正在等待 Agent 输出...'),
+      content.truncated
+        ? markdown('内容较长，已在飞书卡片中截断。可以在 Web 端查看完整输出。')
+        : undefined,
+      input.error ? markdown(`**错误**：${input.error}`) : undefined,
+      input.resourceFailure ? markdown(`**资源提示**：${input.resourceFailure}`) : undefined,
+      actionItems.length > 0 ? actions(actionItems) : undefined,
+    ].filter(Boolean),
   })
 }
 
@@ -207,6 +250,8 @@ function renderControlSummary(result: FeishuIMControlResult, routeKey?: FeishuIM
       return `命令失败：${result.message}`
     case 'help':
       return ['可用命令：', ...result.commands.map((command) => `- ${command}`)].join('\n')
+    case 'turn-aborted':
+      return result.message
   }
 }
 
@@ -303,4 +348,13 @@ function arrayString(input: unknown): string[] {
   return Array.isArray(input)
     ? input.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     : []
+}
+
+function trimStreamingContent(input: string | undefined, maxChars: number): { text: string; truncated: boolean } {
+  const text = input?.trim() ?? ''
+  if (!text || text.length <= maxChars) return { text, truncated: false }
+  return {
+    text: `${text.slice(0, maxChars).trimEnd()}\n\n...`,
+    truncated: true,
+  }
 }

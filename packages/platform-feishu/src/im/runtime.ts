@@ -147,6 +147,12 @@ function cardsFromConfig(config: FeishuIMNormalizedConfig, phase: string): Platf
       tone: 'neutral',
     },
     {
+      id: 'im-streaming-card',
+      label: 'Streaming card',
+      value: `${config.policy.streamingCardUpdateMs}ms / max ${config.policy.streamingCardMaxChars} chars`,
+      tone: config.policy.replyPresentation === 'streaming-card' || config.policy.replyPresentation === 'auto' ? 'success' : 'neutral',
+    },
+    {
       id: 'im-active-sinks',
       label: 'Reply sinks',
       value: String(reply.activeSinks),
@@ -169,6 +175,24 @@ function cardsFromConfig(config: FeishuIMNormalizedConfig, phase: string): Platf
       label: 'Interactions',
       value: String(reply.pendingInteractions),
       tone: reply.pendingInteractions > 0 ? 'warning' : 'neutral',
+    },
+    {
+      id: 'im-active-streaming-cards',
+      label: 'Streaming cards',
+      value: String(reply.activeStreamingCards),
+      tone: reply.activeStreamingCards > 0 ? 'success' : 'neutral',
+    },
+    {
+      id: 'im-card-update-failures',
+      label: 'Card failures',
+      value: String(reply.cardUpdateFailures),
+      tone: reply.cardUpdateFailures > 0 ? 'danger' : 'neutral',
+    },
+    {
+      id: 'im-last-card-update-error',
+      label: 'Card update error',
+      value: reply.lastCardUpdateError ?? 'none',
+      tone: reply.lastCardUpdateError ? 'danger' : 'neutral',
     },
     {
       id: 'im-last-reply-error',
@@ -208,8 +232,11 @@ function snapshotFrom(
     legacyActive: config.legacy.enabled,
     activeReplySinks: reply.activeSinks,
     pendingInteractions: reply.pendingInteractions,
+    activeStreamingCards: reply.activeStreamingCards,
+    cardUpdateFailures: reply.cardUpdateFailures,
     lastReplyError: reply.lastReplyError,
     lastCardAction: reply.lastCardAction,
+    lastCardUpdateError: reply.lastCardUpdateError,
     updatedAt: new Date().toISOString(),
   }
 }

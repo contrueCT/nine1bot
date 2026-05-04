@@ -240,9 +240,11 @@ describe('Feishu platform adapter package', () => {
     const imSection = feishuPlatformContribution.descriptor.config?.sections.find((section) => section.id === 'im')
     expect(imSection?.fields.map((field) => field.key)).toContain('imReplyPresentation')
     expect(imSection?.fields.map((field) => field.key)).toContain('imReplyTimeoutMs')
+    expect(imSection?.fields.map((field) => field.key)).toContain('imStreamingCardUpdateMs')
+    expect(imSection?.fields.map((field) => field.key)).toContain('imStreamingCardMaxChars')
     expect(imSection?.fields.find((field) => field.key === 'imReplyPresentation')).toMatchObject({
       type: 'select',
-      options: ['auto', 'text', 'card'],
+      options: ['auto', 'text', 'card', 'streaming-card'],
     })
   })
 

@@ -66,6 +66,8 @@ describe('Feishu IM skeleton', () => {
       groupPolicy: 'mention-only',
       replyPresentation: 'auto',
       replyTimeoutMs: 600_000,
+      streamingCardUpdateMs: 1_000,
+      streamingCardMaxChars: 6_000,
     })
 
     expect(validateFeishuIMConfig({
@@ -102,19 +104,27 @@ describe('Feishu IM skeleton', () => {
       imDefaultAppSecret: secretRef,
       imReplyPresentation: 'streaming-card',
       imReplyTimeoutMs: 12_000,
+      imStreamingCardUpdateMs: 800,
+      imStreamingCardMaxChars: 2000,
     }).policy).toMatchObject({
-      replyPresentation: 'card',
+      replyPresentation: 'streaming-card',
       replyTimeoutMs: 12_000,
+      streamingCardUpdateMs: 800,
+      streamingCardMaxChars: 2000,
     })
 
     expect(validateFeishuIMConfig({
       imReplyPresentation: 'unknown',
       imReplyTimeoutMs: 0,
+      imStreamingCardUpdateMs: 0,
+      imStreamingCardMaxChars: 0,
     })).toMatchObject({
       ok: false,
       fieldErrors: {
         imReplyPresentation: expect.stringContaining('auto'),
         imReplyTimeoutMs: expect.stringContaining('positive'),
+        imStreamingCardUpdateMs: expect.stringContaining('positive'),
+        imStreamingCardMaxChars: expect.stringContaining('positive'),
       },
     })
   })

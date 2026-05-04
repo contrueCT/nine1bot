@@ -4,8 +4,11 @@ export type FeishuIMReplyRuntimeSummary = {
   activeTurns: number
   pendingBuffers: number
   bufferedMessages: number
+  activeStreamingCards: number
+  cardUpdateFailures: number
   lastReplyError?: string
   lastCardAction?: string
+  lastCardUpdateError?: string
 }
 
 const summary: FeishuIMReplyRuntimeSummary = {
@@ -14,6 +17,8 @@ const summary: FeishuIMReplyRuntimeSummary = {
   activeTurns: 0,
   pendingBuffers: 0,
   bufferedMessages: 0,
+  activeStreamingCards: 0,
+  cardUpdateFailures: 0,
 }
 
 export function getFeishuIMReplyRuntimeSummary(): FeishuIMReplyRuntimeSummary {
@@ -26,8 +31,11 @@ export function clearFeishuIMReplyRuntimeSummaryForTesting() {
   summary.activeTurns = 0
   summary.pendingBuffers = 0
   summary.bufferedMessages = 0
+  summary.activeStreamingCards = 0
+  summary.cardUpdateFailures = 0
   summary.lastReplyError = undefined
   summary.lastCardAction = undefined
+  summary.lastCardUpdateError = undefined
 }
 
 export function incrementFeishuIMActiveReplySinks() {
@@ -46,8 +54,22 @@ export function decrementFeishuIMPendingInteractions() {
   summary.pendingInteractions = Math.max(0, summary.pendingInteractions - 1)
 }
 
+export function incrementFeishuIMActiveStreamingCards() {
+  summary.activeStreamingCards += 1
+}
+
+export function decrementFeishuIMActiveStreamingCards() {
+  summary.activeStreamingCards = Math.max(0, summary.activeStreamingCards - 1)
+}
+
 export function recordFeishuIMReplyError(error: unknown) {
   summary.lastReplyError = error instanceof Error ? error.message : String(error)
+}
+
+export function recordFeishuIMCardUpdateFailure(error: unknown) {
+  summary.cardUpdateFailures += 1
+  summary.lastCardUpdateError = error instanceof Error ? error.message : String(error)
+  recordFeishuIMReplyError(error)
 }
 
 export function recordFeishuIMCardAction(action: string) {

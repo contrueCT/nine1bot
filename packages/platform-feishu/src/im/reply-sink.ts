@@ -7,6 +7,7 @@ import {
   renderFeishuInteractionAnsweredCard,
   renderFeishuPermissionCard,
   renderFeishuQuestionCard,
+  renderFeishuStreamingTurnCard,
   renderFeishuTurnCard,
 } from './cards'
 import type { FeishuIMRouteKey } from './route'
@@ -19,9 +20,12 @@ import {
 import type { FeishuIMReplyPresentation } from './types'
 import {
   decrementFeishuIMActiveReplySinks,
+  decrementFeishuIMActiveStreamingCards,
   decrementFeishuIMPendingInteractions,
   incrementFeishuIMActiveReplySinks,
+  incrementFeishuIMActiveStreamingCards,
   incrementFeishuIMPendingInteractions,
+  recordFeishuIMCardUpdateFailure,
   recordFeishuIMReplyError,
 } from './reply-telemetry'
 
@@ -35,6 +39,8 @@ export type FeishuReplySinkOptions = {
   replyMode: FeishuIMReplyDelivery['replyTarget']
   presentation: FeishuIMReplyPresentation
   timeoutMs: number
+  streamingCardUpdateMs?: number
+  streamingCardMaxChars?: number
   rootMessageId?: string
   continueUrl?: string
   onDone?: (result: FeishuReplySinkDoneResult) => void | Promise<void>
@@ -66,6 +72,12 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
   private pendingEvents: FeishuRuntimeEventEnvelope[] = []
   private sentCard?: FeishuIMSentMessage
   private textBuffer = ''
+  private streamingUpdateTimer?: ReturnType<typeof setTimeout>
+  private streamingDirty = false
+  private streamingFallbackSent = false
+  private streamingTelemetryActive = false
+  private resourceFailure?: string
+  private errorMessage?: string
   private readonly partTextLengths = new Map<string, number>()
   private readonly pendingInteractions = new Set<string>()
 
@@ -86,6 +98,9 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
       },
     })
     incrementFeishuIMActiveReplySinks()
+    if (this.presentation() === 'streaming-card') {
+      this.activateStreamingTelemetry()
+    }
     if (this.options.turnSnapshotId !== undefined) {
       await this.bindTurnSnapshotId(this.options.turnSnapshotId)
     }
@@ -98,6 +113,8 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     this.startTimeout()
     if (this.presentation() === 'card') {
       await this.upsertTurnCard('running')
+    } else if (this.presentation() === 'streaming-card') {
+      await this.flushStreamingCard('running')
     }
     const pending = this.pendingEvents
     this.pendingEvents = []
@@ -154,11 +171,13 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     this.subscription = undefined
     if (this.timeout) clearTimeout(this.timeout)
     this.timeout = undefined
+    this.clearStreamingUpdateTimer()
     for (const _id of this.pendingInteractions) {
       decrementFeishuIMPendingInteractions()
     }
     this.pendingInteractions.clear()
     decrementFeishuIMActiveReplySinks()
+    this.deactivateStreamingTelemetry()
     this.resolveDoneOnce({ status: this.completed ? 'final' : 'stopped' })
   }
 
@@ -171,6 +190,10 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
         ...this.delivery(),
         text,
       })
+      return
+    }
+    if (this.presentation() === 'streaming-card') {
+      this.scheduleStreamingCardUpdate()
       return
     }
     await this.upsertTurnCard('running')
@@ -239,6 +262,11 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
       })
       return
     }
+    this.resourceFailure = message
+    if (this.presentation() === 'streaming-card') {
+      await this.flushStreamingCard('running')
+      return
+    }
     await this.upsertTurnCard('running', { resourceFailure: message })
   }
 
@@ -247,9 +275,12 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     this.completed = true
     if (this.timeout) clearTimeout(this.timeout)
     this.timeout = undefined
+    this.clearStreamingUpdateTimer()
     if (status === 'final') {
       if (this.presentation() === 'card') {
         await this.upsertTurnCard('final')
+      } else if (this.presentation() === 'streaming-card') {
+        await this.flushStreamingCard('final')
       } else if (!this.textBuffer.trim()) {
         await this.options.client.sendText({
           ...this.delivery(),
@@ -258,8 +289,11 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
       }
     } else if (status === 'error' || status === 'timeout') {
       const text = message ?? (status === 'timeout' ? '飞书回复等待超时，请在 Web 端继续。' : '处理失败。')
+      this.errorMessage = text
       if (this.presentation() === 'card') {
         await this.upsertTurnCard(status, { error: text })
+      } else if (this.presentation() === 'streaming-card') {
+        await this.flushStreamingCard(status)
       } else {
         await this.options.client.sendText({
           ...this.delivery(),
@@ -275,6 +309,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     this.subscription?.stop()
     this.subscription = undefined
     decrementFeishuIMActiveReplySinks()
+    this.deactivateStreamingTelemetry()
     const result = { status, message } satisfies FeishuReplySinkDoneResult
     await this.options.onDone?.(result)
     this.resolveDoneOnce(result)
@@ -309,6 +344,80 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     })
   }
 
+  private scheduleStreamingCardUpdate() {
+    this.streamingDirty = true
+    if (this.streamingUpdateTimer || this.completed || this.stopped) return
+    this.streamingUpdateTimer = setTimeout(() => {
+      this.streamingUpdateTimer = undefined
+      if (!this.streamingDirty || this.completed || this.stopped) return
+      this.streamingDirty = false
+      this.upsertStreamingTurnCard('running').catch((error) => {
+        recordFeishuIMCardUpdateFailure(error)
+      })
+    }, this.streamingUpdateMs())
+    this.streamingUpdateTimer.unref?.()
+  }
+
+  private async flushStreamingCard(status: FeishuTurnCardStatus) {
+    this.clearStreamingUpdateTimer()
+    this.streamingDirty = false
+    await this.upsertStreamingTurnCard(status)
+  }
+
+  private clearStreamingUpdateTimer() {
+    if (this.streamingUpdateTimer) clearTimeout(this.streamingUpdateTimer)
+    this.streamingUpdateTimer = undefined
+  }
+
+  private async upsertStreamingTurnCard(status: FeishuTurnCardStatus) {
+    const card = renderFeishuStreamingTurnCard({
+      accountId: this.options.accountId,
+      status,
+      routeKey: this.options.routeKey,
+      sessionId: this.options.sessionId,
+      turnSnapshotId: this.options.turnSnapshotId,
+      continueUrl: this.options.continueUrl,
+      content: this.textBuffer.trim() || undefined,
+      error: this.errorMessage,
+      resourceFailure: this.resourceFailure,
+      maxChars: this.options.streamingCardMaxChars ?? 6_000,
+    })
+    await this.tryStreamingCardOperation(async () => {
+      if (!this.sentCard?.messageId && !this.sentCard?.cardId) {
+        this.sentCard = await this.options.client.sendCard({
+          ...this.delivery(),
+          card,
+        })
+        return
+      }
+      this.sentCard = await this.options.client.updateCard({
+        messageId: this.sentCard.messageId,
+        cardId: this.sentCard.cardId,
+        card,
+      })
+    })
+  }
+
+  private async tryStreamingCardOperation(operation: () => Promise<void>) {
+    try {
+      await operation()
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error))
+      recordFeishuIMCardUpdateFailure(normalized)
+      await this.options.onError?.(normalized)
+      if (this.streamingFallbackSent) return
+      this.streamingFallbackSent = true
+      try {
+        await this.options.client.sendText({
+          ...this.delivery(),
+          text: '飞书流式卡片更新失败，可以在 Web 端继续查看。',
+        })
+      } catch (fallbackError) {
+        recordFeishuIMCardUpdateFailure(fallbackError)
+      }
+    }
+  }
+
   private startTimeout() {
     if (this.timeout || this.options.timeoutMs <= 0) return
     this.timeout = setTimeout(() => {
@@ -319,8 +428,12 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
   }
 
   private presentation(): FeishuIMResolvedPresentation {
-    if (this.options.presentation === 'text' || this.options.presentation === 'card') return this.options.presentation
-    return this.options.routeKey.kind === 'dm' ? 'text' : 'card'
+    if (this.options.presentation === 'text' || this.options.presentation === 'card' || this.options.presentation === 'streaming-card') return this.options.presentation
+    return this.options.routeKey.kind === 'dm' ? 'text' : 'streaming-card'
+  }
+
+  private streamingUpdateMs(): number {
+    return Math.max(1, this.options.streamingCardUpdateMs ?? 1_000)
   }
 
   private delivery(): FeishuIMReplyDelivery {
@@ -353,6 +466,18 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     const resolve = this.resolveDone
     this.resolveDone = () => undefined
     resolve(result)
+  }
+
+  private activateStreamingTelemetry() {
+    if (this.streamingTelemetryActive) return
+    this.streamingTelemetryActive = true
+    incrementFeishuIMActiveStreamingCards()
+  }
+
+  private deactivateStreamingTelemetry() {
+    if (!this.streamingTelemetryActive) return
+    this.streamingTelemetryActive = false
+    decrementFeishuIMActiveStreamingCards()
   }
 }
 

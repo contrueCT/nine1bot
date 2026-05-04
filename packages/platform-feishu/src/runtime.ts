@@ -174,14 +174,26 @@ export const feishuPlatformDescriptor = {
             key: 'imReplyPresentation',
             type: 'select',
             label: 'Reply presentation',
-            description: 'How agent output is rendered in Feishu. Auto uses text for DM and cards for groups or threads.',
-            options: ['auto', 'text', 'card'],
+            description: 'How agent output is rendered in Feishu. Auto uses text for DM and streaming cards for groups or threads.',
+            options: ['auto', 'text', 'card', 'streaming-card'],
           },
           {
             key: 'imReplyTimeoutMs',
             type: 'number',
             label: 'Reply timeout',
             description: 'Milliseconds before an active IM reply is marked timed out. Default: 600000.',
+          },
+          {
+            key: 'imStreamingCardUpdateMs',
+            type: 'number',
+            label: 'Streaming card update',
+            description: 'Minimum milliseconds between running streaming-card updates. Default: 1000.',
+          },
+          {
+            key: 'imStreamingCardMaxChars',
+            type: 'number',
+            label: 'Streaming card max chars',
+            description: 'Maximum characters shown in a streaming card before truncating with a Web continuation hint. Default: 6000.',
           },
           {
             key: 'imMessageBufferMs',

@@ -6,7 +6,7 @@ export type FeishuIMChatType = 'p2p' | 'group' | 'unknown'
 
 export type FeishuIMRouteKind = 'dm' | 'group' | 'thread'
 
-export type FeishuIMReplyPresentation = 'auto' | 'text' | 'card'
+export type FeishuIMReplyPresentation = 'auto' | 'text' | 'card' | 'streaming-card'
 
 export type FeishuIMAccount = {
   id: string
@@ -26,6 +26,8 @@ export type FeishuIMPolicy = {
   replyMode: 'message' | 'thread'
   replyPresentation: FeishuIMReplyPresentation
   replyTimeoutMs: number
+  streamingCardUpdateMs: number
+  streamingCardMaxChars: number
   messageBufferMs: number
   maxBufferMs: number
   busyRejectText: string
@@ -57,8 +59,11 @@ export type FeishuIMRuntimeSnapshot = {
   legacyActive: boolean
   activeReplySinks?: number
   pendingInteractions?: number
+  activeStreamingCards?: number
+  cardUpdateFailures?: number
   lastReplyError?: string
   lastCardAction?: string
+  lastCardUpdateError?: string
   updatedAt: string
 }
 
@@ -174,6 +179,12 @@ export type FeishuIMControlResult =
   | {
       type: 'help'
       commands: string[]
+    }
+  | {
+      type: 'turn-aborted'
+      sessionId: string
+      turnSnapshotId?: string
+      message: string
     }
 
 export type FeishuIMHandleMessageResult =

@@ -14,6 +14,8 @@ import type {
 export const FEISHU_IM_DEFAULT_BUFFER_MS = 1_500
 export const FEISHU_IM_DEFAULT_MAX_BUFFER_MS = 8_000
 export const FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS = 600_000
+export const FEISHU_IM_DEFAULT_STREAMING_CARD_UPDATE_MS = 1_000
+export const FEISHU_IM_DEFAULT_STREAMING_CARD_MAX_CHARS = 6_000
 export const FEISHU_IM_DEFAULT_BUSY_TEXT = '当前会话正在处理中，请稍后再试。'
 
 export function normalizeFeishuIMConfig(
@@ -65,6 +67,12 @@ export function validateFeishuIMConfig(settings: unknown): PlatformValidationRes
   }
   if (record.imReplyTimeoutMs !== undefined && !validNumber(record.imReplyTimeoutMs, 1)) {
     fieldErrors.imReplyTimeoutMs = 'Must be a positive number'
+  }
+  if (record.imStreamingCardUpdateMs !== undefined && !validNumber(record.imStreamingCardUpdateMs, 1)) {
+    fieldErrors.imStreamingCardUpdateMs = 'Must be a positive number'
+  }
+  if (record.imStreamingCardMaxChars !== undefined && !validNumber(record.imStreamingCardMaxChars, 1)) {
+    fieldErrors.imStreamingCardMaxChars = 'Must be a positive number'
   }
   if (record.imReplyPresentation !== undefined && !replyPresentationValue(record.imReplyPresentation)) {
     fieldErrors.imReplyPresentation = 'Must be one of auto, text, card, or streaming-card'
@@ -205,6 +213,8 @@ function readPolicy(settings: Record<string, unknown>): FeishuIMPolicy {
     replyMode: settings.imReplyMode === 'thread' ? 'thread' : 'message',
     replyPresentation: replyPresentationValue(settings.imReplyPresentation) ?? 'auto',
     replyTimeoutMs: numberValue(settings.imReplyTimeoutMs, FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS),
+    streamingCardUpdateMs: numberValue(settings.imStreamingCardUpdateMs, FEISHU_IM_DEFAULT_STREAMING_CARD_UPDATE_MS),
+    streamingCardMaxChars: numberValue(settings.imStreamingCardMaxChars, FEISHU_IM_DEFAULT_STREAMING_CARD_MAX_CHARS),
     messageBufferMs: numberValue(settings.imMessageBufferMs, FEISHU_IM_DEFAULT_BUFFER_MS),
     maxBufferMs: numberValue(settings.imMaxBufferMs, FEISHU_IM_DEFAULT_MAX_BUFFER_MS),
     busyRejectText: stringValue(settings.imBusyRejectText) ?? FEISHU_IM_DEFAULT_BUSY_TEXT,
@@ -228,8 +238,7 @@ function connectionModeValue(input: unknown): FeishuIMConnectionMode | undefined
 
 function replyPresentationValue(input: unknown): FeishuIMPolicy['replyPresentation'] | undefined {
   if (input === undefined || input === null || input === '') return undefined
-  if (input === 'auto' || input === 'text' || input === 'card') return input
-  if (input === 'streaming-card') return 'card'
+  if (input === 'auto' || input === 'text' || input === 'card' || input === 'streaming-card') return input
   return undefined
 }
 

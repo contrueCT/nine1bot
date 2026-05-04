@@ -3,6 +3,8 @@ export {
   FEISHU_IM_DEFAULT_BUSY_TEXT,
   FEISHU_IM_DEFAULT_MAX_BUFFER_MS,
   FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS,
+  FEISHU_IM_DEFAULT_STREAMING_CARD_MAX_CHARS,
+  FEISHU_IM_DEFAULT_STREAMING_CARD_UPDATE_MS,
   isPlatformSecretRef,
   normalizeFeishuIMConfig,
   validateFeishuIMConfig,
@@ -71,8 +73,10 @@ export {
   renderFeishuInteractionAnsweredCard,
   renderFeishuPermissionCard,
   renderFeishuQuestionCard,
+  renderFeishuStreamingTurnCard,
   renderFeishuTurnCard,
   type FeishuInteractionCardInput,
+  type FeishuStreamingTurnCardInput,
   type FeishuTurnCardInput,
   type FeishuTurnCardStatus,
 } from './cards'
@@ -113,8 +117,11 @@ export {
 } from './reply-coordinator'
 export {
   clearFeishuIMReplyRuntimeSummaryForTesting,
+  decrementFeishuIMActiveStreamingCards,
   getFeishuIMReplyRuntimeSummary,
+  incrementFeishuIMActiveStreamingCards,
   recordFeishuIMCardAction,
+  recordFeishuIMCardUpdateFailure,
   recordFeishuIMReplyError,
   recordFeishuIMSessionManagerSnapshot,
   type FeishuIMReplyRuntimeSummary,

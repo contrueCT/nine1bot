@@ -6,6 +6,7 @@ import {
   createFeishuIMReplySinkFactory,
   FeishuIMSessionManager,
   FeishuReplySink,
+  getFeishuIMReplyRuntimeSummary,
   MemoryFeishuIMBindingStore,
   MemoryFeishuIMReplyClient,
   normalizeFeishuIMConfig,
@@ -22,6 +23,7 @@ import {
   type FeishuControllerSession,
   type FeishuIMAccount,
   type FeishuIMIncomingMessage,
+  type FeishuIMSentMessage,
   type FeishuRuntimeEventEnvelope,
   type FeishuRuntimeEventSubscription,
 } from '../src/im'
@@ -179,6 +181,143 @@ describe('Feishu IM reply sink', () => {
     ])
     sink.stop()
   })
+
+  test('auto presentation uses text for DM and streaming card for group routes', async () => {
+    const dmBridge = new EventBridge()
+    const dmClient = new MemoryFeishuIMReplyClient()
+    const dmSink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message(), { accountId: account.id }),
+      sessionId: 'ses_dm',
+      controller: dmBridge,
+      client: dmClient,
+      replyMode: 'message',
+      presentation: 'auto',
+      timeoutMs: 10_000,
+    })
+
+    await dmSink.start()
+    await dmSink.bindTurnSnapshotId('turn_dm')
+    await dmBridge.emit({
+      type: 'runtime.message.part.updated',
+      turnSnapshotId: 'turn_dm',
+      data: { delta: { text: 'dm text' } },
+    })
+    await dmBridge.emit({
+      type: 'runtime.turn.completed',
+      turnSnapshotId: 'turn_dm',
+    })
+    await expect(dmSink.done).resolves.toMatchObject({ status: 'final' })
+    expect(dmClient.texts).toEqual([expect.objectContaining({ text: 'dm text' })])
+    expect(dmClient.cards).toHaveLength(0)
+
+    const groupBridge = new EventBridge()
+    const groupClient = new MemoryFeishuIMReplyClient()
+    const groupSink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_group',
+      controller: groupBridge,
+      client: groupClient,
+      replyMode: 'thread',
+      presentation: 'auto',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 20,
+    })
+
+    await groupSink.start()
+    await groupSink.bindTurnSnapshotId('turn_group')
+    expect(groupClient.cards).toHaveLength(1)
+    expect(JSON.stringify(groupClient.cards[0]?.card)).toContain('停止')
+    groupSink.stop()
+  })
+
+  test('streaming card throttles running updates and flushes terminal state immediately', async () => {
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 30,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'a' } } })
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'b' } } })
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'c' } } })
+    expect(client.updates).toHaveLength(0)
+    await sleep(45)
+    expect(client.updates).toHaveLength(1)
+    expect(JSON.stringify(client.updates[0]?.card)).toContain('abc')
+
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'd' } } })
+    await bridge.emit({ type: 'runtime.turn.completed', turnSnapshotId: 'turn_1' })
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+    expect(client.updates.at(-1)?.card).toEqual(expect.objectContaining({
+      header: expect.objectContaining({ template: 'green' }),
+    }))
+    expect(JSON.stringify(client.updates.at(-1)?.card)).toContain('abcd')
+  })
+
+  test('streaming card truncates long content and degrades when card update fails', async () => {
+    const bridge = new EventBridge()
+    const client = new FailingUpdateReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 10,
+      streamingCardMaxChars: 5,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await bridge.emit({
+      type: 'runtime.message.part.updated',
+      turnSnapshotId: 'turn_1',
+      data: { delta: { text: '123456789' } },
+    })
+    await sleep(25)
+    expect(client.updates).toHaveLength(1)
+    expect(JSON.stringify(client.updates[0]?.card)).toContain('内容较长')
+    expect(client.texts.at(-1)?.text).toContain('流式卡片更新失败')
+    expect(getFeishuIMReplyRuntimeSummary().cardUpdateFailures).toBeGreaterThan(0)
+    sink.stop()
+  })
+
+  test('streaming card degrades when initial card send fails without failing the sink', async () => {
+    const bridge = new EventBridge()
+    const client = new FailingSendCardReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 10,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    expect(client.texts.at(-1)?.text).toContain('流式卡片更新失败')
+    await bridge.emit({ type: 'runtime.turn.completed', turnSnapshotId: 'turn_1' })
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+  })
 })
 
 describe('Feishu IM reply coordinator with session manager', () => {
@@ -325,6 +464,55 @@ describe('Feishu IM reply coordinator with session manager', () => {
       projects: [{ id: 'proj_1', name: 'Project One' }],
     })
   })
+
+  test('streaming card abort action cancels only the current active turn', async () => {
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    const config = normalizeFeishuIMConfig({
+      imEnabled: true,
+      imDefaultAppId: account.appId,
+      imDefaultAppSecret: secretRef,
+      imMessageBufferMs: 0,
+      imMaxBufferMs: 1000,
+      imReplyPresentation: 'streaming-card',
+      imStreamingCardUpdateMs: 20,
+    })
+    const manager = new FeishuIMSessionManager({
+      account,
+      config,
+      controller: bridge,
+      store: new MemoryFeishuIMBindingStore(),
+      replySinkFactory: createFeishuIMReplySinkFactory({
+        account,
+        config,
+        controller: bridge,
+        client,
+      }),
+    })
+
+    await expect(manager.handleIncomingMessage(message({ text: 'run', messageId: 'om_1' }))).resolves.toMatchObject({
+      status: 'accepted',
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_1',
+    })
+    const payload = parseFirstPayload(client.cards[0]!.card, 'turn.abort')
+    await expect(manager.handleCardAction({
+      ...payload,
+      turnSnapshotId: 'old_turn',
+    })).resolves.toMatchObject({
+      type: 'failed',
+      message: expect.stringContaining('turn'),
+    })
+    expect(bridge.aborts).toHaveLength(0)
+
+    await expect(manager.handleCardAction(payload)).resolves.toMatchObject({
+      type: 'turn-aborted',
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_1',
+    })
+    expect(bridge.aborts).toEqual([expect.objectContaining({ sessionId: 'ses_1', directory: 'C:/work' })])
+    expect(manager.activeTurnSnapshot()).toEqual([])
+  })
 })
 
 function message(input: {
@@ -443,4 +631,22 @@ class EventBridge implements FeishuControllerBridge {
   private projectForDirectory(directory: string | undefined): FeishuControllerProject | undefined {
     return (this.options.projects ?? []).find((project) => project.rootDirectory === directory || project.worktree === directory)
   }
+}
+
+class FailingUpdateReplyClient extends MemoryFeishuIMReplyClient {
+  async updateCard(input: { messageId?: string; cardId?: string; card: Record<string, unknown> }): Promise<FeishuIMSentMessage> {
+    this.updates.push(JSON.parse(JSON.stringify(input)))
+    throw new Error('update failed')
+  }
+}
+
+class FailingSendCardReplyClient extends MemoryFeishuIMReplyClient {
+  async sendCard(input: { chatId: string; rootMessageId?: string; replyTarget: 'message' | 'thread'; card: Record<string, unknown> }): Promise<FeishuIMSentMessage> {
+    this.cards.push(JSON.parse(JSON.stringify(input)))
+    throw new Error('send failed')
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }

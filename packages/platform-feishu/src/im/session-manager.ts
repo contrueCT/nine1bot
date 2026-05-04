@@ -257,7 +257,9 @@ export class FeishuIMSessionManager {
   async handleAbort(
     routeKey: FeishuIMRouteKey,
     routeKeyString = serializeFeishuRouteKey(routeKey),
+    options: { notify?: boolean } = {},
   ): Promise<FeishuIMHandleMessageResult> {
+    const notify = options.notify ?? true
     const pending = this.buffer.discard(routeKeyString)
     if (pending) {
       this.recordSnapshot()
@@ -267,7 +269,7 @@ export class FeishuIMSessionManager {
         messageCount: pending.messages.length,
         message: '已取消尚未发送到 Agent 的飞书消息。',
       } satisfies FeishuIMHandleMessageResult
-      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString })
+      if (notify) await this.options.onImmediateReply?.({ result, routeKey, routeKeyString })
       return result
     }
 
@@ -278,7 +280,7 @@ export class FeishuIMSessionManager {
         routeKey: routeKeyString,
         message: '当前飞书会话没有正在运行的 Agent turn。',
       } satisfies FeishuIMHandleMessageResult
-      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString })
+      if (notify) await this.options.onImmediateReply?.({ result, routeKey, routeKeyString })
       return result
     }
 
@@ -294,7 +296,7 @@ export class FeishuIMSessionManager {
           routeKey: routeKeyString,
           message: 'Controller rejected abort request',
         } satisfies FeishuIMHandleMessageResult
-        await this.options.onImmediateReply?.({ result, routeKey, routeKeyString, binding: active.binding })
+        if (notify) await this.options.onImmediateReply?.({ result, routeKey, routeKeyString, binding: active.binding })
         return result
       }
       await this.stopReplySink(active.sink)
@@ -307,7 +309,7 @@ export class FeishuIMSessionManager {
         turnSnapshotId: active.turnSnapshotId,
         message: '已取消当前飞书会话的 Agent turn。',
       } satisfies FeishuIMHandleMessageResult
-      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString, binding: active.binding })
+      if (notify) await this.options.onImmediateReply?.({ result, routeKey, routeKeyString, binding: active.binding })
       return result
     } catch (error) {
       const result = {
@@ -315,7 +317,7 @@ export class FeishuIMSessionManager {
         routeKey: routeKeyString,
         message: error instanceof Error ? error.message : String(error),
       } satisfies FeishuIMHandleMessageResult
-      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString, binding: active.binding })
+      if (notify) await this.options.onImmediateReply?.({ result, routeKey, routeKeyString, binding: active.binding })
       return result
     }
   }
@@ -356,6 +358,32 @@ export class FeishuIMSessionManager {
     }
 
     try {
+      if (payload.action === 'turn.abort') {
+        const active = this.activeTurns.get(payload.routeKey)
+        if (!active?.sessionId) {
+          return { type: 'failed', command: payload.action, message: 'Card action route has no active turn' }
+        }
+        if (payload.sessionId && payload.sessionId !== active.sessionId) {
+          return { type: 'failed', command: payload.action, message: 'Card action session is no longer active' }
+        }
+        if (payload.turnSnapshotId && payload.turnSnapshotId !== active.turnSnapshotId) {
+          return { type: 'failed', command: payload.action, message: 'Card action turn is no longer active' }
+        }
+        const result = await this.handleAbort(routeKey, payload.routeKey, { notify: false })
+        if (result.status === 'aborted') {
+          return {
+            type: 'turn-aborted',
+            sessionId: result.sessionId,
+            turnSnapshotId: result.turnSnapshotId,
+            message: result.message,
+          }
+        }
+        return {
+          type: 'failed',
+          command: payload.action,
+          message: 'message' in result ? result.message : 'Abort did not complete',
+        }
+      }
       if (payload.action === 'control.newSession') {
         const binding = await this.resetRoute(routeKey)
         return {
