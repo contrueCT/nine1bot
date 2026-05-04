@@ -48,7 +48,13 @@ export function createFeishuIMImmediateReplyHandler(
       chatId: routeKey.chatId,
       replyTarget: options.config.policy.replyMode,
     } as const
-    if (input.result.status === 'busy' || input.result.status === 'failed') {
+    if (
+      input.result.status === 'busy' ||
+      input.result.status === 'failed' ||
+      input.result.status === 'aborted' ||
+      input.result.status === 'abort-noop' ||
+      input.result.status === 'buffer-cancelled'
+    ) {
       await options.client.sendText({
         ...delivery,
         text: textForImmediate(input.result),
@@ -74,6 +80,9 @@ export function createFeishuIMImmediateReplyHandler(
 function textForImmediate(result: FeishuIMHandleMessageResult): string {
   if (result.status === 'busy') return result.message
   if (result.status === 'failed') return result.message
+  if (result.status === 'aborted') return result.message
+  if (result.status === 'abort-noop') return result.message
+  if (result.status === 'buffer-cancelled') return result.message
   if (result.status === 'control') return renderControlText(result.control)
   return ''
 }

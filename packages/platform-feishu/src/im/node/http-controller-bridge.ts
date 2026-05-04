@@ -3,6 +3,7 @@ import {
   FEISHU_CONTROLLER_CAPABILITIES,
   feishuControllerEntry,
   type FeishuControllerBridge,
+  type FeishuControllerAbortSessionInput,
   type FeishuControllerCreateSessionInput,
   type FeishuControllerCreateSessionResult,
   type FeishuControllerMessageResult,
@@ -119,6 +120,13 @@ export function createHttpFeishuControllerBridge(options: FeishuHttpControllerBr
         ...result.body,
         status: result.status,
       }
+    },
+    async abortSession(input: FeishuControllerAbortSessionInput): Promise<boolean> {
+      const result = await request<boolean>(`/session/${encodeURIComponent(input.sessionId)}/abort`, {
+        method: 'POST',
+        directory: input.directory,
+      })
+      return Boolean(result.body)
     },
     async answerInteraction(input: FeishuInteractionAnswerInput) {
       const result = await request<boolean>(`/nine1bot/agent/interactions/${encodeURIComponent(input.requestId)}/answer`, {

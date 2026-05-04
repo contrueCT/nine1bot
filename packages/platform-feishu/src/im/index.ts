@@ -9,6 +9,12 @@ export {
 } from './config'
 export { FeishuEventDeduplicator } from './dedup'
 export {
+  FEISHU_IM_ABORT_TEXTS,
+  isFeishuIMAbortMessage,
+  isFeishuIMAbortText,
+  normalizeAbortText,
+} from './abort'
+export {
   createFeishuIMGateway,
   type FeishuIMGatewayEvent,
   type FeishuIMGatewayHandle,
@@ -25,6 +31,7 @@ export {
   feishuControllerEntry,
   projectDirectory,
   projectDisplayName,
+  type FeishuControllerAbortSessionInput,
   type FeishuControllerBridge,
   type FeishuControllerContextBlock,
   type FeishuControllerCreateSessionInput,
@@ -39,9 +46,14 @@ export {
   type FeishuRuntimeEventSubscription,
 } from './controller-bridge'
 export { FeishuIMHistoryStore, type FeishuIMHistoryEntry } from './history'
-export { FeishuIMMessageBuffer, type FeishuIMBufferedBatch } from './buffer/message-buffer'
+export {
+  FeishuIMMessageBuffer,
+  type FeishuIMBufferedBatch,
+  type FeishuIMBufferSnapshotEntry,
+} from './buffer/message-buffer'
 export {
   FeishuIMSessionManager,
+  type FeishuIMActiveTurnSnapshot,
   type FeishuIMImmediateReplyInput,
   type FeishuIMReplySinkFactoryInput,
   type FeishuIMReplySinkHandle as FeishuIMSessionReplySinkHandle,
@@ -104,6 +116,7 @@ export {
   getFeishuIMReplyRuntimeSummary,
   recordFeishuIMCardAction,
   recordFeishuIMReplyError,
+  recordFeishuIMSessionManagerSnapshot,
   type FeishuIMReplyRuntimeSummary,
 } from './reply-telemetry'
 export {

@@ -181,6 +181,26 @@ describe('Feishu IM skeleton', () => {
     })
   })
 
+  test('parses Feishu thread identifiers into isolated thread routes', () => {
+    const message = parseFeishuIMEvent({
+      event: {
+        sender: { sender_id: { open_id: 'ou_sender' } },
+        message: {
+          message_id: 'om_thread',
+          chat_id: 'oc_group',
+          chat_type: 'group',
+          message_type: 'text',
+          thread_id: 'omt_thread',
+          content: JSON.stringify({ text: 'thread message' }),
+        },
+      },
+    })!
+
+    expect(serializeFeishuRouteKey(routeKeyForFeishuMessage(message, { accountId: 'acct' }))).toBe(
+      'feishu:acct:thread:oc_group:omt_thread',
+    )
+  })
+
   test('builds stable route keys and stores bindings', async () => {
     const message = parseFeishuIMEvent({
       event: {

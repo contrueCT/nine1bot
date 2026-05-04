@@ -96,6 +96,29 @@ describe('Feishu HTTP controller bridge', () => {
     ])
     await expect(bridge.getProject('new')).resolves.toMatchObject({ id: 'new' })
   })
+
+  test('aborts sessions through the public session API', async () => {
+    const seen: Array<{ url: string; init: RequestInit }> = []
+    globalThis.fetch = mockFetch(async (url, init) => {
+      seen.push({ url, init })
+      return jsonResponse(true)
+    })
+
+    const bridge = createHttpFeishuControllerBridge({
+      localUrl: 'http://127.0.0.1:4096',
+      authHeader: 'Basic test',
+    })
+
+    await expect(bridge.abortSession({
+      sessionId: 'ses_1',
+      directory: 'C:/work',
+    })).resolves.toBe(true)
+
+    expect(new URL(seen[0]!.url).pathname).toBe('/session/ses_1/abort')
+    expect(new URL(seen[0]!.url).searchParams.get('directory')).toBe('C:/work')
+    expect(seen[0]!.init.method).toBe('POST')
+    expect(new Headers(seen[0]!.init.headers).get('authorization')).toBe('Basic test')
+  })
 })
 
 function mockFetch(handler: (url: string, init: RequestInit) => Promise<Response>): typeof fetch {

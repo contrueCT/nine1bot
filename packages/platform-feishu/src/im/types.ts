@@ -206,8 +206,26 @@ export type FeishuIMHandleMessageResult =
       routeKey: string
       control: FeishuIMControlResult
     }
-  | {
-      status: 'failed'
-      routeKey?: string
-      message: string
-    }
+    | {
+        status: 'failed'
+        routeKey?: string
+        message: string
+      }
+    | {
+        status: 'aborted'
+        routeKey: string
+        sessionId: string
+        turnSnapshotId?: string
+        message: string
+      }
+    | {
+        status: 'abort-noop'
+        routeKey: string
+        message: string
+      }
+    | {
+        status: 'buffer-cancelled'
+        routeKey: string
+        messageCount: number
+        message: string
+      }

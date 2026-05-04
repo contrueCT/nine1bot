@@ -16,6 +16,8 @@ import {
   type FeishuControllerSession,
   type FeishuIMAccount,
   type FeishuIMIncomingMessage,
+  type FeishuIMReplySinkFactoryInput,
+  type FeishuIMSessionManagerOptions,
 } from '../src/im'
 
 const secretRef: PlatformSecretRef = {
@@ -87,6 +89,27 @@ describe('Feishu IM session manager', () => {
     expect(text).toEqual(expect.stringContaining('second'))
   })
 
+  test('abort text cancels pending buffer before it reaches controller', async () => {
+    const bridge = new FakeBridge()
+    const manager = sessionManager({ bridge, messageBufferMs: 100, maxBufferMs: 1000 })
+
+    await expect(manager.handleIncomingMessage(message({ text: 'first', messageId: 'om_1' }))).resolves.toMatchObject({
+      status: 'buffered',
+      messageCount: 1,
+    })
+    expect(manager.bufferSnapshot()).toMatchObject([{
+      messageCount: 1,
+      lastMessageId: 'om_1',
+    }])
+
+    await expect(manager.handleIncomingMessage(message({ text: '取消', messageId: 'om_abort' }))).resolves.toMatchObject({
+      status: 'buffer-cancelled',
+      messageCount: 1,
+    })
+    expect(manager.bufferSnapshot()).toEqual([])
+    expect(bridge.sent).toHaveLength(0)
+  })
+
   test('max buffer timer flushes buffered messages', async () => {
     const bridge = new FakeBridge()
     const results: unknown[] = []
@@ -155,6 +178,87 @@ describe('Feishu IM session manager', () => {
     expect(bridge.sent).toHaveLength(1)
   })
 
+  test('abort text cancels active route turn and releases busy state', async () => {
+    const bridge = new FakeBridge()
+    const sink = new ManualSink()
+    const manager = sessionManager({
+      bridge,
+      messageBufferMs: 0,
+      replySinkFactory: () => sink,
+    })
+
+    await expect(manager.handleIncomingMessage(message({ text: 'run', messageId: 'om_1' }))).resolves.toMatchObject({
+      status: 'accepted',
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_1',
+    })
+    expect(manager.activeTurnSnapshot()).toHaveLength(1)
+
+    await expect(manager.handleIncomingMessage(message({ text: '/abort', messageId: 'om_abort' }))).resolves.toMatchObject({
+      status: 'aborted',
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_1',
+    })
+    expect(bridge.aborts).toEqual([{ sessionId: 'ses_1', directory: 'C:/work', reason: 'feishu-im-abort' }])
+    expect(sink.stopped).toBe(true)
+    expect(manager.activeTurnSnapshot()).toEqual([])
+
+    await expect(manager.handleIncomingMessage(message({ text: 'after abort', messageId: 'om_2' }))).resolves.toMatchObject({
+      status: 'accepted',
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_2',
+    })
+  })
+
+  test('same group different threads run in parallel while same thread remains busy', async () => {
+    const bridge = new FakeBridge()
+    const manager = sessionManager({
+      bridge,
+      messageBufferMs: 0,
+      groupPolicy: 'allow',
+      requireMention: false,
+      replySinkFactory: () => new ManualSink(),
+    })
+
+    await expect(manager.handleIncomingMessage(message({
+      chatType: 'group',
+      chatId: 'oc_group',
+      rootId: 'omt_a',
+      text: 'thread a',
+      messageId: 'om_a1',
+    }))).resolves.toMatchObject({
+      status: 'accepted',
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_1',
+    })
+    await expect(manager.handleIncomingMessage(message({
+      chatType: 'group',
+      chatId: 'oc_group',
+      rootId: 'omt_b',
+      text: 'thread b',
+      messageId: 'om_b1',
+    }))).resolves.toMatchObject({
+      status: 'accepted',
+      sessionId: 'ses_2',
+      turnSnapshotId: 'turn_2',
+    })
+    await expect(manager.handleIncomingMessage(message({
+      chatType: 'group',
+      chatId: 'oc_group',
+      rootId: 'omt_a',
+      text: 'thread a again',
+      messageId: 'om_a2',
+    }))).resolves.toMatchObject({
+      status: 'busy',
+      message: 'busy text',
+    })
+
+    expect(manager.activeTurnSnapshot().map((turn) => turn.routeKeyString).sort()).toEqual([
+      'feishu:default:thread:oc_group:omt_a',
+      'feishu:default:thread:oc_group:omt_b',
+    ])
+  })
+
   test('control commands expose cwd and project operations as structured results', async () => {
     const bridge = new FakeBridge({
       projects: [{
@@ -206,6 +310,7 @@ function sessionManager(options: {
   requireMention?: boolean
   resolveDirectory?: (baseDirectory: string | undefined, input: string) => Promise<string>
   onFlushResult?: (result: any) => void | Promise<void>
+  replySinkFactory?: FeishuIMSessionManagerOptions['replySinkFactory']
 }) {
   const config = normalizeFeishuIMConfig({
     imEnabled: true,
@@ -226,6 +331,7 @@ function sessionManager(options: {
     botOpenId: 'ou_bot',
     resolveDirectory: options.resolveDirectory,
     onFlushResult: options.onFlushResult,
+    replySinkFactory: options.replySinkFactory,
   })
 }
 
@@ -259,6 +365,7 @@ function message(input: {
 class FakeBridge implements FeishuControllerBridge {
   sessions = new Map<string, FeishuControllerSession>()
   sent: FeishuControllerSendMessageInput[] = []
+  aborts: Array<{ sessionId: string; directory?: string; reason?: string }> = []
   private sequence = 0
 
   constructor(private readonly options: {
@@ -296,6 +403,11 @@ class FakeBridge implements FeishuControllerBridge {
     }
   }
 
+  async abortSession(input: { sessionId: string; directory?: string; reason?: string }): Promise<boolean> {
+    this.aborts.push(input)
+    return true
+  }
+
   async answerInteraction(): Promise<boolean> {
     return true
   }
@@ -316,6 +428,22 @@ class FakeBridge implements FeishuControllerBridge {
 
   private projectForDirectory(directory: string | undefined): FeishuControllerProject | undefined {
     return (this.options.projects ?? []).find((project) => project.rootDirectory === directory || project.worktree === directory)
+  }
+}
+
+class ManualSink {
+  stopped = false
+  boundTurnSnapshotId?: string
+  done = new Promise(() => undefined)
+
+  start() {}
+
+  bindTurnSnapshotId(turnSnapshotId?: string) {
+    this.boundTurnSnapshotId = turnSnapshotId
+  }
+
+  stop() {
+    this.stopped = true
   }
 }
 

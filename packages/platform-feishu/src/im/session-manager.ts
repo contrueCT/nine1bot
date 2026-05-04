@@ -8,6 +8,7 @@ import {
   type FeishuControllerProject,
 } from './controller-bridge'
 import { evaluateFeishuIMGate } from './inbound/gate'
+import { isFeishuIMAbortMessage } from './abort'
 import { parseFeishuRouteKey, routeKeyForFeishuMessage, serializeFeishuRouteKey, type FeishuIMRouteKey } from './route'
 import type { FeishuIMBindingStore, FeishuIMSessionBinding } from './store/binding-store'
 import {
@@ -18,10 +19,14 @@ import {
   type FeishuIMIncomingMessage,
   type FeishuIMNormalizedConfig,
 } from './types'
-import { FeishuIMMessageBuffer, type FeishuIMBufferedBatch } from './buffer/message-buffer'
+import {
+  FeishuIMMessageBuffer,
+  type FeishuIMBufferedBatch,
+  type FeishuIMBufferSnapshotEntry,
+} from './buffer/message-buffer'
 import { FeishuIMHistoryStore } from './history'
 import type { FeishuCardActionPayload, FeishuCardActionValue } from './interactions'
-import { recordFeishuIMCardAction } from './reply-telemetry'
+import { recordFeishuIMCardAction, recordFeishuIMSessionManagerSnapshot } from './reply-telemetry'
 
 export type FeishuIMReplySinkFactoryInput = {
   account: FeishuIMAccount
@@ -47,6 +52,19 @@ export type FeishuIMImmediateReplyInput = {
   binding?: FeishuIMSessionBinding
 }
 
+export type FeishuIMActiveTurnSnapshot = {
+  routeKey: FeishuIMRouteKey
+  routeKeyString: string
+  sessionId?: string
+  turnSnapshotId?: string
+  startedAt: string
+}
+
+type FeishuIMActiveTurn = FeishuIMActiveTurnSnapshot & {
+  binding?: FeishuIMSessionBinding
+  sink?: FeishuIMReplySinkHandle
+}
+
 export type FeishuIMSessionManagerOptions = {
   account: FeishuIMAccount
   config: FeishuIMNormalizedConfig
@@ -65,7 +83,7 @@ export type FeishuIMSessionManagerOptions = {
 export class FeishuIMSessionManager {
   private readonly buffer: FeishuIMMessageBuffer
   private readonly history: FeishuIMHistoryStore
-  private readonly activeRoutes = new Set<string>()
+  private readonly activeTurns = new Map<string, FeishuIMActiveTurn>()
   private readonly replySinks = new Set<FeishuIMReplySinkHandle>()
 
   constructor(private readonly options: FeishuIMSessionManagerOptions) {
@@ -110,6 +128,10 @@ export class FeishuIMSessionManager {
       return { status: 'history-recorded', routeKey: routeKeyString }
     }
 
+    if (isFeishuIMAbortMessage(message)) {
+      return this.handleAbort(routeKey, routeKeyString)
+    }
+
     const control = await this.handleControlCommand(routeKey, message)
     if (control) {
       const result = { status: 'control', routeKey: routeKeyString, control } satisfies FeishuIMHandleMessageResult
@@ -117,7 +139,7 @@ export class FeishuIMSessionManager {
       return result
     }
 
-    if (this.activeRoutes.has(routeKeyString)) {
+    if (this.activeTurns.has(routeKeyString)) {
       const result = { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText } satisfies FeishuIMHandleMessageResult
       await this.options.onImmediateReply?.({ result, routeKey, routeKeyString })
       return result
@@ -128,6 +150,7 @@ export class FeishuIMSessionManager {
       routeKeyString,
       message,
     })
+    this.recordSnapshot()
     if (enqueued.status === 'ready') {
       return await this.flushRoute(routeKeyString) ?? {
         status: 'failed',
@@ -146,16 +169,23 @@ export class FeishuIMSessionManager {
   async flushRoute(routeKeyString: string): Promise<FeishuIMHandleMessageResult | undefined> {
     const batch = this.buffer.drain(routeKeyString)
     if (!batch) return undefined
-    if (this.activeRoutes.has(routeKeyString)) {
+    this.recordSnapshot()
+    if (this.activeTurns.has(routeKeyString)) {
       const result = { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText } satisfies FeishuIMHandleMessageResult
       await this.options.onImmediateReply?.({ result, routeKey: batch.routeKey, routeKeyString })
       return result
     }
-    this.activeRoutes.add(routeKeyString)
+    this.activeTurns.set(routeKeyString, {
+      routeKey: batch.routeKey,
+      routeKeyString,
+      startedAt: new Date().toISOString(),
+    })
+    this.recordSnapshot()
     let releaseOnFinally = true
     let sink: FeishuIMReplySinkHandle | undefined
     try {
       const binding = await this.resolveOrCreateSession(batch.routeKey)
+      this.updateActiveTurn(routeKeyString, { binding, sessionId: binding.sessionId })
       sink = await this.options.replySinkFactory?.({
         account: this.options.account,
         config: this.options.config,
@@ -167,6 +197,7 @@ export class FeishuIMSessionManager {
       })
       if (sink) {
         this.replySinks.add(sink)
+        this.updateActiveTurn(routeKeyString, { sink })
         await sink.start?.()
       }
       const response = await this.options.controller.sendMessage({
@@ -189,13 +220,15 @@ export class FeishuIMSessionManager {
         ...binding,
         updatedAt: new Date().toISOString(),
       })
+      this.updateActiveTurn(routeKeyString, { turnSnapshotId: response.turnSnapshotId })
       await sink?.bindTurnSnapshotId?.(response.turnSnapshotId)
       if (sink?.done) {
         const activeSink = sink
         releaseOnFinally = false
         void activeSink.done!.finally(() => {
           this.replySinks.delete(activeSink)
-          this.activeRoutes.delete(routeKeyString)
+          this.activeTurns.delete(routeKeyString)
+          this.recordSnapshot()
         })
       }
       return {
@@ -214,7 +247,76 @@ export class FeishuIMSessionManager {
       await this.options.onImmediateReply?.({ result, routeKey: batch.routeKey, routeKeyString })
       return result
     } finally {
-      if (releaseOnFinally) this.activeRoutes.delete(routeKeyString)
+      if (releaseOnFinally) {
+        this.activeTurns.delete(routeKeyString)
+        this.recordSnapshot()
+      }
+    }
+  }
+
+  async handleAbort(
+    routeKey: FeishuIMRouteKey,
+    routeKeyString = serializeFeishuRouteKey(routeKey),
+  ): Promise<FeishuIMHandleMessageResult> {
+    const pending = this.buffer.discard(routeKeyString)
+    if (pending) {
+      this.recordSnapshot()
+      const result = {
+        status: 'buffer-cancelled',
+        routeKey: routeKeyString,
+        messageCount: pending.messages.length,
+        message: '已取消尚未发送到 Agent 的飞书消息。',
+      } satisfies FeishuIMHandleMessageResult
+      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString })
+      return result
+    }
+
+    const active = this.activeTurns.get(routeKeyString)
+    if (!active?.sessionId) {
+      const result = {
+        status: 'abort-noop',
+        routeKey: routeKeyString,
+        message: '当前飞书会话没有正在运行的 Agent turn。',
+      } satisfies FeishuIMHandleMessageResult
+      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString })
+      return result
+    }
+
+    try {
+      const aborted = await this.options.controller.abortSession({
+        sessionId: active.sessionId,
+        directory: active.binding?.directory,
+        reason: 'feishu-im-abort',
+      })
+      if (!aborted) {
+        const result = {
+          status: 'failed',
+          routeKey: routeKeyString,
+          message: 'Controller rejected abort request',
+        } satisfies FeishuIMHandleMessageResult
+        await this.options.onImmediateReply?.({ result, routeKey, routeKeyString, binding: active.binding })
+        return result
+      }
+      await this.stopReplySink(active.sink)
+      this.activeTurns.delete(routeKeyString)
+      this.recordSnapshot()
+      const result = {
+        status: 'aborted',
+        routeKey: routeKeyString,
+        sessionId: active.sessionId,
+        turnSnapshotId: active.turnSnapshotId,
+        message: '已取消当前飞书会话的 Agent turn。',
+      } satisfies FeishuIMHandleMessageResult
+      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString, binding: active.binding })
+      return result
+    } catch (error) {
+      const result = {
+        status: 'failed',
+        routeKey: routeKeyString,
+        message: error instanceof Error ? error.message : String(error),
+      } satisfies FeishuIMHandleMessageResult
+      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString, binding: active.binding })
+      return result
     }
   }
 
@@ -311,7 +413,24 @@ export class FeishuIMSessionManager {
       void this.stopReplySink(sink)
     }
     this.replySinks.clear()
-    this.activeRoutes.clear()
+    this.activeTurns.clear()
+    this.recordSnapshot()
+  }
+
+  activeTurnSnapshot(): FeishuIMActiveTurnSnapshot[] {
+    this.recordSnapshot()
+    return [...this.activeTurns.values()].map((turn) => ({
+      routeKey: { ...turn.routeKey },
+      routeKeyString: turn.routeKeyString,
+      sessionId: turn.sessionId,
+      turnSnapshotId: turn.turnSnapshotId,
+      startedAt: turn.startedAt,
+    }))
+  }
+
+  bufferSnapshot(): FeishuIMBufferSnapshotEntry[] {
+    this.recordSnapshot()
+    return this.buffer.snapshot()
   }
 
   private async handleControlCommand(
@@ -498,6 +617,24 @@ export class FeishuIMSessionManager {
     if (!sink) return
     this.replySinks.delete(sink)
     await sink.stop()
+  }
+
+  private updateActiveTurn(routeKeyString: string, patch: Partial<FeishuIMActiveTurn>) {
+    const current = this.activeTurns.get(routeKeyString)
+    if (!current) return
+    this.activeTurns.set(routeKeyString, {
+      ...current,
+      ...patch,
+    })
+    this.recordSnapshot()
+  }
+
+  private recordSnapshot() {
+    recordFeishuIMSessionManagerSnapshot({
+      activeTurns: this.activeTurns.size,
+      pendingBuffers: this.buffer.routeCount(),
+      bufferedMessages: this.buffer.messageCount(),
+    })
   }
 }
 

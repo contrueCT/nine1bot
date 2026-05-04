@@ -19,7 +19,7 @@ export function parseFeishuIMEvent(input: unknown): FeishuIMIncomingMessage | un
   return {
     eventId: stringValue(asRecord(envelope?.header)?.event_id) ?? stringValue(envelope?.event_id),
     messageId,
-    rootId: stringValue(message.root_id),
+    rootId: stringValue(message.root_id) ?? stringValue(message.thread_id),
     parentId: stringValue(message.parent_id),
     chatId,
     chatType: chatTypeValue(message.chat_type),

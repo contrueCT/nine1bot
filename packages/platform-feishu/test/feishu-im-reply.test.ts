@@ -235,6 +235,49 @@ describe('Feishu IM reply coordinator with session manager', () => {
     })
   })
 
+  test('abort result is delivered as immediate reply text', async () => {
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    const config = normalizeFeishuIMConfig({
+      imEnabled: true,
+      imDefaultAppId: account.appId,
+      imDefaultAppSecret: secretRef,
+      imMessageBufferMs: 0,
+      imMaxBufferMs: 1000,
+      imReplyPresentation: 'text',
+    })
+    const manager = new FeishuIMSessionManager({
+      account,
+      config,
+      controller: bridge,
+      store: new MemoryFeishuIMBindingStore(),
+      replySinkFactory: createFeishuIMReplySinkFactory({
+        account,
+        config,
+        controller: bridge,
+        client,
+      }),
+      onImmediateReply: createFeishuIMImmediateReplyHandler({
+        account,
+        config,
+        client,
+      }),
+    })
+
+    await expect(manager.handleIncomingMessage(message({ text: 'long task', messageId: 'om_1' }))).resolves.toMatchObject({
+      status: 'accepted',
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_1',
+    })
+    await expect(manager.handleIncomingMessage(message({ text: '/abort', messageId: 'om_abort' }))).resolves.toMatchObject({
+      status: 'aborted',
+      sessionId: 'ses_1',
+    })
+
+    expect(bridge.aborts).toEqual([expect.objectContaining({ sessionId: 'ses_1', directory: 'C:/work' })])
+    expect(client.texts.at(-1)?.text).toBe('已取消当前飞书会话的 Agent turn。')
+  })
+
   test('control action handler supports new session and project list', async () => {
     const bridge = new EventBridge({
       projects: [{
@@ -329,6 +372,7 @@ function parseFirstPayload(card: Record<string, unknown>, action?: string): Feis
 class EventBridge implements FeishuControllerBridge {
   sessions = new Map<string, FeishuControllerSession>()
   sent: FeishuControllerSendMessageInput[] = []
+  aborts: any[] = []
   answers: any[] = []
   private sequence = 0
   private subscribers: Array<(event: FeishuRuntimeEventEnvelope) => void | Promise<void>> = []
@@ -361,6 +405,11 @@ class EventBridge implements FeishuControllerBridge {
       turnSnapshotId: `turn_${this.sent.length}`,
       status: 202,
     }
+  }
+
+  async abortSession(input: any): Promise<boolean> {
+    this.aborts.push(input)
+    return true
   }
 
   async answerInteraction(input: any): Promise<boolean> {

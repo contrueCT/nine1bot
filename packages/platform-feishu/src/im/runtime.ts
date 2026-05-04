@@ -153,6 +153,18 @@ function cardsFromConfig(config: FeishuIMNormalizedConfig, phase: string): Platf
       tone: reply.activeSinks > 0 ? 'success' : 'neutral',
     },
     {
+      id: 'im-active-turns',
+      label: 'Active turns',
+      value: String(reply.activeTurns),
+      tone: reply.activeTurns > 0 ? 'warning' : 'neutral',
+    },
+    {
+      id: 'im-pending-buffers',
+      label: 'Buffers',
+      value: `${reply.pendingBuffers} routes / ${reply.bufferedMessages} messages`,
+      tone: reply.pendingBuffers > 0 ? 'warning' : 'neutral',
+    },
+    {
       id: 'im-pending-interactions',
       label: 'Interactions',
       value: String(reply.pendingInteractions),

@@ -1,6 +1,9 @@
 export type FeishuIMReplyRuntimeSummary = {
   activeSinks: number
   pendingInteractions: number
+  activeTurns: number
+  pendingBuffers: number
+  bufferedMessages: number
   lastReplyError?: string
   lastCardAction?: string
 }
@@ -8,6 +11,9 @@ export type FeishuIMReplyRuntimeSummary = {
 const summary: FeishuIMReplyRuntimeSummary = {
   activeSinks: 0,
   pendingInteractions: 0,
+  activeTurns: 0,
+  pendingBuffers: 0,
+  bufferedMessages: 0,
 }
 
 export function getFeishuIMReplyRuntimeSummary(): FeishuIMReplyRuntimeSummary {
@@ -17,6 +23,9 @@ export function getFeishuIMReplyRuntimeSummary(): FeishuIMReplyRuntimeSummary {
 export function clearFeishuIMReplyRuntimeSummaryForTesting() {
   summary.activeSinks = 0
   summary.pendingInteractions = 0
+  summary.activeTurns = 0
+  summary.pendingBuffers = 0
+  summary.bufferedMessages = 0
   summary.lastReplyError = undefined
   summary.lastCardAction = undefined
 }
@@ -43,4 +52,14 @@ export function recordFeishuIMReplyError(error: unknown) {
 
 export function recordFeishuIMCardAction(action: string) {
   summary.lastCardAction = action
+}
+
+export function recordFeishuIMSessionManagerSnapshot(input: {
+  activeTurns: number
+  pendingBuffers: number
+  bufferedMessages: number
+}) {
+  summary.activeTurns = input.activeTurns
+  summary.pendingBuffers = input.pendingBuffers
+  summary.bufferedMessages = input.bufferedMessages
 }

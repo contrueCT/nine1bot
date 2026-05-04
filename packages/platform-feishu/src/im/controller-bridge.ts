@@ -89,6 +89,12 @@ export type FeishuControllerMessageResult = {
   }
 }
 
+export type FeishuControllerAbortSessionInput = {
+  sessionId: string
+  directory?: string
+  reason?: string
+}
+
 export type FeishuInteractionAnswerInput = {
   requestId: string
   kind?: 'question' | 'permission'
@@ -126,6 +132,7 @@ export type FeishuControllerBridge = {
   createSession(input: FeishuControllerCreateSessionInput): Promise<FeishuControllerCreateSessionResult>
   getSession(input: { sessionId: string; directory?: string }): Promise<FeishuControllerSession | undefined>
   sendMessage(input: FeishuControllerSendMessageInput): Promise<FeishuControllerMessageResult>
+  abortSession(input: FeishuControllerAbortSessionInput): Promise<boolean>
   answerInteraction(input: FeishuInteractionAnswerInput): Promise<boolean>
   listProjects(): Promise<FeishuControllerProject[]>
   getProject(projectId: string): Promise<FeishuControllerProject | undefined>

@@ -7,6 +7,14 @@ export type FeishuIMBufferedBatch = {
   messages: FeishuIMIncomingMessage[]
 }
 
+export type FeishuIMBufferSnapshotEntry = {
+  routeKey: FeishuIMRouteKey
+  routeKeyString: string
+  messageCount: number
+  firstMessageId?: string
+  lastMessageId?: string
+}
+
 type BufferEntry = FeishuIMBufferedBatch & {
   flushTimer?: ReturnType<typeof setTimeout>
   maxTimer?: ReturnType<typeof setTimeout>
@@ -68,6 +76,42 @@ export class FeishuIMMessageBuffer {
       routeKeyString: entry.routeKeyString,
       messages: [...entry.messages],
     }
+  }
+
+  discard(routeKeyString: string): FeishuIMBufferedBatch | undefined {
+    return this.drain(routeKeyString)
+  }
+
+  get(routeKeyString: string): FeishuIMBufferedBatch | undefined {
+    const entry = this.entries.get(routeKeyString)
+    if (!entry) return undefined
+    return {
+      routeKey: entry.routeKey,
+      routeKeyString: entry.routeKeyString,
+      messages: [...entry.messages],
+    }
+  }
+
+  routeCount(): number {
+    return this.entries.size
+  }
+
+  messageCount(): number {
+    let count = 0
+    for (const entry of this.entries.values()) {
+      count += entry.messages.length
+    }
+    return count
+  }
+
+  snapshot(): FeishuIMBufferSnapshotEntry[] {
+    return [...this.entries.values()].map((entry) => ({
+      routeKey: entry.routeKey,
+      routeKeyString: entry.routeKeyString,
+      messageCount: entry.messages.length,
+      firstMessageId: entry.messages[0]?.messageId,
+      lastMessageId: entry.messages.at(-1)?.messageId,
+    }))
   }
 
   clear() {
