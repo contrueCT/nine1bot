@@ -6,6 +6,11 @@ import { loadConfig, findConfigPath, getDefaultConfigPath } from '../config/load
 import { startServer, type ServerInstance } from './server'
 import { createTunnel, type TunnelManager } from '../tunnel'
 import { startFeishuService, type FeishuServiceHandle } from '../feishu/service'
+import {
+  startBuiltinPlatformBackgroundServices,
+  stopBuiltinPlatformBackgroundServices,
+} from '../platform/builtin'
+import type { PlatformControllerBridge } from '@nine1bot/platform-protocol'
 
 const execFileAsync = promisify(execFile)
 
@@ -58,6 +63,16 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
 
   const localUrl = server.url || `http://${serverConfig.hostname}:${serverConfig.port}`
   process.env.NINE1BOT_LOCAL_URL = localUrl
+  const authHeader = createAuthHeader(config.auth)
+
+  await startBuiltinPlatformBackgroundServices({
+    localUrl,
+    authHeader,
+    controller: createPlatformControllerBridge(localUrl, authHeader),
+    legacySettings: {
+      feishu: config.feishu,
+    },
+  })
 
   let feishu: FeishuServiceHandle | undefined
   if (config.feishu?.enabled) {
@@ -140,6 +155,12 @@ export async function shutdown(result: LaunchResult): Promise<void> {
     }
   }
 
+  try {
+    await stopBuiltinPlatformBackgroundServices()
+  } catch {
+    // 忽略停止平台后台服务时的错误
+  }
+
   // 停止服务器
   if (result.server) {
     try {
@@ -147,6 +168,40 @@ export async function shutdown(result: LaunchResult): Promise<void> {
     } catch {
       // 忽略停止服务器时的错误
     }
+  }
+}
+
+function createAuthHeader(auth: Nine1BotConfig['auth']): string | undefined {
+  return auth?.enabled && auth.password
+    ? `Basic ${Buffer.from(`nine1bot:${auth.password}`).toString('base64')}`
+    : undefined
+}
+
+function createPlatformControllerBridge(localUrl: string, authHeader?: string): PlatformControllerBridge {
+  return {
+    localUrl,
+    authHeader,
+    async requestJson(path, init = {}) {
+      const url = new URL(path, localUrl)
+      const headers = new Headers(init.headers)
+      if (authHeader) headers.set('authorization', authHeader)
+      if (init.body !== undefined && !headers.has('content-type')) {
+        headers.set('content-type', 'application/json')
+      }
+      const response = await fetch(url, {
+        method: init.method ?? 'GET',
+        headers,
+        body: init.body === undefined
+          ? undefined
+          : typeof init.body === 'string'
+            ? init.body
+            : JSON.stringify(init.body),
+      })
+      if (!response.ok) {
+        throw new Error(`Controller request failed: ${response.status} ${response.statusText}`)
+      }
+      return await response.json()
+    },
   }
 }
 

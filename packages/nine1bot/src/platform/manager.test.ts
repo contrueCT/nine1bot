@@ -3,6 +3,7 @@ import { win32 as win32Path } from 'node:path'
 import type {
   PlatformAdapterContext,
   PlatformAdapterContribution,
+  PlatformBackgroundService,
   PlatformRuntimeSourcesDescriptor,
   PlatformRuntimeSourcesProvider,
   PlatformSecretAccess,
@@ -447,6 +448,117 @@ describe('PlatformAdapterManager', () => {
       },
     })
     expect(RuntimeSourceRegistry.listOwner('demo').agents).toEqual([])
+  })
+
+  it('starts and stops background services for enabled platforms', async () => {
+    let starts = 0
+    let stops = 0
+    const service: PlatformBackgroundService = {
+      id: 'demo-background',
+      async start(ctx) {
+        starts++
+        expect(ctx.localUrl).toBe('http://127.0.0.1:4096')
+        expect(ctx.authHeader).toBe('Basic test')
+        return {
+          async stop() {
+            stops++
+          },
+          getStatus() {
+            return {
+              status: 'degraded',
+              message: 'background staged',
+            }
+          },
+        }
+      },
+    }
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        backgroundServices: () => [service],
+      }],
+    })
+
+    await manager.startBackgroundServices({
+      localUrl: 'http://127.0.0.1:4096',
+      authHeader: 'Basic test',
+    })
+
+    expect(starts).toBe(1)
+    expect(manager.get('demo')).toMatchObject({
+      lifecycleStatus: 'degraded',
+      runtimeStatus: {
+        status: 'degraded',
+        message: 'background staged',
+      },
+    })
+
+    await manager.stopBackgroundServices()
+    expect(stops).toBe(1)
+  })
+
+  it('does not start background services for disabled platforms', async () => {
+    let starts = 0
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        backgroundServices: () => [{
+          id: 'demo-background',
+          async start() {
+            starts++
+            return { async stop() {} }
+          },
+        }],
+      }],
+      config: {
+        demo: {
+          enabled: false,
+        },
+      },
+    })
+
+    await manager.startBackgroundServices({
+      localUrl: 'http://127.0.0.1:4096',
+    })
+
+    expect(starts).toBe(0)
+  })
+
+  it('stops previous background services before restart or reconfigure', async () => {
+    let starts = 0
+    let stops = 0
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        backgroundServices: () => [{
+          id: 'demo-background',
+          async start() {
+            starts++
+            return {
+              async stop() {
+                stops++
+              },
+            }
+          },
+        }],
+      }],
+    })
+
+    await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:4096' })
+    await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:4096' })
+
+    expect(starts).toBe(2)
+    expect(stops).toBe(1)
+
+    manager.configure({
+      demo: {
+        enabled: false,
+      },
+    })
+
+    expect(stops).toBe(2)
+    await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:4096' })
+    expect(starts).toBe(2)
   })
 
   it('does not leave runtime sources behind when adapter creation fails', async () => {

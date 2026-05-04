@@ -19,6 +19,11 @@ import {
   inspectSkillDirectory,
   resolveOfficialSkillsDirectory,
 } from './skills'
+import {
+  createFeishuIMBackgroundServices,
+  getFeishuIMRuntimeStatus,
+  validateFeishuIMConfig,
+} from './im'
 import type {
   PlatformActionResult,
   PlatformAdapterContext,
@@ -97,6 +102,98 @@ export const feishuPlatformDescriptor = {
           },
         ],
       },
+      {
+        id: 'im',
+        title: 'IM',
+        description: 'Feishu/Lark IM skeleton settings. Phase 1 stages configuration and pure message logic without taking over the legacy websocket service.',
+        fields: [
+          {
+            key: 'imEnabled',
+            type: 'boolean',
+            label: 'Enable IM skeleton',
+            description: 'Stages the new platform-feishu IM layer. It does not open a production websocket in Phase 1.',
+          },
+          {
+            key: 'imDefaultAppId',
+            type: 'string',
+            label: 'Default app ID',
+            description: 'Feishu/Lark app_id for the default IM account.',
+          },
+          {
+            key: 'imDefaultAppSecret',
+            type: 'password',
+            label: 'Default app secret',
+            description: 'Stored as a Nine1Bot platform secret reference.',
+            secret: true,
+          },
+          {
+            key: 'imDefaultDirectory',
+            type: 'string',
+            label: 'Default directory',
+            description: 'Fallback workspace directory for new IM conversations.',
+          },
+          {
+            key: 'imConnectionMode',
+            type: 'select',
+            label: 'Connection mode',
+            description: 'Only websocket is supported for the first IM implementation.',
+            options: ['websocket'],
+          },
+          {
+            key: 'imDmPolicy',
+            type: 'select',
+            label: 'Private chat policy',
+            options: ['allow', 'deny'],
+          },
+          {
+            key: 'imGroupPolicy',
+            type: 'select',
+            label: 'Group chat policy',
+            options: ['mention-only', 'allow', 'deny'],
+          },
+          {
+            key: 'imRequireMention',
+            type: 'boolean',
+            label: 'Require mention',
+            description: 'Requires a bot mention for group messages unless group policy allows all messages.',
+          },
+          {
+            key: 'imAllowFrom',
+            type: 'string-list',
+            label: 'Allow from',
+            description: 'Optional allowlist of chat IDs or sender IDs.',
+          },
+          {
+            key: 'imReplyMode',
+            type: 'select',
+            label: 'Reply mode',
+            options: ['message', 'thread'],
+          },
+          {
+            key: 'imMessageBufferMs',
+            type: 'number',
+            label: 'Message buffer',
+            description: 'Milliseconds to buffer adjacent IM messages before sending them into a Nine1Bot turn.',
+          },
+          {
+            key: 'imMaxBufferMs',
+            type: 'number',
+            label: 'Max buffer',
+            description: 'Hard upper bound for IM message buffering.',
+          },
+          {
+            key: 'imBusyRejectText',
+            type: 'string',
+            label: 'Busy reject text',
+          },
+          {
+            key: 'imAccounts',
+            type: 'json',
+            label: 'Accounts',
+            description: 'Array of account objects. Use appSecretRef; plaintext appSecret is rejected.',
+          },
+        ],
+      },
     ],
   },
   detailPage: {
@@ -132,6 +229,12 @@ export const feishuPlatformDescriptor = {
         }],
       },
     },
+    {
+      id: 'im.inspect',
+      label: 'Inspect IM skeleton',
+      description: 'Shows the normalized Feishu IM skeleton status without opening a websocket.',
+      kind: 'button',
+    },
   ],
 } satisfies PlatformDescriptor
 
@@ -141,7 +244,9 @@ export const feishuPlatformContribution = {
     createAdapter: createFeishuPlatformAdapter,
     sources: feishuRuntimeSources,
   },
+  backgroundServices: createFeishuIMBackgroundServices,
   getStatus: getFeishuStatus,
+  validateConfig: async (settings) => validateFeishuIMConfig(settings),
   handleAction: handleFeishuAction,
 } satisfies PlatformAdapterContribution
 
@@ -179,7 +284,7 @@ async function getFeishuStatus(ctx: PlatformAdapterContext): Promise<PlatformRun
   const checkedAt = new Date().toISOString()
 
   if (!cliPath) {
-    return {
+    return withFeishuIMStatus({
       status: 'missing',
       message: 'lark-cli was not found. Install the official CLI or configure its path.',
       cards: [
@@ -197,7 +302,7 @@ async function getFeishuStatus(ctx: PlatformAdapterContext): Promise<PlatformRun
         stage: 'status',
         message: 'lark-cli was not found',
       }],
-    }
+    }, ctx)
   }
 
   const version = await getFeishuCliVersion({
@@ -221,7 +326,7 @@ async function getFeishuStatus(ctx: PlatformAdapterContext): Promise<PlatformRun
   const skillsReady = skillStatus.companion.skillCount > 0 && skillStatus.official.skillCount > 0
   const finalStatus = status === 'available' && !skillsReady ? 'degraded' : status
 
-  return {
+  return withFeishuIMStatus({
     status: finalStatus,
     message: finalStatus === 'available'
       ? 'lark-cli is available, authenticated, and Feishu skills are detected.'
@@ -253,7 +358,7 @@ async function getFeishuStatus(ctx: PlatformAdapterContext): Promise<PlatformRun
         officialSkillCount: skillStatus.official.skillCount,
       },
     }],
-  }
+  }, ctx)
 }
 
 async function handleFeishuAction(
@@ -323,10 +428,54 @@ async function handleFeishuAction(
     }
   }
 
+  if (actionId === 'im.inspect') {
+    const updatedStatus = await getFeishuStatus(ctx)
+    return {
+      status: 'ok',
+      message: 'Feishu IM skeleton status inspected.',
+      updatedStatus,
+    }
+  }
+
   return {
     status: 'failed',
     message: `Action is not implemented: ${actionId}`,
   }
+}
+
+function withFeishuIMStatus(status: PlatformRuntimeStatus, ctx: PlatformAdapterContext): PlatformRuntimeStatus {
+  const imStatus = getFeishuIMRuntimeStatus(ctx)
+  const mergedStatus = higherSeverity(status.status, imStatus.status)
+  return {
+    status: mergedStatus,
+    message: mergedStatus === imStatus.status && imStatus.status !== 'disabled'
+      ? imStatus.message
+      : status.message,
+    cards: [
+      ...(status.cards ?? []),
+      ...(imStatus.cards ?? []),
+    ],
+    recentEvents: [
+      ...(status.recentEvents ?? []),
+      ...(imStatus.recentEvents ?? []),
+    ],
+  }
+}
+
+function higherSeverity(
+  left: PlatformRuntimeStatus['status'],
+  right: PlatformRuntimeStatus['status'],
+): PlatformRuntimeStatus['status'] {
+  return severity(right) > severity(left) ? right : left
+}
+
+function severity(status: PlatformRuntimeStatus['status']): number {
+  if (status === 'error') return 60
+  if (status === 'missing') return 50
+  if (status === 'auth-required') return 40
+  if (status === 'degraded') return 30
+  if (status === 'disabled') return 10
+  return 0
 }
 
 function buildFeishuContextBlocks(page: PageContextPayload, observedAt: number): PlatformContextBlock[] | undefined {

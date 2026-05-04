@@ -12,4 +12,5 @@ export {
   normalizeFeishuPagePayload,
 } from './runtime'
 export type { FeishuPlatformAdapter } from './runtime'
+export * from './im'
 export type * from './types'

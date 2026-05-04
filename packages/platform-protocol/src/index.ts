@@ -134,6 +134,35 @@ export type PlatformAdapterContext = {
   audit: PlatformAuditWriter
 }
 
+export type PlatformControllerRequestInit = {
+  method?: string
+  headers?: Record<string, string>
+  body?: unknown
+}
+
+export type PlatformControllerBridge = {
+  localUrl: string
+  authHeader?: string
+  requestJson?<T = unknown>(path: string, init?: PlatformControllerRequestInit): Promise<T>
+}
+
+export type PlatformBackgroundServiceContext = PlatformAdapterContext & {
+  localUrl: string
+  authHeader?: string
+  controller?: PlatformControllerBridge
+  legacySettings?: Record<string, unknown>
+}
+
+export type PlatformBackgroundServiceHandle = {
+  stop(): Promise<void>
+  getStatus?(): PlatformRuntimeStatus
+}
+
+export type PlatformBackgroundService = {
+  id: string
+  start(ctx: PlatformBackgroundServiceContext): Promise<PlatformBackgroundServiceHandle>
+}
+
 export type PlatformValidationResult = {
   ok: boolean
   message?: string
@@ -183,6 +212,7 @@ export type PlatformAdapterContribution = {
     createAdapter: (ctx: PlatformAdapterContext) => PlatformRuntimeAdapter
     sources?: PlatformRuntimeSourcesProvider
   }
+  backgroundServices?: (ctx: PlatformAdapterContext) => PlatformBackgroundService[]
   getStatus?: (ctx: PlatformAdapterContext) => Promise<PlatformRuntimeStatus>
   validateConfig?: (settings: unknown, ctx: PlatformAdapterContext) => Promise<PlatformValidationResult>
   handleAction?: (
