@@ -366,7 +366,7 @@ export class FeishuIMSessionManager {
         if (payload.sessionId && payload.sessionId !== active.sessionId) {
           return { type: 'failed', command: payload.action, message: 'Card action session is no longer active' }
         }
-        if (payload.turnSnapshotId && payload.turnSnapshotId !== active.turnSnapshotId) {
+        if (!payload.turnSnapshotId || payload.turnSnapshotId !== active.turnSnapshotId) {
           return { type: 'failed', command: payload.action, message: 'Card action turn is no longer active' }
         }
         const result = await this.handleAbort(routeKey, payload.routeKey, { notify: false })

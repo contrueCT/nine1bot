@@ -10,6 +10,17 @@ import type { FeishuIMControlResult } from './types'
 
 export type FeishuTurnCardStatus = 'running' | 'final' | 'error' | 'timeout'
 
+export const FEISHU_STREAMING_CARD_CONTENT_ELEMENT_ID = 'nine1bot_streaming_content'
+
+export type FeishuStreamingToolStatus = {
+  id: string
+  name: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  detail?: string
+  durationMs?: number
+  error?: string
+}
+
 export type FeishuTurnCardInput = {
   status: FeishuTurnCardStatus
   title?: string
@@ -25,6 +36,9 @@ export type FeishuTurnCardInput = {
 export type FeishuStreamingTurnCardInput = FeishuTurnCardInput & {
   accountId: string
   maxChars: number
+  tools?: FeishuStreamingToolStatus[]
+  transport?: 'cardkit' | 'patch' | 'text'
+  fallbackReason?: string
 }
 
 export type FeishuInteractionCardInput = {
@@ -92,11 +106,130 @@ export function renderFeishuStreamingTurnCard(input: FeishuStreamingTurnCardInpu
       content.truncated
         ? markdown('内容较长，已在飞书卡片中截断。可以在 Web 端查看完整输出。')
         : undefined,
+      input.tools?.length ? markdown(renderToolStatusLines(input.tools)) : undefined,
+      input.transport ? markdown(`**投递**：${input.transport}${input.fallbackReason ? ` (${input.fallbackReason})` : ''}`) : undefined,
       input.error ? markdown(`**错误**：${input.error}`) : undefined,
       input.resourceFailure ? markdown(`**资源提示**：${input.resourceFailure}`) : undefined,
       actionItems.length > 0 ? actions(actionItems) : undefined,
     ].filter(Boolean),
   })
+}
+
+export function renderFeishuStreamingCardKitInitialCard(input: FeishuStreamingTurnCardInput): FeishuIMCard {
+  const context = cardContext(input.accountId, input.routeKey, {
+    sessionId: input.sessionId,
+    turnSnapshotId: input.turnSnapshotId,
+  })
+  const elements: unknown[] = [
+    {
+      tag: 'markdown',
+      element_id: FEISHU_STREAMING_CARD_CONTENT_ELEMENT_ID,
+      content: '',
+      text_align: 'left',
+      text_size: 'normal_v2',
+    },
+    {
+      tag: 'markdown',
+      element_id: 'nine1bot_streaming_meta',
+      content: [
+        `Session: ${input.sessionId ?? 'unknown'}`,
+        `Route: ${serializeFeishuRouteKey(input.routeKey)}`,
+      ].join('\n'),
+      text_size: 'notation',
+    },
+  ]
+  if (input.status === 'running' && input.sessionId) {
+    elements.push(actionButton2('停止', 'turn.abort', context, { type: 'danger' }))
+  }
+  if (input.continueUrl) {
+    elements.push(linkButton2(input.status === 'running' ? 'Web 继续' : 'Web 打开', input.continueUrl))
+  }
+  return {
+    schema: '2.0',
+    config: {
+      streaming_mode: true,
+      update_multi: true,
+      width_mode: 'fill',
+      summary: {
+        content: 'Nine1Bot 正在回复',
+      },
+    },
+    header: {
+      template: 'blue',
+      title: {
+        tag: 'plain_text',
+        content: input.title ?? 'Nine1Bot 正在回复',
+      },
+    },
+    body: {
+      elements,
+    },
+  }
+}
+
+export function renderFeishuStreamingCardKitFinalCard(input: FeishuStreamingTurnCardInput): FeishuIMCard {
+  const statusText = {
+    running: '生成中',
+    final: '已完成',
+    error: '失败',
+    timeout: '超时',
+  }[input.status]
+  const content = trimStreamingContent(input.content, input.maxChars)
+  const elements: unknown[] = [
+    {
+      tag: 'markdown',
+      element_id: FEISHU_STREAMING_CARD_CONTENT_ELEMENT_ID,
+      content: content.text || '已完成。',
+      text_align: 'left',
+      text_size: 'normal_v2',
+    },
+    content.truncated
+      ? {
+          tag: 'markdown',
+          content: '内容较长，已在飞书卡片中截断。可以在 Web 端查看完整输出。',
+        }
+      : undefined,
+    input.tools?.length
+      ? {
+          tag: 'markdown',
+          content: renderToolStatusLines(input.tools),
+          text_size: 'notation',
+        }
+      : undefined,
+    {
+      tag: 'markdown',
+      content: [
+        `状态：${statusText}`,
+        `Session：${input.sessionId ?? 'unknown'}`,
+        `Route：${serializeFeishuRouteKey(input.routeKey)}`,
+      ].join('\n'),
+      text_size: 'notation',
+    },
+    input.error ? { tag: 'markdown', content: `**错误**：${input.error}` } : undefined,
+    input.resourceFailure ? { tag: 'markdown', content: `**资源提示**：${input.resourceFailure}` } : undefined,
+    input.continueUrl ? linkButton2('Web 打开', input.continueUrl) : undefined,
+  ].filter(Boolean)
+  return {
+    schema: '2.0',
+    config: {
+      streaming_mode: false,
+      update_multi: true,
+      width_mode: 'fill',
+      summary: {
+        content: statusText,
+      },
+    },
+    header: {
+      template: input.status === 'final' ? 'green' : input.status === 'running' ? 'blue' : 'red',
+      title: {
+        tag: 'plain_text',
+        content: input.title ?? 'Nine1Bot',
+      },
+    },
+    body: {
+      elements,
+    },
+  }
 }
 
 export function renderFeishuControlCard(input: {
@@ -326,6 +459,40 @@ function linkButton(text: string, url: string) {
   }
 }
 
+function actionButton2(
+  text: string,
+  action: FeishuCardActionType,
+  context: FeishuCardActionContext,
+  options: {
+    type?: 'default' | 'primary' | 'danger'
+  } = {},
+) {
+  const payload = createFeishuCardActionPayload(action, context)
+  return {
+    tag: 'button',
+    text: {
+      tag: 'plain_text',
+      content: text,
+    },
+    type: options.type ?? 'default',
+    value: {
+      nine1bot: payload,
+    },
+  }
+}
+
+function linkButton2(text: string, url: string) {
+  return {
+    tag: 'button',
+    text: {
+      tag: 'plain_text',
+      content: text,
+    },
+    type: 'default',
+    url,
+  }
+}
+
 function cardContext(
   accountId: string,
   routeKey: FeishuIMRouteKey,
@@ -357,4 +524,25 @@ function trimStreamingContent(input: string | undefined, maxChars: number): { te
     text: `${text.slice(0, maxChars).trimEnd()}\n\n...`,
     truncated: true,
   }
+}
+
+function renderToolStatusLines(tools: FeishuStreamingToolStatus[]): string {
+  const statusText = {
+    pending: '等待',
+    running: '运行中',
+    completed: '已完成',
+    failed: '失败',
+  }
+  return [
+    '**工具状态**',
+    ...tools.slice(-5).map((tool) => {
+      const duration = tool.durationMs === undefined
+        ? ''
+        : tool.durationMs < 1000
+          ? ` · ${tool.durationMs}ms`
+          : ` · ${(tool.durationMs / 1000).toFixed(1)}s`
+      const detail = tool.error ?? tool.detail
+      return `- ${statusText[tool.status]} ${tool.name}${duration}${detail ? `：${detail}` : ''}`
+    }),
+  ].join('\n')
 }

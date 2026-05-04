@@ -183,6 +183,24 @@ function cardsFromConfig(config: FeishuIMNormalizedConfig, phase: string): Platf
       tone: reply.activeStreamingCards > 0 ? 'success' : 'neutral',
     },
     {
+      id: 'im-streaming-transport',
+      label: 'Streaming transport',
+      value: reply.lastStreamingTransport ?? 'none',
+      tone: reply.lastStreamingTransport === 'cardkit' ? 'success' : reply.lastStreamingTransport ? 'warning' : 'neutral',
+    },
+    {
+      id: 'im-streaming-fallbacks',
+      label: 'Streaming fallbacks',
+      value: String(reply.streamingFallbacks),
+      tone: reply.streamingFallbacks > 0 ? 'warning' : 'neutral',
+    },
+    {
+      id: 'im-last-streaming-fallback',
+      label: 'Streaming fallback',
+      value: reply.lastStreamingFallbackReason ?? 'none',
+      tone: reply.lastStreamingFallbackReason ? 'warning' : 'neutral',
+    },
+    {
       id: 'im-card-update-failures',
       label: 'Card failures',
       value: String(reply.cardUpdateFailures),
@@ -234,9 +252,12 @@ function snapshotFrom(
     pendingInteractions: reply.pendingInteractions,
     activeStreamingCards: reply.activeStreamingCards,
     cardUpdateFailures: reply.cardUpdateFailures,
+    streamingFallbacks: reply.streamingFallbacks,
     lastReplyError: reply.lastReplyError,
     lastCardAction: reply.lastCardAction,
     lastCardUpdateError: reply.lastCardUpdateError,
+    lastStreamingTransport: reply.lastStreamingTransport,
+    lastStreamingFallbackReason: reply.lastStreamingFallbackReason,
     updatedAt: new Date().toISOString(),
   }
 }

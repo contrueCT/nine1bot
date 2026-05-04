@@ -68,14 +68,18 @@ export {
   type FeishuIMRouteKey,
 } from './route'
 export {
+  FEISHU_STREAMING_CARD_CONTENT_ELEMENT_ID,
   renderControlText,
   renderFeishuControlCard,
   renderFeishuInteractionAnsweredCard,
   renderFeishuPermissionCard,
   renderFeishuQuestionCard,
+  renderFeishuStreamingCardKitFinalCard,
+  renderFeishuStreamingCardKitInitialCard,
   renderFeishuStreamingTurnCard,
   renderFeishuTurnCard,
   type FeishuInteractionCardInput,
+  type FeishuStreamingToolStatus,
   type FeishuStreamingTurnCardInput,
   type FeishuTurnCardInput,
   type FeishuTurnCardStatus,
@@ -96,6 +100,7 @@ export {
 export {
   MemoryFeishuIMReplyClient,
   type FeishuIMCard,
+  type FeishuIMCardEntity,
   type FeishuIMReplyClient,
   type FeishuIMReplyClientTelemetry,
   type FeishuIMReplyDelivery,
@@ -103,6 +108,10 @@ export {
   type FeishuIMResolvedPresentation,
   type FeishuIMSentMessage,
 } from './reply-client'
+export {
+  FeishuStreamingCardController,
+  type FeishuStreamingCardControllerOptions,
+} from './streaming-card-controller'
 export {
   FeishuReplySink,
   normalizedEventType,
@@ -124,6 +133,8 @@ export {
   recordFeishuIMCardUpdateFailure,
   recordFeishuIMReplyError,
   recordFeishuIMSessionManagerSnapshot,
+  recordFeishuIMStreamingFallback,
+  recordFeishuIMStreamingTransport,
   type FeishuIMReplyRuntimeSummary,
 } from './reply-telemetry'
 export {

@@ -61,9 +61,12 @@ export type FeishuIMRuntimeSnapshot = {
   pendingInteractions?: number
   activeStreamingCards?: number
   cardUpdateFailures?: number
+  streamingFallbacks?: number
   lastReplyError?: string
   lastCardAction?: string
   lastCardUpdateError?: string
+  lastStreamingTransport?: string
+  lastStreamingFallbackReason?: string
   updatedAt: string
 }
 

@@ -6,9 +6,12 @@ export type FeishuIMReplyRuntimeSummary = {
   bufferedMessages: number
   activeStreamingCards: number
   cardUpdateFailures: number
+  streamingFallbacks: number
   lastReplyError?: string
   lastCardAction?: string
   lastCardUpdateError?: string
+  lastStreamingTransport?: 'cardkit' | 'patch' | 'text'
+  lastStreamingFallbackReason?: string
 }
 
 const summary: FeishuIMReplyRuntimeSummary = {
@@ -19,6 +22,7 @@ const summary: FeishuIMReplyRuntimeSummary = {
   bufferedMessages: 0,
   activeStreamingCards: 0,
   cardUpdateFailures: 0,
+  streamingFallbacks: 0,
 }
 
 export function getFeishuIMReplyRuntimeSummary(): FeishuIMReplyRuntimeSummary {
@@ -33,9 +37,12 @@ export function clearFeishuIMReplyRuntimeSummaryForTesting() {
   summary.bufferedMessages = 0
   summary.activeStreamingCards = 0
   summary.cardUpdateFailures = 0
+  summary.streamingFallbacks = 0
   summary.lastReplyError = undefined
   summary.lastCardAction = undefined
   summary.lastCardUpdateError = undefined
+  summary.lastStreamingTransport = undefined
+  summary.lastStreamingFallbackReason = undefined
 }
 
 export function incrementFeishuIMActiveReplySinks() {
@@ -70,6 +77,19 @@ export function recordFeishuIMCardUpdateFailure(error: unknown) {
   summary.cardUpdateFailures += 1
   summary.lastCardUpdateError = error instanceof Error ? error.message : String(error)
   recordFeishuIMReplyError(error)
+}
+
+export function recordFeishuIMStreamingTransport(transport: 'cardkit' | 'patch' | 'text') {
+  summary.lastStreamingTransport = transport
+}
+
+export function recordFeishuIMStreamingFallback(
+  reason: string,
+  transport: 'patch' | 'text',
+) {
+  summary.streamingFallbacks += 1
+  summary.lastStreamingFallbackReason = reason
+  summary.lastStreamingTransport = transport
 }
 
 export function recordFeishuIMCardAction(action: string) {

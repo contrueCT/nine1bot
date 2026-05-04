@@ -21,6 +21,8 @@ import {
   type FeishuControllerProject,
   type FeishuControllerSendMessageInput,
   type FeishuControllerSession,
+  type FeishuIMCard,
+  type FeishuIMCardEntity,
   type FeishuIMAccount,
   type FeishuIMIncomingMessage,
   type FeishuIMSentMessage,
@@ -266,6 +268,117 @@ describe('Feishu IM reply sink', () => {
     expect(JSON.stringify(client.updates.at(-1)?.card)).toContain('abcd')
   })
 
+  test('streaming card uses CardKit native transport when client supports it', async () => {
+    const bridge = new EventBridge()
+    const client = new CardKitReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 20,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    expect(client.entities).toHaveLength(1)
+    expect(client.entityMessages).toEqual([expect.objectContaining({ cardId: 'entity_1' })])
+    expect(client.cards).toHaveLength(0)
+
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'a' } } })
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'b' } } })
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'c' } } })
+    await sleep(35)
+    expect(client.streams).toHaveLength(1)
+    expect(client.streams[0]).toEqual(expect.objectContaining({
+      cardId: 'entity_1',
+      elementId: 'nine1bot_streaming_content',
+      content: 'abc',
+      sequence: 1,
+    }))
+
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'd' } } })
+    await bridge.emit({ type: 'runtime.turn.completed', turnSnapshotId: 'turn_1' })
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+    expect(JSON.stringify(client.entityUpdates.at(-1)?.card)).toContain('abcd')
+    expect(client.settings.at(-1)).toEqual(expect.objectContaining({
+      cardId: 'entity_1',
+      streaming: false,
+    }))
+    expect(client.updates).toHaveLength(0)
+  })
+
+  test('streaming card falls back from CardKit content to message patch', async () => {
+    const bridge = new EventBridge()
+    const client = new FailingCardKitContentReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 10,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'fallback text' } } })
+    await sleep(20)
+    expect(client.streams).toHaveLength(1)
+    expect(client.updates.length).toBeGreaterThan(0)
+    expect(JSON.stringify(client.updates.at(-1)?.card)).toContain('fallback text')
+    expect(client.texts).toHaveLength(0)
+    const summary = getFeishuIMReplyRuntimeSummary()
+    expect(summary.streamingFallbacks).toBeGreaterThan(0)
+    expect(summary.lastStreamingTransport).toBe('patch')
+    sink.stop()
+  })
+
+  test('streaming card renders sanitized tool-use status', async () => {
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 10,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await bridge.emit({
+      type: 'runtime.tool.started',
+      turnSnapshotId: 'turn_1',
+      data: {
+        toolCallId: 'tool_1',
+        tool: 'bash',
+        input: {
+          command: 'bun test',
+          token: 'super-secret',
+        },
+      },
+    })
+    await sleep(15)
+    const rendered = JSON.stringify(client.updates.at(-1)?.card)
+    expect(rendered).toContain('工具状态')
+    expect(rendered).toContain('bash')
+    expect(rendered).toContain('bun test')
+    expect(rendered).not.toContain('super-secret')
+    sink.stop()
+  })
+
   test('streaming card truncates long content and degrades when card update fails', async () => {
     const bridge = new EventBridge()
     const client = new FailingUpdateReplyClient()
@@ -503,6 +616,11 @@ describe('Feishu IM reply coordinator with session manager', () => {
       type: 'failed',
       message: expect.stringContaining('turn'),
     })
+    const { turnSnapshotId: _turnSnapshotId, ...payloadWithoutTurn } = payload
+    await expect(manager.handleCardAction(payloadWithoutTurn)).resolves.toMatchObject({
+      type: 'failed',
+      message: expect.stringContaining('turn'),
+    })
     expect(bridge.aborts).toHaveLength(0)
 
     await expect(manager.handleCardAction(payload)).resolves.toMatchObject({
@@ -637,6 +755,69 @@ class FailingUpdateReplyClient extends MemoryFeishuIMReplyClient {
   async updateCard(input: { messageId?: string; cardId?: string; card: Record<string, unknown> }): Promise<FeishuIMSentMessage> {
     this.updates.push(JSON.parse(JSON.stringify(input)))
     throw new Error('update failed')
+  }
+}
+
+class CardKitReplyClient extends MemoryFeishuIMReplyClient {
+  readonly entities: Array<{ card: FeishuIMCard }> = []
+  readonly entityMessages: Array<{ chatId: string; rootMessageId?: string; replyTarget: 'message' | 'thread'; cardId: string }> = []
+  readonly streams: Array<{ cardId: string; elementId: string; content: string; sequence: number }> = []
+  readonly entityUpdates: Array<{ cardId: string; card: FeishuIMCard; sequence: number }> = []
+  readonly settings: Array<{ cardId: string; streaming: boolean; sequence: number }> = []
+
+  async createCardEntity(input: { card: FeishuIMCard }): Promise<FeishuIMCardEntity> {
+    this.entities.push(JSON.parse(JSON.stringify(input)))
+    return { cardId: `entity_${this.entities.length}` }
+  }
+
+  async sendCardEntity(input: {
+    chatId: string
+    rootMessageId?: string
+    replyTarget: 'message' | 'thread'
+    cardId: string
+  }): Promise<FeishuIMSentMessage> {
+    this.entityMessages.push(JSON.parse(JSON.stringify(input)))
+    return {
+      messageId: `entity_message_${this.entityMessages.length}`,
+      cardId: input.cardId,
+    }
+  }
+
+  async streamCardContent(input: {
+    cardId: string
+    elementId: string
+    content: string
+    sequence: number
+  }): Promise<void> {
+    this.streams.push(JSON.parse(JSON.stringify(input)))
+  }
+
+  async updateCardEntity(input: {
+    cardId: string
+    card: FeishuIMCard
+    sequence: number
+  }): Promise<void> {
+    this.entityUpdates.push(JSON.parse(JSON.stringify(input)))
+  }
+
+  async setCardStreamingMode(input: {
+    cardId: string
+    streaming: boolean
+    sequence: number
+  }): Promise<void> {
+    this.settings.push(JSON.parse(JSON.stringify(input)))
+  }
+}
+
+class FailingCardKitContentReplyClient extends CardKitReplyClient {
+  async streamCardContent(input: {
+    cardId: string
+    elementId: string
+    content: string
+    sequence: number
+  }): Promise<void> {
+    this.streams.push(JSON.parse(JSON.stringify(input)))
+    throw new Error('cardkit content failed')
   }
 }
 

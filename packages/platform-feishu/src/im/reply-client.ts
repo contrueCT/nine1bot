@@ -18,6 +18,11 @@ export type FeishuIMSentMessage = {
   raw?: unknown
 }
 
+export type FeishuIMCardEntity = {
+  cardId: string
+  raw?: unknown
+}
+
 export type FeishuIMReplyClient = {
   sendText(input: FeishuIMReplyDelivery & {
     text: string
@@ -30,6 +35,28 @@ export type FeishuIMReplyClient = {
     cardId?: string
     card: FeishuIMCard
   }): Promise<FeishuIMSentMessage>
+  createCardEntity?(input: {
+    card: FeishuIMCard
+  }): Promise<FeishuIMCardEntity>
+  sendCardEntity?(input: FeishuIMReplyDelivery & {
+    cardId: string
+  }): Promise<FeishuIMSentMessage>
+  streamCardContent?(input: {
+    cardId: string
+    elementId: string
+    content: string
+    sequence: number
+  }): Promise<void>
+  updateCardEntity?(input: {
+    cardId: string
+    card: FeishuIMCard
+    sequence: number
+  }): Promise<void>
+  setCardStreamingMode?(input: {
+    cardId: string
+    streaming: boolean
+    sequence: number
+  }): Promise<void>
 }
 
 export type FeishuIMReplyClientTelemetry = {
