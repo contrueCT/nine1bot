@@ -158,6 +158,9 @@ export const Nine1BotPlatformRoutes = () =>
 
         const manager = getBuiltinPlatformManager()
         const result = await manager.executeAction(c.req.param("id"), c.req.param("actionId"), parsed.data)
+        if (result.updatedSettings !== undefined) {
+          await writePlatformManagerConfig(manager.configSnapshot())
+        }
         return c.json(result)
       } catch (error) {
         return c.json(errorBody(error), errorStatus(error))

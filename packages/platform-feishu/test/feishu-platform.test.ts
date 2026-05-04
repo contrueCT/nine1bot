@@ -15,6 +15,13 @@ import {
 } from '../src/node'
 import type { PlatformAdapterContext } from '@nine1bot/platform-protocol'
 import { join } from 'node:path'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import {
+  FEISHU_CURRENT_PAGE_SKILL,
+  inspectFeishuSkillSources,
+  resolveOfficialSkillsDirectory,
+} from '../src/skills'
 
 describe('Feishu platform adapter package', () => {
   test('parses Phase 1 Feishu URL routes', () => {
@@ -125,6 +132,31 @@ describe('Feishu platform adapter package', () => {
       'template.feishu-wiki',
     ])
     expect(adapter.resourceContributions({ templateIds })?.builtinTools.enabledGroups).toContain('feishu-context')
+    expect(adapter.resourceContributions({ templateIds })?.skills.skills).toContain(FEISHU_CURRENT_PAGE_SKILL)
+  })
+
+  test('discovers companion and official skill directories', async () => {
+    await withTempDir(async (officialDirectory) => {
+      await writeSkill(officialDirectory, 'lark-doc')
+      await writeSkill(officialDirectory, 'lark-drive')
+      await writeSkill(officialDirectory, 'custom-skill')
+
+      const status = inspectFeishuSkillSources({ officialSkillsDirectory: officialDirectory })
+
+      expect(status.companion).toMatchObject({
+        exists: true,
+        readable: true,
+        skillCount: 1,
+        skills: [FEISHU_CURRENT_PAGE_SKILL],
+      })
+      expect(status.official).toMatchObject({
+        exists: true,
+        readable: true,
+        skillCount: 2,
+        skills: ['lark-doc', 'lark-drive'],
+      })
+      expect(resolveOfficialSkillsDirectory({ officialSkillsDirectory: officialDirectory })).toBe(status.official.directory)
+    })
   })
 
   test('builds stable runtime page context blocks and truncates selection', () => {
@@ -177,6 +209,91 @@ describe('Feishu platform adapter package', () => {
     expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'cli', value: 'missing' }))
     expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'auth', value: 'unknown' }))
     expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'context', value: 'auto' }))
+    expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'companion', value: FEISHU_CURRENT_PAGE_SKILL }))
+    expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'skills' }))
+  })
+
+  test('handles official skills directory actions without mutating CLI auth state', async () => {
+    await withTempDir(async (officialDirectory) => {
+      await writeSkill(officialDirectory, 'lark-doc')
+      const ctx: PlatformAdapterContext = {
+        platformId: 'feishu',
+        enabled: true,
+        settings: {},
+        features: {},
+        env: { PATH: '' },
+        secrets: {
+          async get() { return undefined },
+          async set() {},
+          async delete() {},
+          async has() { return false },
+        },
+        audit: {
+          write() {},
+        },
+      }
+
+      const configure = await feishuPlatformContribution.handleAction?.('skills.configureDirectory', {
+        directory: officialDirectory,
+      }, ctx)
+      expect(configure).toMatchObject({
+        status: 'ok',
+        updatedSettings: {
+          officialSkillsDirectory: officialDirectory,
+        },
+        updatedStatus: {
+          status: 'missing',
+        },
+        data: {
+          official: {
+            skillCount: 1,
+            skills: ['lark-doc'],
+          },
+        },
+      })
+
+      const refresh = await feishuPlatformContribution.handleAction?.('skills.refreshOfficialDirectory', undefined, {
+        ...ctx,
+        settings: { officialSkillsDirectory: officialDirectory },
+      })
+      expect(refresh).toMatchObject({
+        status: 'ok',
+        data: {
+          official: {
+            skillCount: 1,
+            skills: ['lark-doc'],
+          },
+        },
+      })
+      expect(refresh?.updatedSettings).toBeUndefined()
+
+      const clear = await feishuPlatformContribution.handleAction?.('skills.configureDirectory', {
+        directory: '',
+      }, {
+        ...ctx,
+        settings: { officialSkillsDirectory: officialDirectory },
+      })
+      expect(clear).toMatchObject({
+        status: 'ok',
+        updatedSettings: {
+          officialSkillsDirectory: null,
+        },
+      })
+
+      await withTempDir(async (missingParent) => {
+        const missing = await feishuPlatformContribution.handleAction?.('skills.configureDirectory', {
+          directory: join(missingParent, 'missing'),
+        }, ctx)
+        expect(missing).toMatchObject({
+          status: 'failed',
+          data: {
+            official: {
+              exists: false,
+            },
+          },
+        })
+      })
+    })
   })
 
   test('uses verified lark-cli commands and parses auth states', async () => {
@@ -430,4 +547,27 @@ function authOk() {
     }),
     stderr: '',
   }
+}
+
+async function withTempDir<T>(fn: (directory: string) => Promise<T>): Promise<T> {
+  const directory = await mkdtemp(join(tmpdir(), 'nine1bot-feishu-skills-'))
+  try {
+    return await fn(directory)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+async function writeSkill(root: string, name: string) {
+  const directory = join(root, name)
+  await mkdir(directory, { recursive: true })
+  await writeFile(join(directory, 'SKILL.md'), [
+    '---',
+    `name: ${name}`,
+    `description: ${name}`,
+    '---',
+    '',
+    `# ${name}`,
+    '',
+  ].join('\n'), 'utf8')
 }

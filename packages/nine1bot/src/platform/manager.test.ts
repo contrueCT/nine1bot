@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { win32 as win32Path } from 'node:path'
-import type { PlatformAdapterContext, PlatformAdapterContribution, PlatformRuntimeSourcesDescriptor, PlatformSecretAccess } from '@nine1bot/platform-protocol'
+import type {
+  PlatformAdapterContext,
+  PlatformAdapterContribution,
+  PlatformRuntimeSourcesDescriptor,
+  PlatformRuntimeSourcesProvider,
+  PlatformSecretAccess,
+} from '@nine1bot/platform-protocol'
 import { RuntimePlatformAdapterRegistry } from '../../../../opencode/packages/opencode/src/runtime/platform/adapter'
 import { RuntimeSourceRegistry } from '../../../../opencode/packages/opencode/src/runtime/source/registry'
 import { PlatformAdapterManager } from './manager'
@@ -20,7 +26,7 @@ function contribution(id: string, options: {
   defaultEnabled?: boolean
   throws?: boolean
   templates?: string[]
-  sources?: PlatformRuntimeSourcesDescriptor
+  sources?: PlatformRuntimeSourcesProvider
 } = {}): PlatformAdapterContribution {
   return {
     descriptor: {
@@ -267,6 +273,45 @@ describe('PlatformAdapterManager', () => {
     })
   })
 
+  it('registers runtime sources generated from current platform settings', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        sources: (ctx) => ({
+          skills: [{
+            id: 'demo-skills',
+            directory: String((ctx.settings as Record<string, unknown>).directory ?? '/tmp/default-skills'),
+            visibility: 'default',
+            lifecycle: 'platform-enabled',
+          }],
+        }),
+      })],
+      config: {
+        demo: {
+          settings: {
+            directory: '/tmp/custom-skills',
+          },
+        },
+      },
+    })
+
+    manager.registerRuntimeAdapters()
+
+    expect(RuntimeSourceRegistry.listOwner('demo').skills).toContainEqual(expect.objectContaining({
+      id: 'demo-skills',
+      directory: '/tmp/custom-skills',
+    }))
+    await expect(manager.getDetail('demo')).resolves.toMatchObject({
+      runtimeSources: {
+        skills: [{
+          id: 'demo-skills',
+          directory: '/tmp/custom-skills',
+          status: 'registered',
+        }],
+      },
+    })
+  })
+
   it('normalizes Windows runtime source paths before registering and reporting details', async () => {
     const manager = new PlatformAdapterManager({
       contributions: [contribution('feishu', {
@@ -458,6 +503,10 @@ describe('PlatformAdapterManager', () => {
     registerBuiltinPlatformAdapters()
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('feishu')
+    expect(RuntimeSourceRegistry.listOwner('feishu').skills.map((source) => source.id)).toEqual([
+      'feishu-companion-skills',
+      'feishu-official-skills',
+    ])
   })
 
   it('skips built-in GitLab when config disables it', () => {
@@ -483,6 +532,7 @@ describe('PlatformAdapterManager', () => {
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).not.toContain('feishu')
     expect(RuntimePlatformAdapterRegistry.activeTemplateIds(['web-chat', 'browser-feishu', 'feishu-docx'])).toEqual(['web-chat'])
+    expect(RuntimeSourceRegistry.listOwner('feishu').skills).toEqual([])
   })
 
   it('keeps the GitLab compatibility registration entry working', () => {
@@ -673,6 +723,79 @@ describe('PlatformAdapterManager', () => {
 
     expect(manager.configSnapshot().demo?.settings).toEqual({
       allowedHosts: ['gitlab.com'],
+    })
+  })
+
+  it('applies action updatedSettings and re-registers runtime sources', async () => {
+    const baseContribution = contribution('demo', {
+      defaultEnabled: true,
+      sources: (ctx) => ({
+        skills: [{
+          id: 'demo-skills',
+          directory: String((ctx.settings as Record<string, unknown>).directory ?? '/tmp/default-skills'),
+          visibility: 'default',
+          lifecycle: 'platform-enabled',
+        }],
+      }),
+    })
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...baseContribution,
+        descriptor: {
+          ...baseContribution.descriptor,
+          config: {
+            sections: [{
+              id: 'settings',
+              title: 'Settings',
+              fields: [{
+                key: 'directory',
+                label: 'Directory',
+                type: 'string',
+              }],
+            }],
+          },
+          actions: [{
+            id: 'directory.configure',
+            label: 'Configure directory',
+            kind: 'button',
+          }],
+        },
+        handleAction: async () => ({
+          status: 'ok',
+          updatedSettings: {
+            directory: '/tmp/action-skills',
+          },
+          updatedStatus: {
+            status: 'available',
+            message: 'directory configured',
+          },
+        }),
+      }],
+    })
+    manager.registerRuntimeAdapters()
+
+    await expect(manager.executeAction('demo', 'directory.configure')).resolves.toMatchObject({
+      status: 'ok',
+      updatedSettings: {
+        directory: '/tmp/action-skills',
+      },
+    })
+
+    expect(manager.configSnapshot().demo?.settings).toEqual({
+      directory: '/tmp/action-skills',
+    })
+    expect(RuntimeSourceRegistry.listOwner('demo').skills).toContainEqual(expect.objectContaining({
+      id: 'demo-skills',
+      directory: '/tmp/action-skills',
+    }))
+    await expect(manager.getDetail('demo')).resolves.toMatchObject({
+      runtimeSources: {
+        skills: [{
+          id: 'demo-skills',
+          directory: '/tmp/action-skills',
+          status: 'registered',
+        }],
+      },
     })
   })
 
