@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { PlatformAdapterContext, PlatformSecretRef } from '@nine1bot/platform-protocol'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import {
   clearFeishuIMRuntimeSnapshotForTesting,
   createFeishuIMBackgroundServices,
@@ -12,6 +15,7 @@ import {
   serializeFeishuRouteKey,
   validateFeishuIMConfig,
 } from '../src/im'
+import { FeishuFileIMBindingStore } from '../src/node'
 
 const secretRef: PlatformSecretRef = {
   provider: 'nine1bot-local',
@@ -183,10 +187,14 @@ describe('Feishu IM skeleton', () => {
       action: 'dispatch',
       allowed: true,
     })
+    expect(evaluateFeishuIMGate(message!, config)).toMatchObject({
+      action: 'dispatch',
+      allowed: true,
+    })
     expect(evaluateFeishuIMGate({
       ...message!,
       mentions: [],
-    }, config, { botOpenId: 'ou_bot' })).toEqual({
+    }, config)).toEqual({
       action: 'history',
       allowed: false,
       reason: 'mention-required',
@@ -247,7 +255,48 @@ describe('Feishu IM skeleton', () => {
     })
   })
 
-  test('stages background service when legacy Feishu service is active', async () => {
+  test('persists v2 route bindings outside the removed legacy store', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'nine1bot-feishu-im-store-'))
+    try {
+      const filepath = join(directory, 'bindings.json')
+      const message = parseFeishuIMEvent({
+        event: {
+          sender: { sender_id: { open_id: 'ou_sender' } },
+          message: {
+            message_id: 'om_store',
+            chat_id: 'oc_p2p',
+            chat_type: 'p2p',
+            message_type: 'text',
+            content: JSON.stringify({ text: 'persist me' }),
+          },
+        },
+      })!
+      const routeKey = routeKeyForFeishuMessage(message, { accountId: 'acct' })
+      const serialized = serializeFeishuRouteKey(routeKey)
+
+      const first = new FeishuFileIMBindingStore({ filepath })
+      await first.set(serialized, {
+        routeKey,
+        sessionId: 'ses_persisted',
+        directory: 'C:/work',
+        updatedAt: '2026-05-04T00:00:00.000Z',
+      })
+
+      const second = new FeishuFileIMBindingStore({ filepath })
+      await expect(second.get(serialized)).resolves.toMatchObject({
+        sessionId: 'ses_persisted',
+        routeKey: {
+          accountId: 'acct',
+          kind: 'dm',
+          openId: 'ou_sender',
+        },
+      })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('does not let legacy Feishu config start the removed legacy service', async () => {
     clearFeishuIMRuntimeSnapshotForTesting()
     const ctx = platformContext({
       imEnabled: true,
@@ -270,9 +319,12 @@ describe('Feishu IM skeleton', () => {
     })
 
     expect(handle.getStatus?.()).toMatchObject({
-      status: 'degraded',
-      message: expect.stringContaining('Legacy Feishu service is enabled'),
+      status: 'error',
+      message: expect.stringContaining('Secret ref is missing'),
     })
+    expect(handle.getStatus?.().recentEvents).toContainEqual(expect.objectContaining({
+      message: expect.stringContaining('legacy Feishu service is disabled'),
+    }))
     await handle.stop()
   })
 })

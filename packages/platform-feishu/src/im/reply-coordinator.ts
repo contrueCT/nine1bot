@@ -1,9 +1,12 @@
-import { renderControlText, renderFeishuControlCard } from './cards'
+import { renderControlText, renderFeishuControlCard, renderFeishuInteractionAnsweredCard } from './cards'
 import type { FeishuControllerBridge } from './controller-bridge'
+import type { FeishuIMGatewayCardActionEvent } from './gateway'
+import { answerFeishuCardInteraction, routeFromFeishuCardAction } from './interactions'
 import { FeishuReplySink } from './reply-sink'
 import type { FeishuIMReplyClient } from './reply-client'
 import type {
   FeishuIMAccount,
+  FeishuIMControlResult,
   FeishuIMHandleMessageResult,
   FeishuIMNormalizedConfig,
 } from './types'
@@ -11,6 +14,7 @@ import type {
   FeishuIMImmediateReplyInput,
   FeishuIMReplySinkFactoryInput,
   FeishuIMReplySinkHandle,
+  FeishuIMSessionManager,
 } from './session-manager'
 
 export type FeishuIMReplyCoordinatorOptions = {
@@ -79,6 +83,51 @@ export function createFeishuIMImmediateReplyHandler(
   }
 }
 
+export function createFeishuIMCardActionHandler(
+  options: Pick<FeishuIMReplyCoordinatorOptions, 'account' | 'controller' | 'continueUrlForSession'> & {
+    manager: FeishuIMSessionManager
+  },
+): (input: FeishuIMGatewayCardActionEvent) => Promise<Record<string, unknown> | undefined> {
+  return async (input) => {
+    const payload = input.payload
+    if (isInteractionAction(payload.action)) {
+      const result = await answerFeishuCardInteraction({
+        controller: options.controller,
+        payload,
+        value: input.value,
+        expected: {
+          accountId: options.account.id,
+          maxAgeMs: 24 * 60 * 60 * 1000,
+        },
+      })
+      return renderFeishuInteractionAnsweredCard({
+        title: result.status === 'answered' ? '已处理' : '操作失败',
+        message: result.status === 'answered'
+          ? '操作已提交。'
+          : `操作未处理：${result.reason}`,
+      })
+    }
+
+    const routeKey = routeFromFeishuCardAction(payload)
+    if (!routeKey) {
+      return renderFeishuInteractionAnsweredCard({
+        title: '操作失败',
+        message: '卡片路由已失效，请重新发送 /control 打开控制面。',
+      })
+    }
+
+    const result = await options.manager.handleCardAction(payload, input.value)
+    const sessionId = sessionIdFromControlResult(result) ?? payload.sessionId
+    return renderFeishuControlCard({
+      accountId: options.account.id,
+      routeKey,
+      result,
+      sessionId,
+      continueUrl: sessionId ? options.continueUrlForSession?.(sessionId) : undefined,
+    })
+  }
+}
+
 function textForImmediate(result: FeishuIMHandleMessageResult): string {
   if (result.status === 'busy') return result.message
   if (result.status === 'failed') return result.message
@@ -90,6 +139,13 @@ function textForImmediate(result: FeishuIMHandleMessageResult): string {
 }
 
 function sessionIdFromControl(result: Extract<FeishuIMHandleMessageResult, { status: 'control' }>): string | undefined {
-  const control = result.control
+  return sessionIdFromControlResult(result.control)
+}
+
+function sessionIdFromControlResult(control: FeishuIMControlResult): string | undefined {
   return 'sessionId' in control ? control.sessionId : undefined
+}
+
+function isInteractionAction(action: string): boolean {
+  return action.startsWith('permission.') || action.startsWith('question.')
 }

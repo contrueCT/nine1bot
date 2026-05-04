@@ -30,6 +30,7 @@
 - 权限、交互、文件、图片、预览、资源失败等能力通过 runtime event envelope 表达。
 - 第三方平台深度适配应放在 `packages/platform-*`，runtime core 只保留通用 registry / protocol / pipeline，不直接写 GitLab、Jira、GitHub 等平台语义。
 - 平台适配的启用、禁用、状态展示和平台自有配置页由 Nine1Bot 产品层 Platform Adapter Manager 负责，Web 配置页应提供“多平台适配 > 具体平台”的可扩展入口。
+- 平台长连接、IM、event consumer、轮询器等长期运行任务应通过通用 Platform Background Service lifecycle 管理，不放进 runtime adapter，也不在 launcher 中写平台专属启动逻辑。
 
 ## 不包含的内容
 

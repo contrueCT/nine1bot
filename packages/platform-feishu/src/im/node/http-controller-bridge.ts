@@ -121,7 +121,6 @@ export function createHttpFeishuControllerBridge(options: FeishuHttpControllerBr
           directory: input.directory,
           allowStatus: [409],
           body: {
-            messageID: input.messageId,
             parts: input.parts,
             system: input.system,
             context: input.contextBlocks?.length ? { blocks: input.contextBlocks } : undefined,

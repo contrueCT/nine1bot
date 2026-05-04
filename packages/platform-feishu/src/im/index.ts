@@ -18,6 +18,7 @@ export {
 } from './abort'
 export {
   createFeishuIMGateway,
+  type FeishuIMGatewayCardActionEvent,
   type FeishuIMGatewayEvent,
   type FeishuIMGatewayHandle,
   type FeishuIMGatewayOptions,
@@ -120,6 +121,7 @@ export {
   type FeishuReplySinkOptions,
 } from './reply-sink'
 export {
+  createFeishuIMCardActionHandler,
   createFeishuIMImmediateReplyHandler,
   createFeishuIMReplySinkFactory,
   type FeishuIMReplyCoordinatorOptions,

@@ -57,7 +57,7 @@ function mentionsBot(
     botUserId?: string
   },
 ): boolean {
-  if (!options.botOpenId && !options.botUserId) return false
+  if (!options.botOpenId && !options.botUserId) return message.mentions.length > 0
   return message.mentions.some((mention) => (
     (options.botOpenId && mention.openId === options.botOpenId) ||
     (options.botUserId && mention.userId === options.botUserId)

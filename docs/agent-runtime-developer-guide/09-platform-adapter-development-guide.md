@@ -11,6 +11,7 @@
 - Nine1Bot 产品层负责平台启用状态、配置、secret、status、action、Web 设置页和 runtime 注册。
 - Browser extension 只在用户发送消息时采集页面事实，不做后台监听，也不承担复杂平台业务解释。
 - 平台贡献 context / resources / agents / skills 必须经过 Platform Adapter Manager 和 runtime registry，不能绕过 Manager。
+- 平台长连接、webhook consumer、轮询器等长期运行任务必须通过通用 Platform Background Service lifecycle 管理，不要放进 `PlatformRuntimeAdapter.createAdapter()`，也不要在 launcher 中新增平台专属启动分支。
 - 平台禁用是 hard gate：新 session 不使用该平台 template/resource/source，旧 session 后续 turn 也不能继续获得该平台能力。
 - 平台资源默认应使用 `declared-only` 或 `recommendable`，避免污染普通 Web 对话和 default-user-template。
 
@@ -29,10 +30,14 @@ flowchart TD
 
   Manager --> PlatformRegistry["RuntimePlatformAdapterRegistry"]
   Manager --> SourceRegistry["RuntimeSourceRegistry"]
+  Manager --> BackgroundHost["Platform Background Service Host"]
 
   PlatformRegistry --> TemplateResolver["ControllerTemplateResolver"]
   PlatformRegistry --> ContextEvents["RuntimeContextEvents"]
   PlatformRegistry --> ResourceResolver["RuntimeResourceResolver"]
+  BackgroundHost --> BackgroundHandles["PlatformBackgroundServiceHandle[]"]
+  Launcher["Nine1Bot launcher"] --> BackgroundHost
+  BackgroundHost --> PlatformAPI
 
   SourceRegistry --> AgentRegistry["Agent Registry"]
   SourceRegistry --> SkillRegistry["Skill Registry"]
@@ -50,7 +55,16 @@ flowchart TD
 - `PlatformAdapterContribution` 是平台包对外提供能力的统一入口。
 - `RuntimePlatformAdapterRegistry` 只接收通用 adapter，不 import 具体平台包。
 - `RuntimeSourceRegistry` 只保存 agent / skill source 元数据，文件扫描由 Agent / Skill registry 完成。
+- `Platform Background Service Host` 只管理通用后台服务生命周期，不理解具体平台的 websocket、event stream、polling 或 SDK。
 - `profileSnapshot` 是 session 创建时冻结的平台能力声明；后续 turn 只在该声明内做 live gate。
+
+当前通用架构状态：
+
+- 配置面：`platforms.<id>` 已承载 enabled、features、settings、secret ref、descriptor-driven settings form。
+- Runtime 面：平台 adapter 已接入 template inference、page context blocks、resource contribution、recommended agent。
+- Source 面：平台 agent / skill sources 已能跟随平台 enabled 状态注册和注销，并通过 declared-only / recommendable 控制默认可见性。
+- 后台面：平台 background services 已能通过 Manager 统一 start / stop / restart，并向平台 status cards 暴露运行状态。
+- Web 面：多平台页面已能通过通用 Platform API 展示 descriptor、status、actions、settings、runtime sources；复杂平台可以后续补 custom section。
 
 ## 3. 当前实现地图
 
@@ -58,10 +72,12 @@ flowchart TD
 
 - `packages/platform-protocol/src/index.ts`：平台 descriptor、contribution、config、secret、action、runtime adapter、runtime sources 的共享类型。
 - `packages/platform-gitlab/`：当前 GitLab 样板平台包。
+- `packages/platform-feishu/`：当前 Feishu 样板平台包，覆盖 page context、外部 CLI metadata enrichment、platform skills 和 Feishu IM background service。
 - `packages/nine1bot/src/platform/manager.ts`：Platform Adapter Manager。
 - `packages/nine1bot/src/platform/builtin.ts`：内置平台 contribution 清单。
 - `packages/nine1bot/src/platform/config-store.ts`：只更新 `nine1bot.config` 中 `platforms` 字段的持久化 helper。
 - `packages/nine1bot/src/platform/secrets.ts`：本地平台 secret store。
+- `packages/nine1bot/src/launcher/orchestrator.ts`：启动本地 server 后创建通用 `PlatformControllerBridge`，并启动 / 停止内置平台 background services。
 - `opencode/packages/opencode/src/runtime/platform/adapter.ts`：Runtime 平台 adapter registry。
 - `opencode/packages/opencode/src/runtime/source/registry.ts`：Runtime agent / skill source registry。
 - `opencode/packages/opencode/src/agent/agent.ts`：内置 / 用户 / 平台 agent 扫描和可见性控制。
@@ -90,6 +106,11 @@ packages/platform-<id>/
     runtime.ts
     shared.ts
     types.ts
+    node.ts
+    im/
+      runtime.ts
+      gateway.ts
+      ...
   agents/
     <optional-platform-agent>.agent.md
   skills/
@@ -104,6 +125,8 @@ packages/platform-<id>/
 - `shared.ts`：URL 解析、页面类型识别、payload normalize、稳定 `objectKey` 生成。保持纯函数，便于 browser / runtime / test 复用。
 - `browser.ts`：浏览器安全入口，供 browser extension 或 Web 使用。不要依赖 Node-only API。
 - `runtime.ts`：平台 descriptor、runtime adapter、contribution、status/action handler。
+- `node.ts`：Node-only 聚合入口，可选。用于导出 CLI、SDK、background service 等不能进入 browser bundle 的能力。
+- `im/`：平台 IM / event consumer / webhook consumer 等长期运行能力，可选。只能通过 background service 暴露到 Nine1Bot 产品层。
 - `types.ts`：平台内部类型，可以复用或 alias `@nine1bot/platform-protocol` 类型。
 - `agents/`：平台自带 agent source，可选。文件格式是 `*.agent.md`。
 - `skills/`：平台自带 skills source，可选。每个 skill 目录包含 `SKILL.md`。
@@ -310,7 +333,7 @@ export function createExamplePlatformAdapter(): PlatformRuntimeAdapter {
 
 ## 7. Contribution
 
-平台包通过 `PlatformAdapterContribution` 把 descriptor、runtime adapter、runtime sources、status、config validation 和 actions 交给 Platform Manager。
+平台包通过 `PlatformAdapterContribution` 把 descriptor、runtime adapter、runtime sources、background services、status、config validation 和 actions 交给 Platform Manager。
 
 ```ts
 import type { PlatformAdapterContribution } from '@nine1bot/platform-protocol'
@@ -339,6 +362,24 @@ export const examplePlatformContribution = {
         },
       ],
     },
+  },
+  backgroundServices(ctx) {
+    if (!isExampleRealtimeEnabled(ctx.settings)) return []
+    return [
+      {
+        id: 'example-realtime',
+        async start(serviceCtx) {
+          return startExampleRealtimeService({
+            localUrl: serviceCtx.localUrl,
+            authHeader: serviceCtx.authHeader,
+            controller: serviceCtx.controller,
+            settings: serviceCtx.settings,
+            secrets: serviceCtx.secrets,
+            legacySettings: serviceCtx.legacySettings,
+          })
+        },
+      },
+    ]
   },
   async validateConfig(settings, ctx) {
     return { ok: true }
@@ -375,14 +416,81 @@ export const examplePlatformContribution = {
 - `secrets`
 - `audit`
 
+`PlatformBackgroundServiceContext` 在 `PlatformAdapterContext` 基础上额外提供：
+
+- `localUrl`
+- `authHeader`
+- `controller`
+- `legacySettings`
+- `projectId`
+- `projectDirectory`
+
 注意：
 
 - `settings` 中的 secret 字段应是 `PlatformSecretRef`，不要假设有明文。
 - `handleAction` 返回 `openUrl` 时只允许 `http:` / `https:`。
 - `danger: true` 的 action 需要请求体带 `confirm: true`。
 - status/action/validation 失败要返回结构化结果或抛错，Manager 会转成 `error/degraded` 状态。
+- `backgroundServices` 只声明服务，不应立即启动连接；真正启动由 Platform Manager 的 background service host 完成。
 
-## 8. 注册到 Nine1Bot
+## 8. Background Services
+
+`PlatformBackgroundService` 用于平台需要长期运行的能力，例如 IM websocket、event stream consumer、webhook subscriber、平台轮询器、外部同步任务等。它解决的是平台 adapter 生命周期和长期连接生命周期不同步的问题：adapter 注册/注销可能因为配置保存、status refresh 或 runtime registry 重建而发生；长期连接如果放进 `createAdapter()`，很容易重复连接或泄漏 handle。
+
+当前通用协议：
+
+```ts
+export type PlatformBackgroundServiceContext = PlatformAdapterContext & {
+  localUrl: string
+  authHeader?: string
+  controller?: PlatformControllerBridge
+  legacySettings?: Record<string, unknown>
+}
+
+export type PlatformBackgroundServiceHandle = {
+  stop(): Promise<void>
+  getStatus?(): PlatformRuntimeStatus
+}
+
+export type PlatformBackgroundService = {
+  id: string
+  start(ctx: PlatformBackgroundServiceContext): Promise<PlatformBackgroundServiceHandle>
+}
+```
+
+生命周期：
+
+1. Nine1Bot launcher 启动本地 server。
+2. launcher 计算 `localUrl`、`authHeader`，创建通用 `PlatformControllerBridge`。
+3. launcher 调用 `startBuiltinPlatformBackgroundServices()`，只接入通用 lifecycle。
+4. Platform Manager 先停止旧 background handles，再遍历 enabled platform 的 `backgroundServices(ctx)`。
+5. 每个 service `start()` 返回 handle；如果 handle 提供 `getStatus()`，Manager 会把它合并到平台 runtime status。
+6. 配置重载、平台禁用、Manager reconfigure、应用 shutdown 时，Manager 调用所有 active handle 的 `stop()`。
+7. `stop()` 失败只写 audit warning，不阻塞其它服务停止。
+
+实现规则：
+
+- `PlatformRuntimeAdapter.createAdapter()` 只负责 page context、template、resource contribution、recommended agent 等纯 runtime adapter 能力。
+- background service 可以调用 `ctx.controller.requestJson()` 访问 Nine1Bot 公开 Controller API，但不能 import `packages/nine1bot` 内部模块或 opencode server 内部实现。
+- background service 可以读取 `ctx.legacySettings` 做旧配置兼容，但新配置入口仍必须走 `platforms.<id>.settings`。
+- background service 必须支持幂等停止；重复 start 之前 Manager 会先 stop 旧 handle，但 service 自身也应避免全局单例泄漏。
+- 如果平台处于 staged/degraded 状态，例如旧实现仍占用 websocket，service 可以返回 degraded status，不需要抛错。
+- Node-only SDK、websocket client、文件 watcher 等依赖必须留在平台包 Node 入口或后台服务模块，不要从 `./browser` 导出。
+- 长期运行状态应通过 `getStatus()`、`getStatus(ctx)` 或平台 telemetry 体现在 Web 多平台详情页的 status cards / recent events 中。
+
+适用场景：
+
+| 场景 | 放置位置 |
+| --- | --- |
+| URL parser、context block、template 推断 | `PlatformRuntimeAdapter` |
+| 平台 agent / skill 目录注册 | `runtime.sources` |
+| 连接测试、登录引导、一次性诊断 | `handleAction()` |
+| IM websocket、event consumer、watcher、poller | `backgroundServices()` |
+| 旧顶层配置兼容 | config normalization + `legacySettings` |
+
+当前样板是 Feishu IM：`platform-feishu` 通过 `backgroundServices` 声明 `feishu-im` 服务，服务读取多平台 Feishu IM 配置并暴露 staged/degraded status；真实 websocket cutover 前不会抢占旧 `feishu.enabled` 链路。
+
+## 9. 注册到 Nine1Bot
 
 新增平台后，只在 Nine1Bot 产品层内置清单中注册 contribution。
 
@@ -406,7 +514,9 @@ export const builtinPlatformContributions = [
 
 启动时 Nine1Bot 会根据 `fullConfig.platforms` 调用 Manager 注册启用的平台。禁用的平台会被登记到 `RuntimePlatformAdapterRegistry` 的 disabled marker，用于后续 template/page live gate。
 
-## 9. 配置与 Secret
+本地 server 启动完成后，launcher 会调用 `startBuiltinPlatformBackgroundServices()` 启动 enabled 平台声明的 background services。launcher 只传入 `localUrl`、`authHeader`、通用 `PlatformControllerBridge` 和 legacy settings map，不写具体平台分支。
+
+## 10. 配置与 Secret
 
 用户配置位于 `nine1bot.config` 的 `platforms` 字段：
 
@@ -435,10 +545,14 @@ export const builtinPlatformContributions = [
 规则：
 
 - `platforms` 是 Nine1Bot-only 配置，不会进入生成给 Runtime 的 opencode config。
+- 配置读写、secret 写入、Web UI 保存、脱敏返回、配置刷新、平台启停都由 Platform Adapter Manager 统一负责。
+- 平台适配包只声明 `PlatformDescriptor.config`、实现 `validateConfig()`，并在运行时把 `ctx.settings` normalize 成自己的业务结构。
+- `PlatformRuntimeAdapter.createAdapter(ctx)`、`backgroundServices(ctx)`、`getStatus(ctx)`、`handleAction(ctx)` 都只能消费 Manager 传入的 `ctx.settings/features/secrets`，不能直接读写 `nine1bot.config` 或实现自己的 Web 保存逻辑。
+- 平台 action 如需修改配置，应返回 `updatedSettings`，由 Manager 走同一套校验、secret 处理、持久化和 reconfigure 流程。
 - secret 真值写入本地 `platform-secrets.json` 或通过 `env/external` 引用，不进入 `nine1bot.config`。
 - Platform API 响应中 secret 字段只返回 `{ redacted: true, hasValue, provider }`。
 - `PATCH /nine1bot/platforms/:id` 中 secret 字段传空字符串表示保留旧值，传 `null` 表示删除。
-- `enabled: false` 会立即注销 adapter 和 runtime sources。
+- `enabled: false` 会立即注销 adapter、runtime sources，并停止该 Manager 当前持有的 background service handles。
 
 认证差异应通过平台 action 和 settings 表达，不要新增固定的 `/auth/start` / `/auth/complete` 路由。例如：
 
@@ -446,7 +560,7 @@ export const builtinPlatformContributions = [
 - OAuth：`auth.open` action 返回 `openUrl`
 - 外部 CLI：`cli.status`、`cli.login.openGuide`、`cli.refresh`
 
-## 10. Browser / Web 页面上下文
+## 11. Browser / Web 页面上下文
 
 Browser extension 的职责是请求式采集页面事实：
 
@@ -457,6 +571,10 @@ Browser extension 的职责是请求式采集页面事实：
 5. Web 把 payload 放入 Controller message 的 `context.page`。
 6. Runtime 通过当前启用的平台 adapter normalize / 写 context event。
 
+前端只需要传递入口事实和页面事实，不需要在创建 session 前先完成平台 template 推断。创建 session / 发送消息的主路径可以直接携带 `entry.source`、`entry.mode`、`entry.platform` 和 `page`，由后端 `ControllerTemplateResolver.resolve()` 调用已注册的平台 adapter 推断最终 template，并根据 Manager 的 enabled 状态做 live gate。
+
+`POST /nine1bot/agent/templates/resolve` 用于 UI preview、诊断和用户选择前确认，例如展示最终 `templateIds`、context preview、resources preview、recommended agent 和 skipped audit。它不是创建 session 的前置必需步骤。Web client 可以内置入口级语义，例如 `web-chat`、`browser-sidepanel`、`scheduled-run`，但平台专属 template id 映射应放在平台 runtime adapter 的 `inferTemplateIds()` 中，不应在 Web client 里维护另一套平台 template 表。
+
 创建 session 时可以携带 page，用于推导 session template：
 
 ```json
@@ -464,8 +582,7 @@ Browser extension 的职责是请求式采集页面事实：
   "entry": {
     "source": "browser-extension",
     "platform": "example",
-    "mode": "browser-sidepanel",
-    "templateIds": ["web-chat", "browser-generic"]
+    "mode": "browser-sidepanel"
   },
   "page": {
     "platform": "example",
@@ -503,7 +620,7 @@ Browser extension 的职责是请求式采集页面事实：
 
 如果平台被禁用，后端会按 disabled marker 跳过平台 adapter，并在 audit/debug 中写 `platform-disabled-by-current-config`。
 
-## 11. 平台 Resources
+## 12. 平台 Resources
 
 平台资源贡献发生在 session 创建阶段：
 
@@ -546,7 +663,7 @@ resourceContributions(input) {
 }
 ```
 
-## 12. 平台 Skills
+## 13. 平台 Skills
 
 平台可以自带 skills，但默认不进入普通会话。
 
@@ -595,7 +712,7 @@ platform.<platform-id>.<skill-name>
 
 这样可以避免覆盖用户或内置技能。
 
-## 13. 平台 Agents
+## 14. 平台 Agents
 
 平台可以自带 agents，用于平台特定工作流。agent 会影响系统提示词和权限边界，因此只能在 session 创建时选择并冻结。
 
@@ -656,7 +773,7 @@ runtime: {
 - 每轮 `body.agent` override 继续忽略，只 audit，不改变 `profileSnapshot.agent`。
 - 平台禁用后，旧 session 如果 profile 中冻结的是该平台 agent，本轮会 fail closed，并发出 `runtime.agent.unavailable`。
 
-## 14. Web 多平台设置页
+## 15. Web 多平台设置页
 
 Web 通过 `/nine1bot/platforms` API 消费 descriptor：
 
@@ -676,6 +793,7 @@ Web 通过 `/nine1bot/platforms` API 消费 descriptor：
 - action list
 - recent events
 - runtime sources 摘要
+- background service 暴露的 status cards / recent events
 
 如果平台需要复杂 UI，可以在 descriptor 中声明 custom section：
 
@@ -694,12 +812,13 @@ detailPage: {
 
 自定义组件仍应通过统一 Platform API 保存配置、执行 action、刷新状态。
 
-## 15. Live Gate 与禁用语义
+## 16. Live Gate 与禁用语义
 
 平台禁用后：
 
 - Manager 注销 runtime adapter。
 - Manager 注销 runtime sources。
+- Manager 停止 background services。
 - Manager 在 `RuntimePlatformAdapterRegistry` 里登记 disabled marker。
 - 新 session 不会使用该平台 template/context/resource contribution。
 - 旧 session 历史 context event 不删除。
@@ -721,7 +840,7 @@ platform-disabled-by-current-config
 - runtime debug
 - 相关 runtime event
 
-## 16. 新增平台开发步骤
+## 17. 新增平台开发步骤
 
 建议按这个顺序做：
 
@@ -729,15 +848,16 @@ platform-disabled-by-current-config
 2. 实现 `shared.ts`：URL parser、pageType、objectKey、normalize。
 3. 实现 `browser.ts`：浏览器安全 payload builder。
 4. 实现 `runtime.ts`：descriptor、adapter、contribution。
-5. 按需增加 `agents/` 和 `skills/`，并在 contribution 中声明 runtime sources。
-6. 在 `packages/nine1bot/src/platform/builtin.ts` 注册 contribution。
-7. 补平台包 parser / adapter 测试。
-8. 补 Manager enable / disable / status / source 测试。
-9. 补 Controller template / page context / resource live gate 测试。
-10. 补 Web API / browser extension 请求路径测试。
-11. 跑完整回归。
+5. 如果平台需要长连接、event consumer 或轮询器，在平台包 Node-only 模块中实现 background service，并由 contribution 声明。
+6. 按需增加 `agents/` 和 `skills/`，并在 contribution 中声明 runtime sources。
+7. 在 `packages/nine1bot/src/platform/builtin.ts` 注册 contribution。
+8. 补平台包 parser / adapter / background service 测试。
+9. 补 Manager enable / disable / status / source / background lifecycle 测试。
+10. 补 Controller template / page context / resource live gate 测试。
+11. 补 Web API / browser extension 请求路径测试。
+12. 跑完整回归。
 
-## 17. 测试清单
+## 18. 测试清单
 
 ### 平台包测试
 
@@ -756,6 +876,7 @@ packages/platform-<id>/test/<id>-platform.test.ts
 - resource contribution。
 - runtime page context blocks。
 - runtime source descriptor 路径与可见性。
+- background service staged / degraded / stopped status。
 
 ### Platform Manager 测试
 
@@ -773,6 +894,9 @@ packages/nine1bot/src/platform/manager.test.ts
 - settings / features / secrets 会传给 contribution context。
 - status / action 失败不会影响其它平台。
 - runtime sources 随平台 enabled / disabled 注册和注销。
+- background services 只为 enabled 平台启动。
+- 重复启动、配置刷新、平台禁用和 shutdown 会停止旧 handles，且 stop 幂等。
+- background service start 失败会写平台 error/degraded status，不影响其它平台。
 
 ### Runtime 测试
 
@@ -810,10 +934,12 @@ packages/browser-extension/test/<id>-page-context.test.ts
 - 平台设置走 `/nine1bot/platforms` API。
 - 普通 Web 对话不携带 page context。
 - browser extension 环境发送消息时携带 `context.page`。
+- 创建 session 主路径只传 `entry + page` 也能由后端 resolve 出平台 template，不要求前端预填平台专属 `templateIds`。
+- `POST /nine1bot/agent/templates/resolve` 可用于 UI preview / debug，但不是创建 session 前的必需调用。
 - disabled 平台不会影响普通 Web 对话。
 - runtime event 能表达 resource / agent unavailable。
 
-## 18. 推荐回归命令
+## 19. 推荐回归命令
 
 平台适配改动建议至少跑：
 
@@ -834,7 +960,7 @@ git diff --check
 
 如果平台改动涉及 session profile、权限、MCP、artifact、interaction 或 legacy API，还要补跑对应的 session / server 测试。
 
-## 19. PR Checklist
+## 20. PR Checklist
 
 新增平台 PR 合入前确认：
 
@@ -842,24 +968,32 @@ git diff --check
 - 平台包导出 `./browser` 和 `./runtime`。
 - descriptor 中 `id`、`capabilities.templates`、`config`、`detailPage`、`actions` 清晰。
 - contribution 不反向依赖 Nine1Bot 产品层。
+- background service 如需 Node-only SDK 或长连接，必须留在平台包 Node/runtime 入口，不从 `./browser` 导出。
 - Nine1Bot 只在 `builtinPlatformContributions` 注册 contribution。
 - runtime core 没有 import 具体平台包。
 - Browser extension 只请求式采集页面，不后台轮询。
 - Web 普通对话不受平台适配影响。
 - 禁用平台后不会贡献 template/resource/context/source。
+- 禁用平台或配置刷新后不会遗留 background service handle。
 - 禁用后重新启用能恢复 adapter 和 sources 注册。
 - 平台 skills 默认不进入普通会话。
 - 平台 agents 不进入 `defaultAgent()`。
 - Secret 字段不进入 config 明文、profileSnapshot、turn snapshot、runtime event、debug payload。
 - 测试覆盖 parser、template、context、resource、manager、web/extension 请求路径。
 
-## 20. 常见错误
+## 21. 常见错误
 
 - 把 GitLab / Jira / GitHub 等平台逻辑写进 runtime core。
 - 在平台包里直接注册 runtime adapter。
+- 在 `PlatformRuntimeAdapter.createAdapter()` 中启动 websocket、watcher、event consumer 或轮询器。
+- 在 Nine1Bot launcher / supervisor 中加入 Feishu、GitLab、Jira 等平台专属启动分支；应改用通用 background service lifecycle。
+- 在平台包里直接读取、修改或保存 `nine1bot.config`，或者为某个平台单独实现 Web UI 保存接口；平台包只声明配置 schema、校验和 normalize。
+- 在 `PlatformRuntimeAdapter` 里承担配置管理职责。adapter 应消费 `ctx.settings`，配置生命周期由 Platform Adapter Manager 管理。
+- 在 Web client 中维护平台专属 template id 映射，导致前端和 runtime adapter 出现两套平台解释。
 - 把平台 skill 放进全局 built-in skills，导致普通会话默认继承。
 - 用平台 template 静默切换用户模型。
 - 每轮消息用 `body.agent` 切换平台 agent。
 - 平台禁用后只隐藏 Web 设置页，没有注销 adapter/source。
 - 将 token 明文写进 config、audit、debug 或 runtime event。
 - browser extension 做后台页面同步，造成 context 污染和 busy 语义不一致。
+- background service 直接 import `packages/nine1bot` 产品层或 opencode server 内部模块，而不是通过公开 Controller API / bridge 调用。

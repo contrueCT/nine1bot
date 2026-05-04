@@ -60,19 +60,7 @@ function resetForm(platform: PlatformDetail | null) {
   for (const field of configFields.value) {
     const value = platform.settings[field.key]
     secretClears[field.key] = false
-    if (isSecretField(field) && isRedactedSecret(value)) {
-      formValues[field.key] = ''
-    } else if (field.type === 'string-list') {
-      formValues[field.key] = Array.isArray(value) ? value.join('\n') : ''
-    } else if (field.type === 'json') {
-      formValues[field.key] = value === undefined ? '' : JSON.stringify(value, null, 2)
-    } else if (field.type === 'boolean') {
-      formValues[field.key] = typeof value === 'boolean' ? value : false
-    } else if (field.type === 'number') {
-      formValues[field.key] = typeof value === 'number' ? value : ''
-    } else {
-      formValues[field.key] = typeof value === 'string' ? value : ''
-    }
+    formValues[field.key] = fieldFormValue(field, value)
   }
 
   for (const action of platform.actions) {
@@ -80,17 +68,7 @@ function resetForm(platform: PlatformDetail | null) {
     actionFormValues[action.id] = {}
     for (const field of actionFields(action)) {
       const value = platform.settings[field.key]
-      if (field.type === 'string-list') {
-        actionFormValues[action.id][field.key] = Array.isArray(value) ? value.join('\n') : ''
-      } else if (field.type === 'json') {
-        actionFormValues[action.id][field.key] = value === undefined ? '' : JSON.stringify(value, null, 2)
-      } else if (field.type === 'boolean') {
-        actionFormValues[action.id][field.key] = typeof value === 'boolean' ? value : false
-      } else if (field.type === 'number') {
-        actionFormValues[action.id][field.key] = typeof value === 'number' ? value : ''
-      } else {
-        actionFormValues[action.id][field.key] = typeof value === 'string' ? value : ''
-      }
+      actionFormValues[action.id][field.key] = fieldFormValue(field, value)
     }
   }
 }
@@ -160,11 +138,33 @@ function isRedactedSecret(value: unknown): value is { redacted: true; hasValue: 
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && (value as any).redacted === true)
 }
 
+function descriptorValue(field: PlatformConfigField, savedValue: unknown) {
+  return savedValue === undefined ? field.defaultValue : savedValue
+}
+
+function fieldFormValue(field: PlatformConfigField, savedValue: unknown): string | number | boolean {
+  if (isSecretField(field)) return ''
+  const value = descriptorValue(field, savedValue)
+  if (field.type === 'string-list') return Array.isArray(value) ? value.join('\n') : ''
+  if (field.type === 'json') return value === undefined ? '' : JSON.stringify(value, null, 2) ?? ''
+  if (field.type === 'boolean') return typeof value === 'boolean' ? value : false
+  if (field.type === 'number') return typeof value === 'number' ? value : ''
+  return typeof value === 'string' ? value : ''
+}
+
 function secretStatus(field: PlatformConfigField) {
   const value = props.selectedPlatform?.settings[field.key]
   if (!isRedactedSecret(value)) return ''
   if (secretClears[field.key]) return '保存后清除'
   return value.hasValue ? `已保存${value.provider ? ` · ${value.provider}` : ''}` : '未设置'
+}
+
+function fieldPlaceholder(field: PlatformConfigField) {
+  if (isSecretField(field)) return secretStatus(field) || field.placeholder || '输入新值'
+  if (field.placeholder) return field.placeholder
+  if (field.type === 'string-list') return '每行一个值'
+  if (field.type === 'json') return '{}'
+  return ''
 }
 
 function fieldInputType(field: PlatformConfigField) {
@@ -486,7 +486,7 @@ function buildActionInput(action: PlatformActionDescriptor) {
                   v-else-if="field.type === 'string-list' || field.type === 'json'"
                   :value="textValue(field.key)"
                   class="input platform-textarea"
-                  :placeholder="field.type === 'string-list' ? '每行一个值' : '{}'"
+                  :placeholder="fieldPlaceholder(field)"
                   @input="setTextValue(field, $event)"
                 ></textarea>
 
@@ -495,7 +495,7 @@ function buildActionInput(action: PlatformActionDescriptor) {
                   :value="textValue(field.key)"
                   class="input platform-input"
                   :type="fieldInputType(field)"
-                  :placeholder="isSecretField(field) ? secretStatus(field) || '输入新值' : ''"
+                  :placeholder="fieldPlaceholder(field)"
                   @input="setTextValue(field, $event)"
                 />
 
@@ -579,7 +579,7 @@ function buildActionInput(action: PlatformActionDescriptor) {
                         :id="actionFieldId(action, field)"
                         :value="actionTextValue(action, field.key)"
                         class="input platform-textarea"
-                        :placeholder="field.type === 'string-list' ? '每行一个值' : '{}'"
+                        :placeholder="fieldPlaceholder(field)"
                         @input="setActionTextValue(action, field, $event)"
                       ></textarea>
 
@@ -589,6 +589,7 @@ function buildActionInput(action: PlatformActionDescriptor) {
                         :value="actionTextValue(action, field.key)"
                         class="input platform-input"
                         :type="fieldInputType(field)"
+                        :placeholder="fieldPlaceholder(field)"
                         @input="setActionTextValue(action, field, $event)"
                       />
 

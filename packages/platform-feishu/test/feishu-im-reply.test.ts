@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { PlatformSecretRef } from '@nine1bot/platform-protocol'
 import {
   answerFeishuCardInteraction,
+  createFeishuIMCardActionHandler,
   createFeishuIMImmediateReplyHandler,
   createFeishuIMReplySinkFactory,
   FeishuIMSessionManager,
@@ -576,6 +577,69 @@ describe('Feishu IM reply coordinator with session manager', () => {
       type: 'project-list',
       projects: [{ id: 'proj_1', name: 'Project One' }],
     })
+  })
+
+  test('card action handler returns updated control cards for project list and cwd', async () => {
+    const bridge = new EventBridge({
+      projects: [{
+        id: 'proj_1',
+        name: 'Project One',
+        rootDirectory: 'C:/project-one',
+      }],
+    })
+    const config = normalizeFeishuIMConfig({
+      imEnabled: true,
+      imDefaultAppId: account.appId,
+      imDefaultAppSecret: secretRef,
+      imMessageBufferMs: 0,
+      imMaxBufferMs: 1000,
+    })
+    const manager = new FeishuIMSessionManager({
+      account,
+      config,
+      controller: bridge,
+      store: new MemoryFeishuIMBindingStore(),
+    })
+    const routeKey = routeKeyForFeishuMessage(message(), { accountId: account.id })
+    const routeKeyString = serializeFeishuRouteKey(routeKey)
+    await manager.resolveOrCreateSession(routeKey)
+    const handler = createFeishuIMCardActionHandler({
+      account,
+      controller: bridge,
+      manager,
+      continueUrlForSession: (sessionId) => `http://127.0.0.1:4096/?session=${sessionId}`,
+    })
+
+    const projectListPayload: FeishuCardActionPayload = {
+      v: 1,
+      accountId: account.id,
+      routeKey: routeKeyString,
+      sessionId: 'ses_1',
+      action: 'control.projectList',
+      nonce: 'nonce-project-list',
+      issuedAt: new Date().toISOString(),
+    }
+    const projectListCard = await handler({
+      accountId: account.id,
+      payload: projectListPayload,
+      value: {},
+      raw: {},
+    })
+    expect(JSON.stringify(projectListCard)).toContain('Project One')
+    expect(JSON.stringify(projectListCard)).toContain('control.showCwd')
+
+    const cwdCard = await handler({
+      accountId: account.id,
+      payload: {
+        ...projectListPayload,
+        action: 'control.showCwd',
+        nonce: 'nonce-cwd',
+      },
+      value: {},
+      raw: {},
+    })
+    expect(JSON.stringify(cwdCard)).toContain('当前目录')
+    expect(JSON.stringify(cwdCard)).toContain('C:/work')
   })
 
   test('streaming card abort action cancels only the current active turn', async () => {

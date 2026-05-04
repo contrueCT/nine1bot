@@ -69,7 +69,7 @@ type FeishuSettings = {
   metadataTimeoutMs: number
 }
 
-const DEFAULT_METADATA_TIMEOUT_MS = 2_000
+export const FEISHU_DEFAULT_METADATA_TIMEOUT_MS = 2_000
 
 export async function enrichFeishuPageContext(
   input: FeishuPageContextEnrichmentInput,
@@ -483,7 +483,7 @@ function readSettings(settings: unknown): FeishuSettings {
   return {
     cliPath: stringValue(record?.cliPath),
     contextEnrichment,
-    metadataTimeoutMs: clampNumber(numberValue(record?.metadataTimeoutMs) ?? DEFAULT_METADATA_TIMEOUT_MS, 500, 15_000),
+    metadataTimeoutMs: clampNumber(numberValue(record?.metadataTimeoutMs) ?? FEISHU_DEFAULT_METADATA_TIMEOUT_MS, 500, 15_000),
   }
 }
 

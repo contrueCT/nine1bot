@@ -71,6 +71,41 @@ describe('Feishu HTTP controller bridge', () => {
     })
   })
 
+  test('does not pass Feishu message ids as controller messageID', async () => {
+    const seen: Array<{ url: string; init: RequestInit; body: any }> = []
+    globalThis.fetch = mockFetch(async (url, init) => {
+      seen.push({ url, init, body: JSON.parse(String(init.body)) })
+      return jsonResponse({
+        accepted: true,
+        busy: false,
+        sessionId: 'ses_1',
+        turnSnapshotId: 'turn_1',
+      })
+    })
+
+    const bridge = createHttpFeishuControllerBridge({
+      localUrl: 'http://127.0.0.1:4096',
+    })
+
+    await expect(bridge.sendMessage({
+      sessionId: 'ses_1',
+      directory: 'C:/work',
+      messageId: 'om_feishu_external',
+      parts: [{ type: 'text', text: 'hello' }],
+    })).resolves.toMatchObject({
+      accepted: true,
+      turnSnapshotId: 'turn_1',
+    })
+
+    expect(new URL(seen[0]!.url).pathname).toBe('/nine1bot/agent/sessions/ses_1/messages')
+    expect(seen[0]!.body).not.toHaveProperty('messageID')
+    expect(seen[0]!.body.entry).toMatchObject({
+      source: 'feishu',
+      platform: 'feishu',
+      traceId: 'om_feishu_external',
+    })
+  })
+
   test('reads sessions and projects from public APIs', async () => {
     globalThis.fetch = mockFetch(async (url) => {
       const path = new URL(url).pathname

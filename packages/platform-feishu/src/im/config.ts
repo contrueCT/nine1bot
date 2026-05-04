@@ -11,7 +11,7 @@ import type {
   FeishuIMPolicy,
 } from './types'
 
-export const FEISHU_IM_DEFAULT_BUFFER_MS = 1_500
+export const FEISHU_IM_DEFAULT_BUFFER_MS = 3_000
 export const FEISHU_IM_DEFAULT_MAX_BUFFER_MS = 8_000
 export const FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS = 600_000
 export const FEISHU_IM_DEFAULT_STREAMING_CARD_UPDATE_MS = 1_000

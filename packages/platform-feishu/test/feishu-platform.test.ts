@@ -2,8 +2,15 @@ import { describe, expect, test } from 'bun:test'
 import {
   buildFeishuPageContextPayload,
   createFeishuPlatformAdapter,
+  FEISHU_IM_DEFAULT_BUFFER_MS,
+  FEISHU_IM_DEFAULT_BUSY_TEXT,
+  FEISHU_IM_DEFAULT_MAX_BUFFER_MS,
+  FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS,
+  FEISHU_IM_DEFAULT_STREAMING_CARD_MAX_CHARS,
+  FEISHU_IM_DEFAULT_STREAMING_CARD_UPDATE_MS,
   feishuPlatformContribution,
   feishuTemplateIdsForPage,
+  normalizeFeishuIMConfig,
   parseFeishuUrl,
 } from '../src'
 import {
@@ -11,6 +18,7 @@ import {
   getFeishuAuthStatus,
   getFeishuCliVersion,
   parseVersion,
+  readFeishuContextEnrichmentSettings,
   resolveFeishuCliPath,
   runFeishuCliJsonWithFile,
   type FeishuCliRunner,
@@ -234,6 +242,59 @@ describe('Feishu platform adapter package', () => {
     expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'context', value: 'auto' }))
     expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'companion', value: FEISHU_CURRENT_PAGE_SKILL }))
     expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'skills' }))
+  })
+
+  test('declares first-run defaults and placeholders in platform descriptor', () => {
+    const fields = new Map(
+      feishuPlatformContribution.descriptor.config?.sections
+        .flatMap((section) => section.fields)
+        .map((field) => [field.key, field]) ?? [],
+    )
+    const imDefaults = normalizeFeishuIMConfig({})
+    const enrichmentDefaults = readFeishuContextEnrichmentSettings({})
+
+    expect(fields.get('cliPath')).toMatchObject({
+      placeholder: expect.stringContaining('PATH'),
+    })
+    expect(fields.get('officialSkillsDirectory')).toMatchObject({
+      placeholder: expect.stringContaining('~/.agents/skills'),
+    })
+    expect(fields.get('contextEnrichment')).toMatchObject({
+      defaultValue: enrichmentDefaults.contextEnrichment,
+    })
+    expect(fields.get('metadataTimeoutMs')).toMatchObject({
+      defaultValue: enrichmentDefaults.metadataTimeoutMs,
+    })
+
+    expect(fields.get('imEnabled')).toMatchObject({ defaultValue: false })
+    expect(fields.get('imDefaultAppId')).toMatchObject({
+      placeholder: expect.stringContaining('enabling IM'),
+    })
+    expect(fields.get('imDefaultAppId')?.defaultValue).toBeUndefined()
+    expect(fields.get('imDefaultAppSecret')).toMatchObject({
+      secret: true,
+      placeholder: expect.stringContaining('enabling IM'),
+    })
+    expect(fields.get('imDefaultAppSecret')?.defaultValue).toBeUndefined()
+    expect(fields.get('imDefaultDirectory')).toMatchObject({
+      placeholder: expect.stringContaining('current project directory'),
+    })
+    expect(fields.get('imDefaultDirectory')?.defaultValue).toBeUndefined()
+
+    expect(fields.get('imConnectionMode')).toMatchObject({ defaultValue: imDefaults.connectionMode })
+    expect(fields.get('imDmPolicy')).toMatchObject({ defaultValue: imDefaults.policy.dmPolicy })
+    expect(fields.get('imGroupPolicy')).toMatchObject({ defaultValue: imDefaults.policy.groupPolicy })
+    expect(fields.get('imRequireMention')).toMatchObject({ defaultValue: imDefaults.policy.requireMention })
+    expect(fields.get('imAllowFrom')).toMatchObject({ defaultValue: imDefaults.policy.allowFrom })
+    expect(fields.get('imReplyMode')).toMatchObject({ defaultValue: imDefaults.policy.replyMode })
+    expect(fields.get('imReplyPresentation')).toMatchObject({ defaultValue: imDefaults.policy.replyPresentation })
+    expect(fields.get('imReplyTimeoutMs')).toMatchObject({ defaultValue: FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS })
+    expect(fields.get('imStreamingCardUpdateMs')).toMatchObject({ defaultValue: FEISHU_IM_DEFAULT_STREAMING_CARD_UPDATE_MS })
+    expect(fields.get('imStreamingCardMaxChars')).toMatchObject({ defaultValue: FEISHU_IM_DEFAULT_STREAMING_CARD_MAX_CHARS })
+    expect(fields.get('imMessageBufferMs')).toMatchObject({ defaultValue: FEISHU_IM_DEFAULT_BUFFER_MS })
+    expect(fields.get('imMaxBufferMs')).toMatchObject({ defaultValue: FEISHU_IM_DEFAULT_MAX_BUFFER_MS })
+    expect(fields.get('imBusyRejectText')).toMatchObject({ defaultValue: FEISHU_IM_DEFAULT_BUSY_TEXT })
+    expect(fields.get('imAccounts')).toMatchObject({ defaultValue: [] })
   })
 
   test('registers Feishu IM reply settings in platform descriptor', () => {

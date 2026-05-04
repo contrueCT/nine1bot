@@ -7,9 +7,19 @@ import type {
   PlatformRuntimeStatus,
   PlatformStatusCard,
 } from '@nine1bot/platform-protocol'
+import { stat } from 'node:fs/promises'
+import { isAbsolute, resolve } from 'node:path'
+import { AppType, Client, Domain, LoggerLevel } from '@larksuiteoapi/node-sdk'
 import { normalizeFeishuIMConfig } from './config'
-import type { FeishuIMNormalizedConfig, FeishuIMRuntimeSnapshot } from './types'
+import type { FeishuIMAccount, FeishuIMNormalizedConfig, FeishuIMRuntimeSnapshot } from './types'
 import { getFeishuIMReplyRuntimeSummary } from './reply-telemetry'
+import type { FeishuIMGatewayHandle } from './gateway'
+import { FeishuIMSessionManager } from './session-manager'
+import { createFeishuIMCardActionHandler, createFeishuIMImmediateReplyHandler, createFeishuIMReplySinkFactory } from './reply-coordinator'
+import { FeishuFileIMBindingStore } from './node/binding-store'
+import { createHttpFeishuControllerBridge } from './node/http-controller-bridge'
+import { createFeishuNodeReplyClient } from './node/reply-client'
+import { createFeishuNodeIMGateway } from './node/gateway'
 
 const FEISHU_IM_SERVICE_ID = 'feishu-im'
 
@@ -52,6 +62,8 @@ function createFeishuIMBackgroundService(): PlatformBackgroundService {
 
 class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
   private status: PlatformRuntimeStatus
+  private readonly gateways: FeishuIMGatewayHandle[] = []
+  private readonly managers: FeishuIMSessionManager[] = []
 
   constructor(private readonly ctx: PlatformBackgroundServiceContext) {
     this.status = statusFromConfig(this.config())
@@ -59,12 +71,95 @@ class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
 
   async start(): Promise<void> {
     const config = this.config()
-    this.status = statusFromConfig(config)
+    const started: string[] = []
+    const errors: PlatformRecentEvent[] = []
+
+    if (!config.enabled || config.accounts.length === 0) {
+      this.status = statusFromConfig(config)
+      latestSnapshot = snapshotFrom(config, this.status)
+      return
+    }
+
+    const controller = createHttpFeishuControllerBridge({
+      localUrl: this.ctx.localUrl,
+      authHeader: this.ctx.authHeader,
+      platformController: this.ctx.controller,
+    })
+    const store = new FeishuFileIMBindingStore({ env: this.ctx.env })
+
+    for (const account of config.accounts) {
+      try {
+        const appSecret = await this.ctx.secrets.get(account.appSecretRef)
+        if (!appSecret) {
+          throw new Error(`Secret ref is missing for account "${account.id}"`)
+        }
+        const client = createClient(account, appSecret)
+        const replyClient = createFeishuNodeReplyClient({ client: client as any })
+        const manager = new FeishuIMSessionManager({
+          account,
+          config,
+          controller,
+          store,
+          defaultDirectory: defaultDirectoryFor(this.ctx, account),
+          resolveDirectory,
+          replySinkFactory: createFeishuIMReplySinkFactory({
+            account,
+            config,
+            controller,
+            client: replyClient,
+            continueUrlForSession: (sessionId) => continueUrl(this.ctx.localUrl, sessionId),
+          }),
+          onImmediateReply: createFeishuIMImmediateReplyHandler({
+            account,
+            config,
+            client: replyClient,
+            continueUrlForSession: (sessionId) => continueUrl(this.ctx.localUrl, sessionId),
+          }),
+        })
+        const gateway = createFeishuNodeIMGateway({
+          account,
+          appSecret,
+          onMessage: async (event) => {
+            await manager.handleIncomingMessage(event.message)
+          },
+          onCardAction: createFeishuIMCardActionHandler({
+            account,
+            controller,
+            manager,
+            continueUrlForSession: (sessionId) => continueUrl(this.ctx.localUrl, sessionId),
+          }),
+          onError: async (error) => {
+            await this.ctx.audit.write({
+              platformId: this.ctx.platformId,
+              level: 'warn',
+              stage: 'im-gateway',
+              message: error.message,
+              data: { accountId: account.id },
+            })
+          },
+        })
+        await gateway.start()
+        this.managers.push(manager)
+        this.gateways.push(gateway)
+        started.push(account.id)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        errors.push(event('error', 'runtime', `Feishu IM account "${account.id}" failed to start: ${message}`))
+      }
+    }
+
+    this.status = statusFromStart(config, started, errors)
     latestSnapshot = snapshotFrom(config, this.status)
   }
 
   async stop(): Promise<void> {
     const config = this.config()
+    for (const gateway of this.gateways.splice(0)) {
+      await gateway.stop().catch(() => undefined)
+    }
+    for (const manager of this.managers.splice(0)) {
+      manager.stop()
+    }
     this.status = {
       status: 'disabled',
       message: 'Feishu IM background service is stopped.',
@@ -102,20 +197,39 @@ function statusFromConfig(config: FeishuIMNormalizedConfig): PlatformRuntimeStat
     }
   }
 
-  if (config.legacy.enabled) {
+  return {
+    status: 'degraded',
+    message: 'Feishu IM background service is configured and waiting to start.',
+    cards: cardsFromConfig(config, 'staged'),
+    recentEvents: legacyEvents(config),
+  }
+}
+
+function statusFromStart(
+  config: FeishuIMNormalizedConfig,
+  started: string[],
+  errors: PlatformRecentEvent[],
+): PlatformRuntimeStatus {
+  if (started.length === 0) {
     return {
-      status: 'degraded',
-      message: 'Legacy Feishu service is enabled, so the new IM background service is staged and will not open a websocket.',
-      cards: cardsFromConfig(config, 'staged'),
-      recentEvents: [event('warn', 'runtime', 'Feishu IM staged because legacy feishu.enabled is active')],
+      status: 'error',
+      message: errors[0]?.message ?? 'Feishu IM failed to start.',
+      cards: cardsFromConfig(config, 'error'),
+      recentEvents: [...legacyEvents(config), ...errors],
     }
   }
 
   return {
-    status: 'degraded',
-    message: 'Feishu IM background service is configured. Real websocket activation is deferred after Phase 1.',
-    cards: cardsFromConfig(config, 'staged'),
-    recentEvents: [event('info', 'runtime', 'Feishu IM skeleton staged without opening a websocket')],
+    status: errors.length > 0 ? 'degraded' : 'available',
+    message: errors.length > 0
+      ? `Feishu IM is running for ${started.length} account(s), but some accounts failed.`
+      : `Feishu IM websocket is running for ${started.length} account(s).`,
+    cards: cardsFromConfig(config, 'running'),
+    recentEvents: [
+      ...legacyEvents(config),
+      event('info', 'runtime', `Feishu IM websocket started for accounts: ${started.join(', ')}`),
+      ...errors,
+    ],
   }
 }
 
@@ -270,4 +384,44 @@ function event(level: PlatformRecentEvent['level'], stage: string, message: stri
     stage,
     message,
   }
+}
+
+function legacyEvents(config: FeishuIMNormalizedConfig): PlatformRecentEvent[] {
+  return config.legacy.enabled
+    ? [event('warn', 'config', 'Legacy feishu config is present but the legacy Feishu service is disabled; platform-feishu IM owns the websocket lifecycle.')]
+    : []
+}
+
+function createClient(account: FeishuIMAccount, appSecret: string) {
+  return new Client({
+    appId: account.appId,
+    appSecret,
+    appType: AppType.SelfBuild,
+    domain: Domain.Feishu,
+    logger: {
+      error: () => {},
+      warn: () => {},
+      info: () => {},
+      debug: () => {},
+      trace: () => {},
+    },
+    loggerLevel: LoggerLevel.info,
+  })
+}
+
+function defaultDirectoryFor(ctx: PlatformBackgroundServiceContext, account: FeishuIMAccount): string {
+  return account.defaultDirectory || ctx.projectDirectory || ctx.env.NINE1BOT_PROJECT_DIR || process.cwd()
+}
+
+async function resolveDirectory(baseDirectory: string | undefined, input: string): Promise<string> {
+  const target = isAbsolute(input) ? resolve(input) : resolve(baseDirectory || process.cwd(), input)
+  const stats = await stat(target)
+  if (!stats.isDirectory()) throw new Error(`Not a directory: ${target}`)
+  return target
+}
+
+function continueUrl(localUrl: string, sessionId: string): string {
+  const url = new URL(localUrl)
+  url.searchParams.set('session', sessionId)
+  return url.toString()
 }
