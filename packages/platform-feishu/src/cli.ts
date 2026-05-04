@@ -78,8 +78,17 @@ function findCommandOnPath(
 }
 
 function commandNames(commandName: string, env: Record<string, string | undefined>) {
-  if (!isWindowsEnv(env) || /\.[^\\/]+$/.test(commandName)) return [commandName]
+  if (!isWindowsEnv(env) || hasFileExtension(commandName)) return [commandName]
   return [`${commandName}.cmd`, `${commandName}.exe`, `${commandName}.bat`, commandName]
+}
+
+function hasFileExtension(commandName: string) {
+  for (let index = commandName.length - 1; index >= 0; index--) {
+    const char = commandName[index]
+    if (char === '/' || char === '\\') return false
+    if (char === '.') return index < commandName.length - 1
+  }
+  return false
 }
 
 function isWindowsEnv(env: Record<string, string | undefined>) {

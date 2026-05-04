@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildFeishuPageContextPayload } from '@nine1bot/platform-feishu'
 import type { FeishuCliRunner } from '@nine1bot/platform-feishu/node'
@@ -67,7 +69,7 @@ describe('Feishu controller page context enrichment', () => {
     }
 
     const body = messageBody()
-    const result = await prepareFeishuControllerMessageContext(body, { runner })
+    const result = await withFakeCliEnv((env) => prepareFeishuControllerMessageContext(body, { runner, env }))
 
     expect(result.contextEnrichment).toMatchObject({
       platform: 'feishu',
@@ -130,20 +132,25 @@ describe('Feishu controller page context enrichment', () => {
       }
     }
 
-    const first = await prepareFeishuControllerMessageContext(messageBody(), {
-      runner,
-      cacheScope: 'ses_1',
-    })
-    const base = messageBody()
-    const second = await prepareFeishuControllerMessageContext({
-      ...base,
-      context: {
-        ...base.context,
-        blocks: [{ id: 'existing' }],
-      },
-    }, {
-      runner,
-      cacheScope: 'ses_1',
+    const { first, second } = await withFakeCliEnv(async (env) => {
+      const first = await prepareFeishuControllerMessageContext(messageBody(), {
+        runner,
+        env,
+        cacheScope: 'ses_1',
+      })
+      const base = messageBody()
+      const second = await prepareFeishuControllerMessageContext({
+        ...base,
+        context: {
+          ...base.context,
+          blocks: [{ id: 'existing' }],
+        },
+      }, {
+        runner,
+        env,
+        cacheScope: 'ses_1',
+      })
+      return { first, second }
     })
 
     expect(calls).toBe(2)
@@ -209,5 +216,15 @@ function messageBody(url = 'https://gdut-topview.feishu.cn/wiki/GKw9w6TOliwkBXkq
         title: 'Wiki Doc',
       }),
     },
+  }
+}
+
+async function withFakeCliEnv<T>(fn: (env: Record<string, string>) => Promise<T>): Promise<T> {
+  const directory = await mkdtemp(join(tmpdir(), 'nine1bot-feishu-cli-'))
+  try {
+    await writeFile(join(directory, 'lark-cli.cmd'), '@echo off\r\n', 'utf8')
+    return await fn({ OS: 'Windows_NT', PATH: directory })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
   }
 }
