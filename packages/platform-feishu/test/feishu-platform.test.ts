@@ -10,6 +10,7 @@ import {
   enrichFeishuPageContext,
   getFeishuAuthStatus,
   getFeishuCliVersion,
+  parseVersion,
   runFeishuCliJsonWithFile,
   type FeishuCliRunner,
 } from '../src/node'
@@ -343,6 +344,12 @@ describe('Feishu platform adapter package', () => {
       state: 'authenticated',
       tokenStatus: 'needs_refresh',
     })
+  })
+
+  test('parses lark-cli versions without regex backtracking', () => {
+    expect(parseVersion('lark-cli version 1.0.23\n')).toBe('1.0.23')
+    expect(parseVersion('lark-cli 1.0.23-beta.1+build.5\n')).toBe('1.0.23-beta.1+build.5')
+    expect(parseVersion(`lark-cli version ${'9'.repeat(10_000)}\n`)).toBe(`lark-cli version ${'9'.repeat(10_000)}`)
   })
 
   test('passes only whitelisted environment variables to lark-cli', async () => {

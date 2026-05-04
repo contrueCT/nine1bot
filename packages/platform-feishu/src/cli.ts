@@ -212,10 +212,67 @@ export function authStateFrom(
 }
 
 export function parseVersion(stdout: string): string | undefined {
-  const firstLine = stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean)
+  const firstLine = firstNonEmptyLine(stdout)
   if (!firstLine) return undefined
-  const match = firstLine.match(/(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/)
-  return match?.[1] ?? firstLine
+  return findVersionToken(firstLine) ?? firstLine
+}
+
+function firstNonEmptyLine(input: string): string | undefined {
+  let start = 0
+  for (let index = 0; index <= input.length; index++) {
+    const isEnd = index === input.length
+    const char = isEnd ? '' : input[index]
+    if (!isEnd && char !== '\n' && char !== '\r') continue
+    const line = input.slice(start, index).trim()
+    if (line) return line
+    if (char === '\r' && input[index + 1] === '\n') index++
+    start = index + 1
+  }
+  return undefined
+}
+
+function findVersionToken(input: string): string | undefined {
+  for (let index = 0; index < input.length; index++) {
+    if (!isDigit(input[index])) continue
+    const end = consumeSemverToken(input, index)
+    if (end > index) return input.slice(index, end)
+  }
+  return undefined
+}
+
+function consumeSemverToken(input: string, start: number): number {
+  let index = consumeDigits(input, start)
+  if (input[index] !== '.') return -1
+  index = consumeDigits(input, index + 1)
+  if (input[index] !== '.') return -1
+  index = consumeDigits(input, index + 1)
+  if (index <= start) return -1
+  if (input[index] !== '-' && input[index] !== '+') return index
+  const suffixStart = index
+  index++
+  while (index < input.length && isVersionSuffixChar(input[index])) index++
+  return index > suffixStart + 1 ? index : suffixStart
+}
+
+function consumeDigits(input: string, start: number): number {
+  let index = start
+  while (index < input.length && isDigit(input[index])) index++
+  return index > start ? index : -1
+}
+
+function isDigit(char: string | undefined) {
+  return char !== undefined && char >= '0' && char <= '9'
+}
+
+function isVersionSuffixChar(char: string | undefined) {
+  if (!char) return false
+  return isDigit(char)
+    || (char >= 'a' && char <= 'z')
+    || (char >= 'A' && char <= 'Z')
+    || char === '_'
+    || char === '.'
+    || char === '-'
+    || char === '+'
 }
 
 function parseFirstJson(input: string): unknown | undefined {
