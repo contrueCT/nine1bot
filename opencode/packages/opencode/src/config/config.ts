@@ -28,6 +28,7 @@ import { existsSync } from "fs"
 import { Bus } from "@/bus"
 import { GlobalBus } from "@/bus/global"
 import { Event } from "../server/event"
+import { State } from "../project/state"
 
 export namespace Config {
   const log = Log.create({ service: "config" })
@@ -44,7 +45,7 @@ export namespace Config {
     return merged
   }
 
-  export const state = Instance.state(async () => {
+  async function stateInit() {
     const auth = await Auth.all()
 
     // Load remote/well-known config first as the base layer (lowest precedence)
@@ -222,7 +223,9 @@ export namespace Config {
       config: result,
       directories,
     }
-  })
+  }
+
+  export const state = Instance.state(stateInit)
 
   export async function installDependencies(dir: string) {
     const pkg = path.join(dir, "package.json")
@@ -1326,11 +1329,24 @@ export namespace Config {
     return global()
   }
 
-  export async function update(config: Info) {
+  export type UpdateOptions = {
+    reload?: "dispose" | "refresh" | false
+  }
+
+  export function refresh() {
+    State.invalidate(Instance.directory, stateInit)
+  }
+
+  export async function update(config: Info, options: UpdateOptions = {}) {
     const filepath = path.join(Instance.directory, "config.json")
     const existing = await loadFile(filepath)
     await Bun.write(filepath, JSON.stringify(mergeDeep(existing, config), null, 2))
-    await Instance.dispose()
+    const reload = options.reload ?? "dispose"
+    if (reload === "dispose") {
+      await Instance.dispose()
+      return
+    }
+    if (reload === "refresh") refresh()
   }
 
   function globalConfigFile() {

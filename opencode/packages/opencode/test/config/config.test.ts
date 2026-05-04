@@ -6,6 +6,7 @@ import { tmpdir } from "../fixture/fixture"
 import path from "path"
 import fs from "fs/promises"
 import { pathToFileURL } from "url"
+import { GlobalBus } from "../../src/bus/global"
 
 test("loads config with defaults when no files exist", async () => {
   await using tmp = await tmpdir()
@@ -560,13 +561,63 @@ test("updates config and writes to file", async () => {
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
+      const disposed = collectInstanceDisposedEvents()
       const newConfig = { model: "updated/model" }
-      await Config.update(newConfig as any)
+      try {
+        await Config.update(newConfig as any)
 
-      const writtenConfig = JSON.parse(await Bun.file(path.join(tmp.path, "config.json")).text())
-      expect(writtenConfig.model).toBe("updated/model")
+        const writtenConfig = JSON.parse(await Bun.file(path.join(tmp.path, "config.json")).text())
+        expect(writtenConfig.model).toBe("updated/model")
+        expect(disposed.events).toContainEqual(expect.objectContaining({
+          directory: tmp.path,
+          payload: expect.objectContaining({
+            type: "server.instance.disposed",
+          }),
+        }))
+      } finally {
+        disposed.stop()
+      }
     },
   })
+})
+
+test("updates config with refresh without disposing the current instance", async () => {
+  const originalConfig = process.env.OPENCODE_CONFIG
+  const originalDisableGlobal = process.env.OPENCODE_DISABLE_GLOBAL_CONFIG
+  const originalDisableProject = process.env.OPENCODE_DISABLE_PROJECT_CONFIG
+  const originalDisablePluginInstall = process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL
+
+  try {
+    await using tmp = await tmpdir()
+    process.env.OPENCODE_CONFIG = path.join(tmp.path, "config.json")
+    process.env.OPENCODE_DISABLE_GLOBAL_CONFIG = "true"
+    process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "true"
+    process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL = "true"
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const disposed = collectInstanceDisposedEvents()
+        try {
+          expect((await Config.get()).model).toBeUndefined()
+
+          await Config.update({ model: "updated/model" } as any, { reload: "refresh" })
+
+          const writtenConfig = JSON.parse(await Bun.file(path.join(tmp.path, "config.json")).text())
+          expect(writtenConfig.model).toBe("updated/model")
+          expect(disposed.events).toEqual([])
+          expect((await Config.get()).model).toBe("updated/model")
+        } finally {
+          disposed.stop()
+        }
+      },
+    })
+  } finally {
+    restoreEnv("OPENCODE_CONFIG", originalConfig)
+    restoreEnv("OPENCODE_DISABLE_GLOBAL_CONFIG", originalDisableGlobal)
+    restoreEnv("OPENCODE_DISABLE_PROJECT_CONFIG", originalDisableProject)
+    restoreEnv("OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL", originalDisablePluginInstall)
+  }
 })
 
 test("gets config directories", async () => {
@@ -579,6 +630,28 @@ test("gets config directories", async () => {
     },
   })
 })
+
+function collectInstanceDisposedEvents() {
+  const events: Array<{ directory?: string; payload: any }> = []
+  const handler = (event: { directory?: string; payload: any }) => {
+    if (event.payload?.type === "server.instance.disposed") events.push(event)
+  }
+  GlobalBus.on("event", handler)
+  return {
+    events,
+    stop() {
+      GlobalBus.off("event", handler)
+    },
+  }
+}
+
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key]
+    return
+  }
+  process.env[key] = value
+}
 
 test("resolves scoped npm plugins in config", async () => {
   await using tmp = await tmpdir({

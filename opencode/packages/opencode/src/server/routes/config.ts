@@ -46,7 +46,7 @@ async function patchOpencodeRuntimeConfig(patch: Record<string, any>) {
   const opConfigPath = process.env.OPENCODE_CONFIG || ""
   if (!opConfigPath) return
   const opText = await readFile(opConfigPath, "utf-8").catch(() => "{}")
-  const opConfig = JSON.parse(opText)
+  const opConfig = (parseJsonc(opText) || {}) as Record<string, any>
   Object.assign(opConfig, patch)
   await writeFile(opConfigPath, JSON.stringify(opConfig, null, 2))
 }
@@ -127,7 +127,8 @@ export const ConfigRoutes = lazy(() =>
       validator("json", Config.Info),
       async (c) => {
         const config = c.req.valid("json")
-        await Config.update(config)
+        await Config.update(config, { reload: "refresh" })
+        Provider.refresh()
         return c.json(config)
       },
     )
@@ -204,8 +205,7 @@ export const ConfigRoutes = lazy(() =>
           runtimePatch.provider = { ...preserved, ...mapped }
         }
         await patchOpencodeRuntimeConfig(runtimePatch)
-        // 3. 触发 Instance 重建，强制重新加载配置
-        await Config.update(runtimePatch)
+        Config.refresh()
         Provider.refresh()
         return c.json({ success: true })
       } catch (e: any) {
@@ -254,12 +254,7 @@ export const ConfigRoutes = lazy(() =>
               ...mapped,
             },
           })
-          await Config.update({
-            provider: {
-              ...(current.provider || {}),
-              ...mapped,
-            },
-          })
+          Config.refresh()
           Provider.refresh()
           return c.json({ success: true })
         } catch (e: any) {
@@ -297,7 +292,7 @@ export const ConfigRoutes = lazy(() =>
             ...mapped,
           }
           await patchOpencodeRuntimeConfig({ provider: nextProvider })
-          await Config.update({ provider: nextProvider })
+          Config.refresh()
           Provider.refresh()
           return c.json({ success: true })
         } catch (e: any) {
