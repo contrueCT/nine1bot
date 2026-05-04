@@ -31,6 +31,8 @@ const enabledDraft = ref(true)
 const formValues = reactive<Record<string, string | number | boolean>>({})
 const secretClears = reactive<Record<string, boolean>>({})
 const jsonErrors = reactive<Record<string, string>>({})
+const actionFormValues = reactive<Record<string, Record<string, string | number | boolean>>>({})
+const actionJsonErrors = reactive<Record<string, Record<string, string>>>({})
 
 const configFields = computed(() => {
   return props.selectedPlatform?.config?.sections.flatMap((section) => section.fields) ?? []
@@ -51,6 +53,8 @@ function resetForm(platform: PlatformDetail | null) {
   for (const key of Object.keys(formValues)) delete formValues[key]
   for (const key of Object.keys(secretClears)) delete secretClears[key]
   for (const key of Object.keys(jsonErrors)) delete jsonErrors[key]
+  for (const key of Object.keys(actionFormValues)) delete actionFormValues[key]
+  for (const key of Object.keys(actionJsonErrors)) delete actionJsonErrors[key]
   if (!platform) return
 
   for (const field of configFields.value) {
@@ -68,6 +72,25 @@ function resetForm(platform: PlatformDetail | null) {
       formValues[field.key] = typeof value === 'number' ? value : ''
     } else {
       formValues[field.key] = typeof value === 'string' ? value : ''
+    }
+  }
+
+  for (const action of platform.actions) {
+    if (action.kind !== 'form' || !action.inputSchema) continue
+    actionFormValues[action.id] = {}
+    for (const field of actionFields(action)) {
+      const value = platform.settings[field.key]
+      if (field.type === 'string-list') {
+        actionFormValues[action.id][field.key] = Array.isArray(value) ? value.join('\n') : ''
+      } else if (field.type === 'json') {
+        actionFormValues[action.id][field.key] = value === undefined ? '' : JSON.stringify(value, null, 2)
+      } else if (field.type === 'boolean') {
+        actionFormValues[action.id][field.key] = typeof value === 'boolean' ? value : false
+      } else if (field.type === 'number') {
+        actionFormValues[action.id][field.key] = typeof value === 'number' ? value : ''
+      } else {
+        actionFormValues[action.id][field.key] = typeof value === 'string' ? value : ''
+      }
     }
   }
 }
@@ -207,6 +230,43 @@ function parseField(field: PlatformConfigField): { include: boolean; value?: unk
   return { include: true, value }
 }
 
+function parsePlainField(
+  field: PlatformConfigField,
+  values: Record<string, string | number | boolean>,
+): { include: boolean; value?: unknown; error?: string } {
+  const value = values[field.key]
+  if (field.type === 'string-list') {
+    const values = typeof value === 'string'
+      ? value.split('\n').map((item) => item.trim()).filter(Boolean)
+      : []
+    return { include: true, value: values }
+  }
+
+  if (field.type === 'json') {
+    if (typeof value !== 'string' || !value.trim()) return { include: true, value: null }
+    try {
+      return { include: true, value: JSON.parse(value) }
+    } catch {
+      return { include: false, error: 'JSON 格式不正确' }
+    }
+  }
+
+  if (field.type === 'select') {
+    return { include: true, value: typeof value === 'string' && value.trim() ? value.trim() : null }
+  }
+
+  if (field.type === 'number') {
+    if (value === '') return { include: true, value: null }
+    const numberValue = Number(value)
+    if (!Number.isFinite(numberValue)) return { include: false, error: '请输入有效数字' }
+    return { include: true, value: numberValue }
+  }
+
+  if (field.type === 'boolean') return { include: true, value: Boolean(value) }
+  if (typeof value === 'string') return { include: true, value: value.trim() }
+  return { include: true, value }
+}
+
 function buildSettingsPatch() {
   const settings: Record<string, unknown> = {}
   for (const key of Object.keys(jsonErrors)) delete jsonErrors[key]
@@ -241,12 +301,65 @@ function refreshStatus() {
 function runAction(action: PlatformActionDescriptor) {
   const platform = props.selectedPlatform
   if (!platform) return
+  const input = action.kind === 'form' ? buildActionInput(action) : undefined
+  if (input === undefined && action.kind === 'form') return
   let confirmed = false
   if (action.danger) {
     confirmed = window.confirm(`确认执行「${action.label}」？`)
     if (!confirmed) return
   }
-  emit('action', platform.id, action.id, undefined, action.danger ? confirmed : undefined)
+  emit('action', platform.id, action.id, input, action.danger ? confirmed : undefined)
+}
+
+function actionFields(action: PlatformActionDescriptor): PlatformConfigField[] {
+  return action.inputSchema?.sections.flatMap((section) => section.fields) ?? []
+}
+
+function ensureActionValues(action: PlatformActionDescriptor) {
+  if (!actionFormValues[action.id]) actionFormValues[action.id] = {}
+  return actionFormValues[action.id]
+}
+
+function actionTextValue(action: PlatformActionDescriptor, key: string) {
+  const value = ensureActionValues(action)[key]
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : ''
+}
+
+function actionBooleanValue(action: PlatformActionDescriptor, key: string) {
+  return Boolean(ensureActionValues(action)[key])
+}
+
+function setActionTextValue(action: PlatformActionDescriptor, field: PlatformConfigField, event: Event) {
+  ensureActionValues(action)[field.key] = (event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value
+}
+
+function setActionBooleanValue(action: PlatformActionDescriptor, field: PlatformConfigField, event: Event) {
+  ensureActionValues(action)[field.key] = (event.target as HTMLInputElement).checked
+}
+
+function actionFieldError(action: PlatformActionDescriptor, key: string) {
+  return actionJsonErrors[action.id]?.[key]
+}
+
+function buildActionInput(action: PlatformActionDescriptor) {
+  const values = ensureActionValues(action)
+  const errors: Record<string, string> = {}
+  const input: Record<string, unknown> = {}
+  for (const field of actionFields(action)) {
+    const parsed = parsePlainField(field, values)
+    if (parsed.error) {
+      errors[field.key] = parsed.error
+      continue
+    }
+    if (parsed.include) input[field.key] = parsed.value
+  }
+
+  if (Object.keys(errors).length > 0) {
+    actionJsonErrors[action.id] = errors
+    return undefined
+  }
+  delete actionJsonErrors[action.id]
+  return input
 }
 </script>
 
@@ -404,21 +517,80 @@ function runAction(action: PlatformActionDescriptor) {
           <div v-if="selectedPlatform.actions.length" class="platform-section">
             <h5 class="platform-section-title">操作</h5>
             <div class="platform-action-list">
-              <div v-for="action in selectedPlatform.actions" :key="action.id" class="platform-action-item">
-                <div>
-                  <div class="platform-action-title">{{ action.label }}</div>
-                  <div class="platform-action-desc text-muted text-sm">{{ action.description || action.id }}</div>
+              <form
+                v-for="action in selectedPlatform.actions"
+                :key="action.id"
+                class="platform-action-item"
+                @submit.prevent="runAction(action)"
+              >
+                <div class="platform-action-header">
+                  <div>
+                    <div class="platform-action-title">{{ action.label }}</div>
+                    <div class="platform-action-desc text-muted text-sm">{{ action.description || action.id }}</div>
+                  </div>
+                  <button
+                    class="btn btn-secondary btn-sm"
+                    :class="{ danger: action.danger }"
+                    :disabled="operationLocked"
+                    type="submit"
+                  >
+                    <Play :size="13" />
+                    <span>{{ actionRunning === action.id ? '执行中' : '执行' }}</span>
+                  </button>
                 </div>
-                <button
-                  class="btn btn-secondary btn-sm"
-                  :class="{ danger: action.danger }"
-                  :disabled="operationLocked"
-                  @click="runAction(action)"
-                >
-                  <Play :size="13" />
-                  <span>{{ actionRunning === action.id ? '执行中' : '执行' }}</span>
-                </button>
-              </div>
+
+                <div v-if="action.kind === 'form' && action.inputSchema" class="platform-action-form">
+                  <div v-for="section in action.inputSchema.sections" :key="section.id" class="platform-form-section compact">
+                    <div v-if="section.title || section.description" class="platform-form-section-header">
+                      <span v-if="section.title" class="platform-form-section-title">{{ section.title }}</span>
+                      <span v-if="section.description" class="text-muted text-sm">{{ section.description }}</span>
+                    </div>
+
+                    <label v-for="field in section.fields" :key="field.key" class="platform-field">
+                      <span class="platform-field-label">{{ field.label }}</span>
+                      <span v-if="field.description" class="platform-field-desc text-muted text-sm">{{ field.description }}</span>
+
+                      <select
+                        v-if="field.type === 'select'"
+                        :value="actionTextValue(action, field.key)"
+                        class="input platform-input"
+                        @change="setActionTextValue(action, field, $event)"
+                      >
+                        <option v-for="option in field.options || []" :key="option" :value="option">{{ option }}</option>
+                      </select>
+
+                      <label v-else-if="field.type === 'boolean'" class="platform-switch inline">
+                        <input
+                          :checked="actionBooleanValue(action, field.key)"
+                          type="checkbox"
+                          @change="setActionBooleanValue(action, field, $event)"
+                        />
+                        <span>{{ actionBooleanValue(action, field.key) ? '开启' : '关闭' }}</span>
+                      </label>
+
+                      <textarea
+                        v-else-if="field.type === 'string-list' || field.type === 'json'"
+                        :value="actionTextValue(action, field.key)"
+                        class="input platform-textarea"
+                        :placeholder="field.type === 'string-list' ? '每行一个值' : '{}'"
+                        @input="setActionTextValue(action, field, $event)"
+                      ></textarea>
+
+                      <input
+                        v-else
+                        :value="actionTextValue(action, field.key)"
+                        class="input platform-input"
+                        :type="fieldInputType(field)"
+                        @input="setActionTextValue(action, field, $event)"
+                      />
+
+                      <span v-if="actionFieldError(action, field.key)" class="platform-field-error">
+                        {{ actionFieldError(action, field.key) }}
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              </form>
             </div>
             <div v-if="actionResult" class="platform-alert" :class="actionResult.status === 'ok' ? 'success' : 'warning'">
               {{ actionResult.message || actionResult.status }}
@@ -673,6 +845,23 @@ function runAction(action: PlatformActionDescriptor) {
   border: 0.5px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.platform-action-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.platform-action-form {
+  margin-top: var(--space-sm);
+}
+
+.platform-form-section.compact {
+  padding: 10px;
 }
 
 .platform-event {

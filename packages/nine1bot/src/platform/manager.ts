@@ -87,6 +87,7 @@ export type PlatformRuntimeSourceSummary = {
   id: string
   directory: string
   namespace?: string
+  includeNamePrefix?: string
   visibility: string
   status: 'registered' | 'disabled' | 'error'
   error?: string
@@ -600,6 +601,7 @@ export class PlatformAdapterManager {
         id: source.id,
         directory: source.directory,
         namespace: source.namespace,
+        includeNamePrefix: source.includeNamePrefix,
         visibility: source.visibility,
         status: registeredSkills.has(source.id) ? 'registered' : status,
         error: runtimeSourceError(record, source.id, status),

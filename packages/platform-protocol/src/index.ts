@@ -155,6 +155,7 @@ export type PlatformSkillSourceDescriptor = {
   id: string
   directory: string
   namespace?: string
+  includeNamePrefix?: string
   visibility: 'default' | 'declared-only'
   lifecycle: PlatformRuntimeSourceLifecycle
 }

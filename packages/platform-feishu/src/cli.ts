@@ -240,10 +240,39 @@ function parseFirstJson(input: string): unknown | undefined {
 }
 
 function effectiveEnv(env?: Record<string, string | undefined>) {
-  return {
-    ...process.env,
-    ...env,
+  const output: Record<string, string> = {}
+  for (const source of [process.env, env ?? {}]) {
+    for (const [key, value] of Object.entries(source)) {
+      if (value === undefined || !isAllowedEnvKey(key)) continue
+      output[key] = value
+    }
   }
+  return output
+}
+
+function isAllowedEnvKey(key: string) {
+  const upper = key.toUpperCase()
+  return upper === 'PATH'
+    || upper === 'PATHEXT'
+    || upper === 'SYSTEMROOT'
+    || upper === 'WINDIR'
+    || upper === 'COMSPEC'
+    || upper === 'TEMP'
+    || upper === 'TMP'
+    || upper === 'TMPDIR'
+    || upper === 'USERPROFILE'
+    || upper === 'HOME'
+    || upper === 'HOMEDRIVE'
+    || upper === 'HOMEPATH'
+    || upper === 'APPDATA'
+    || upper === 'LOCALAPPDATA'
+    || upper === 'LANG'
+    || upper === 'SHELL'
+    || upper === 'HTTP_PROXY'
+    || upper === 'HTTPS_PROXY'
+    || upper === 'NO_PROXY'
+    || upper === 'ALL_PROXY'
+    || upper.startsWith('LC_')
 }
 
 function hasPathSeparator(input: string) {

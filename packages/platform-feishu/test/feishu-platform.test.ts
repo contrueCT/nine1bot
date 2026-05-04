@@ -345,6 +345,45 @@ describe('Feishu platform adapter package', () => {
     })
   })
 
+  test('passes only whitelisted environment variables to lark-cli', async () => {
+    const originalSecret = process.env.NINE1BOT_SECRET
+    const originalApiKey = process.env.OPENAI_API_KEY
+    process.env.NINE1BOT_SECRET = 'process-secret'
+    process.env.OPENAI_API_KEY = 'process-api-key'
+
+    try {
+      let seenEnv: Record<string, string | undefined> | undefined
+      const runner: FeishuCliRunner = async (_command, _args, options) => {
+        seenEnv = options.env
+        return { exitCode: 0, stdout: 'lark-cli version 1.0.23\n', stderr: '' }
+      }
+
+      await getFeishuCliVersion({
+        cliPath: 'lark-cli',
+        env: {
+          PATH: 'C:\\bin',
+          TEMP: 'C:\\tmp',
+          HTTP_PROXY: 'http://proxy.local',
+          NINE1BOT_SECRET: 'override-secret',
+          LARK_ACCESS_TOKEN: 'uat-token',
+        },
+        runner,
+      })
+
+      expect(seenEnv).toMatchObject({
+        PATH: 'C:\\bin',
+        TEMP: 'C:\\tmp',
+        HTTP_PROXY: 'http://proxy.local',
+      })
+      expect(seenEnv).not.toHaveProperty('NINE1BOT_SECRET')
+      expect(seenEnv).not.toHaveProperty('OPENAI_API_KEY')
+      expect(seenEnv).not.toHaveProperty('LARK_ACCESS_TOKEN')
+    } finally {
+      restoreEnv('NINE1BOT_SECRET', originalSecret)
+      restoreEnv('OPENAI_API_KEY', originalApiKey)
+    }
+  })
+
   test('passes JSON params through relative @file arguments', async () => {
     const seen: Array<{ args: string[]; payload: unknown }> = []
     const runner: FeishuCliRunner = async (_command, args, options) => {
@@ -591,4 +630,12 @@ async function writeSkill(root: string, name: string) {
     `# ${name}`,
     '',
   ].join('\n'), 'utf8')
+}
+
+function restoreEnv(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key]
+    return
+  }
+  process.env[key] = value
 }

@@ -1852,6 +1852,7 @@ export interface PlatformRuntimeSourceSummary {
   id: string
   directory: string
   namespace?: string
+  includeNamePrefix?: string
   visibility: string
   status: 'registered' | 'disabled' | 'error'
   error?: string

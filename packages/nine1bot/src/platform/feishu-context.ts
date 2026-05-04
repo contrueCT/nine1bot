@@ -3,6 +3,7 @@ import {
   type FeishuContextEnrichmentSummary,
   type FeishuCliRunner,
 } from '@nine1bot/platform-feishu/node'
+import { normalizeFeishuPagePayload } from '@nine1bot/platform-feishu/runtime'
 import { getBuiltinPlatformManager } from './builtin'
 import type { RuntimeControllerProtocol } from '../../../../opencode/packages/opencode/src/runtime/controller/protocol'
 import type { PlatformPagePayload } from '@nine1bot/platform-protocol'
@@ -28,6 +29,7 @@ export async function prepareFeishuControllerMessageContext(
   const manager = getBuiltinPlatformManager()
   const record = manager.get('feishu')
   if (!record?.enabled) return { body }
+  if (!isFeishuMetadataSupportedPage(page)) return { body }
 
   const result = await enrichFeishuPageContext({
     page,
@@ -60,6 +62,16 @@ function shouldEnhance(entry?: RuntimeControllerProtocol.Entry) {
 
 function isFeishuPage(page: PlatformPagePayload) {
   return page.platform === 'feishu' || Boolean(page.url && isFeishuUrl(page.url))
+}
+
+function isFeishuMetadataSupportedPage(page: PlatformPagePayload) {
+  const normalized = normalizeFeishuPagePayload(page)
+  return normalized?.pageType === 'feishu-docx'
+    || normalized?.pageType === 'feishu-wiki'
+    || normalized?.pageType === 'feishu-sheet'
+    || normalized?.pageType === 'feishu-bitable'
+    || normalized?.pageType === 'feishu-folder'
+    || normalized?.pageType === 'feishu-slides'
 }
 
 function isFeishuUrl(input: string) {

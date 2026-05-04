@@ -97,9 +97,30 @@ describe('Feishu controller page context enrichment', () => {
     expect(result.body).toBe(body)
     expect(result.contextEnrichment).toBeUndefined()
   })
+
+  test('keeps unknown Feishu routes visible-only without CLI metadata noise', async () => {
+    getBuiltinPlatformManager({
+      config: {
+        feishu: {
+          enabled: true,
+          settings: {
+            cliPath: 'lark-cli',
+          },
+        },
+      },
+    })
+    const runner: FeishuCliRunner = async () => {
+      throw new Error('CLI should not run for unknown Feishu routes')
+    }
+    const body = messageBody('https://gdut-topview.feishu.cn/space/home')
+    const result = await prepareFeishuControllerMessageContext(body, { runner })
+
+    expect(result.body).toBe(body)
+    expect(result.contextEnrichment).toBeUndefined()
+  })
 })
 
-function messageBody(): RuntimeControllerProtocol.MessageSendRequest {
+function messageBody(url = 'https://gdut-topview.feishu.cn/wiki/GKw9w6TOliwkBXkqO8UcphiDnUg'): RuntimeControllerProtocol.MessageSendRequest {
   return {
     parts: [{ type: 'text', text: 'hello' }],
     entry: {
@@ -109,7 +130,7 @@ function messageBody(): RuntimeControllerProtocol.MessageSendRequest {
     },
     context: {
       page: buildFeishuPageContextPayload({
-        url: 'https://gdut-topview.feishu.cn/wiki/GKw9w6TOliwkBXkqO8UcphiDnUg',
+        url,
         title: 'Wiki Doc',
       }),
     },

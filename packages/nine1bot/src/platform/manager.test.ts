@@ -507,6 +507,10 @@ describe('PlatformAdapterManager', () => {
       'feishu-companion-skills',
       'feishu-official-skills',
     ])
+    expect(RuntimeSourceRegistry.listOwner('feishu').skills).toContainEqual(expect.objectContaining({
+      id: 'feishu-official-skills',
+      includeNamePrefix: 'lark-',
+    }))
   })
 
   it('skips built-in GitLab when config disables it', () => {

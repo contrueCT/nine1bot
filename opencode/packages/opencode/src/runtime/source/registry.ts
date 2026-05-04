@@ -21,6 +21,7 @@ export namespace RuntimeSourceRegistry {
     id: string
     directory: string
     namespace?: string
+    includeNamePrefix?: string
     visibility: SkillSourceVisibility
     lifecycle: SourceLifecycle
   }

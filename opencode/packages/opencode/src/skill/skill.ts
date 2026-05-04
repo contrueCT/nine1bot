@@ -229,7 +229,7 @@ export namespace Skill {
   }
 
   async function scanRuntimeSkillSources(skills: Record<string, Info>) {
-    const addSkill = async (match: string, source: Source) => {
+    const addSkill = async (match: string, source: Source, options?: { includeNamePrefix?: string }) => {
       const md = await ConfigMarkdown.parse(match).catch((err) => {
         log.error("failed to load runtime skill source item", { skill: match, err })
         return undefined
@@ -238,6 +238,7 @@ export namespace Skill {
 
       const parsed = Info.pick({ name: true, description: true }).safeParse(md.data)
       if (!parsed.success) return
+      if (options?.includeNamePrefix && !parsed.data.name.startsWith(options.includeNamePrefix)) return
 
       const existing = skills[parsed.data.name]
       if (existing && sourceVisibility(existing) === "default" && source.visibility === "declared-only") {
@@ -302,7 +303,7 @@ export namespace Skill {
       }
 
       for (const match of matches) {
-        await addSkill(match, source)
+        await addSkill(match, source, { includeNamePrefix: runtimeSource.includeNamePrefix })
       }
     }
   }

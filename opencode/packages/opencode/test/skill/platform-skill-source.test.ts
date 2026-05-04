@@ -250,3 +250,49 @@ test("unregistered platform skill sources become unavailable for declared profil
     process.env.OPENCODE_TEST_HOME = originalHome
   }
 })
+
+test("runtime skill sources can filter by skill name prefix", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    init: async (dir) => {
+      const officialSkills = path.join(dir, "official-skills")
+      await writeSkill(officialSkills, "lark-doc", "Feishu doc operations.")
+      await writeSkill(officialSkills, "custom-tool", "Non-Lark custom tool.")
+      return { officialSkills }
+    },
+  })
+
+  const originalHome = process.env.OPENCODE_TEST_HOME
+  process.env.OPENCODE_TEST_HOME = tmp.path
+
+  try {
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        RuntimeSourceRegistry.registerOwner({
+          owner: {
+            id: "feishu",
+            kind: "platform",
+            enabled: true,
+          },
+          sources: {
+            skills: [{
+              id: "feishu-official-skills",
+              directory: tmp.extra.officialSkills,
+              includeNamePrefix: "lark-",
+              visibility: "default",
+              lifecycle: "platform-enabled",
+            }],
+          },
+        })
+
+        const names = (await Skill.all()).map((skill) => skill.name)
+        expect(names).toContain("lark-doc")
+        expect(names).not.toContain("custom-tool")
+        expect(await Skill.get("custom-tool")).toBeUndefined()
+      },
+    })
+  } finally {
+    process.env.OPENCODE_TEST_HOME = originalHome
+  }
+})

@@ -36,6 +36,7 @@ export function feishuRuntimeSources(ctx: PlatformAdapterContext): PlatformRunti
       {
         id: 'feishu-official-skills',
         directory: sources.officialDirectory,
+        includeNamePrefix: 'lark-',
         visibility: 'default',
         lifecycle: 'platform-enabled',
       },
