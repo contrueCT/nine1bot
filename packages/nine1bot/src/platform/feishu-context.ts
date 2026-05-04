@@ -16,7 +16,20 @@ export type FeishuControllerMessageContextResult = {
 export type FeishuControllerMessageContextOptions = {
   env?: Record<string, string | undefined>
   runner?: FeishuCliRunner
+  cacheScope?: string
+  cacheTtlMs?: number
 }
+
+const DEFAULT_ENRICHMENT_CACHE_TTL_MS = 30_000
+type CachedFeishuEnrichment = {
+  page: PlatformPagePayload
+  blocks: unknown[]
+  contextEnrichment?: FeishuContextEnrichmentSummary
+}
+const enrichmentCache = new Map<string, {
+  expiresAt: number
+  value: Promise<CachedFeishuEnrichment>
+}>()
 
 export async function prepareFeishuControllerMessageContext(
   body: RuntimeControllerProtocol.MessageSendRequest,
@@ -31,29 +44,95 @@ export async function prepareFeishuControllerMessageContext(
   if (!record?.enabled) return { body }
   if (!isFeishuMetadataSupportedPage(page)) return { body }
 
+  const cacheKey = options.cacheScope ? cacheKeyFor(options.cacheScope, page, record.settings) : undefined
+  if (cacheKey) {
+    const cached = getCached(cacheKey)
+    if (cached) return applyCachedResult(body, await cached)
+  }
+
+  const enrichment = enrichPage(page, record.settings, options)
+  if (cacheKey) {
+    setCached(cacheKey, enrichment, options.cacheTtlMs ?? DEFAULT_ENRICHMENT_CACHE_TTL_MS)
+  }
+  return applyCachedResult(body, await enrichment)
+}
+
+export function clearFeishuControllerMessageContextCacheForTesting() {
+  enrichmentCache.clear()
+}
+
+async function enrichPage(
+  page: PlatformPagePayload,
+  settings: unknown,
+  options: FeishuControllerMessageContextOptions,
+): Promise<CachedFeishuEnrichment> {
   const result = await enrichFeishuPageContext({
     page,
-    settings: record.settings,
+    settings,
     env: options.env ?? process.env,
     runner: options.runner,
   })
 
   return {
-    body: {
-      ...body,
-      context: {
-        ...(body.context ?? {}),
-        page: result.page,
-        blocks: [
-          ...((body.context?.blocks ?? []) as unknown[]),
-          ...result.blocks,
-        ],
-      },
-    },
+    page: result.page,
+    blocks: result.blocks,
     contextEnrichment: result.summary && result.summary.status !== 'not_applicable'
       ? result.summary
       : undefined,
   }
+}
+
+function getCached(cacheKey: string) {
+  const cached = enrichmentCache.get(cacheKey)
+  if (!cached) return undefined
+  if (cached.expiresAt <= Date.now()) {
+    enrichmentCache.delete(cacheKey)
+    return undefined
+  }
+  return cached.value
+}
+
+function setCached(
+  cacheKey: string,
+  value: Promise<CachedFeishuEnrichment>,
+  ttlMs: number,
+) {
+  const expiresAt = Date.now() + Math.max(0, ttlMs)
+  enrichmentCache.set(cacheKey, { expiresAt, value })
+  value.catch(() => {
+    if (enrichmentCache.get(cacheKey)?.value === value) enrichmentCache.delete(cacheKey)
+  })
+}
+
+function applyCachedResult(
+  body: RuntimeControllerProtocol.MessageSendRequest,
+  cached: CachedFeishuEnrichment,
+): FeishuControllerMessageContextResult {
+  return {
+    body: {
+      ...body,
+      context: {
+        ...(body.context ?? {}),
+        page: cached.page,
+        blocks: [
+          ...((body.context?.blocks ?? []) as unknown[]),
+          ...cached.blocks,
+        ],
+      },
+    },
+    contextEnrichment: cached.contextEnrichment,
+  }
+}
+
+function cacheKeyFor(scope: string, page: PlatformPagePayload, settings: unknown) {
+  const normalized = normalizeFeishuPagePayload(page)
+  return JSON.stringify({
+    scope,
+    url: normalized?.url ?? page.url,
+    objectKey: normalized?.objectKey ?? page.objectKey,
+    pageType: normalized?.pageType ?? page.pageType,
+    settings,
+  })
 }
 
 function shouldEnhance(entry?: RuntimeControllerProtocol.Entry) {

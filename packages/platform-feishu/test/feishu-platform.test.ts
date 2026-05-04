@@ -11,6 +11,7 @@ import {
   getFeishuAuthStatus,
   getFeishuCliVersion,
   parseVersion,
+  resolveFeishuCliPath,
   runFeishuCliJsonWithFile,
   type FeishuCliRunner,
 } from '../src/node'
@@ -343,6 +344,18 @@ describe('Feishu platform adapter package', () => {
     await expect(getFeishuAuthStatus({ cliPath: 'lark-cli', runner })).resolves.toMatchObject({
       state: 'authenticated',
       tokenStatus: 'needs_refresh',
+    })
+  })
+
+  test('resolves explicit bare lark-cli command names through PATH on Windows', async () => {
+    await withTempDir(async (directory) => {
+      const command = join(directory, 'lark-cli.cmd')
+      await writeFile(command, '@echo off\n', 'utf8')
+
+      expect(resolveFeishuCliPath('lark-cli', {
+        OS: 'Windows_NT',
+        PATH: directory,
+      })).toBe(command)
     })
   })
 

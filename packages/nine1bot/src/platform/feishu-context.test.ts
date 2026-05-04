@@ -7,14 +7,19 @@ import {
   getBuiltinPlatformManager,
   resetBuiltinPlatformManagerForTesting,
 } from './builtin'
-import { prepareFeishuControllerMessageContext } from './feishu-context'
+import {
+  clearFeishuControllerMessageContextCacheForTesting,
+  prepareFeishuControllerMessageContext,
+} from './feishu-context'
 
 beforeEach(() => {
   resetBuiltinPlatformManagerForTesting()
+  clearFeishuControllerMessageContextCacheForTesting()
 })
 
 afterEach(() => {
   resetBuiltinPlatformManagerForTesting()
+  clearFeishuControllerMessageContextCacheForTesting()
 })
 
 describe('Feishu controller page context enrichment', () => {
@@ -77,6 +82,76 @@ describe('Feishu controller page context enrichment', () => {
     expect(result.body.context?.blocks).toContainEqual(expect.objectContaining({
       id: 'page:feishu-metadata',
       source: 'page-context.feishu.metadata.wiki.spaces.get_node',
+    }))
+  })
+
+  test('reuses Feishu metadata for repeated sends in the same session page scope', async () => {
+    getBuiltinPlatformManager({
+      config: {
+        feishu: {
+          enabled: true,
+          settings: {
+            cliPath: 'lark-cli',
+          },
+        },
+      },
+    })
+    let calls = 0
+    const runner: FeishuCliRunner = async (_command, args, options) => {
+      calls++
+      if (args.join(' ') === 'auth status') {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ identity: 'user:ou_123', tokenStatus: 'valid' }),
+          stderr: '',
+        }
+      }
+      const fileArg = args.find((arg) => arg.startsWith('@'))
+      const payload = fileArg && options.cwd
+        ? await Bun.file(join(options.cwd, fileArg.slice(1))).json()
+        : undefined
+      expect(payload).toEqual({
+        token: 'GKw9w6TOliwkBXkqO8UcphiDnUg',
+      })
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          code: 0,
+          data: {
+            node: {
+              title: 'Wiki Doc',
+              obj_type: 'docx',
+              obj_token: 'docx_token',
+              space_id: 'spc_123',
+            },
+          },
+        }),
+        stderr: '',
+      }
+    }
+
+    const first = await prepareFeishuControllerMessageContext(messageBody(), {
+      runner,
+      cacheScope: 'ses_1',
+    })
+    const base = messageBody()
+    const second = await prepareFeishuControllerMessageContext({
+      ...base,
+      context: {
+        ...base.context,
+        blocks: [{ id: 'existing' }],
+      },
+    }, {
+      runner,
+      cacheScope: 'ses_1',
+    })
+
+    expect(calls).toBe(2)
+    expect(first.contextEnrichment?.status).toBe('loaded')
+    expect(second.contextEnrichment?.status).toBe('loaded')
+    expect(second.body.context?.blocks).toContainEqual({ id: 'existing' })
+    expect(second.body.context?.blocks).toContainEqual(expect.objectContaining({
+      id: 'page:feishu-metadata',
     }))
   })
 

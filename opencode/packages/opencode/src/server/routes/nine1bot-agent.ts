@@ -277,7 +277,9 @@ export async function sendControllerMessage(sessionID: string, body: RuntimeCont
   let contextEnrichment: RuntimeControllerProtocol.ContextEnrichmentSummary | undefined
   try {
     SessionPrompt.assertNotBusy(sessionID)
-    const prepared = await prepareFeishuControllerMessageContext(body)
+    const prepared = await prepareFeishuControllerMessageContext(body, {
+      cacheScope: sessionID,
+    })
     preparedBody = prepared.body
     contextEnrichment = prepared.contextEnrichment
     prompt = await compileControllerPrompt({ sessionID, body: preparedBody, turnSnapshotId })

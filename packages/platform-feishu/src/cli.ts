@@ -54,14 +54,19 @@ export function resolveFeishuCliPath(
   if (cliPathSetting?.trim()) {
     const value = cliPathSetting.trim()
     if (hasPathSeparator(value) || isAbsolute(value)) return existsSync(value) ? value : undefined
-    return value
+    return findCommandOnPath(value, env)
   }
 
+  return findCommandOnPath('lark-cli', env)
+}
+
+function findCommandOnPath(
+  commandName: string,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
   const pathValue = env.PATH ?? env.Path ?? env.path ?? process.env.PATH
   if (!pathValue) return undefined
-  const names = process.platform === 'win32'
-    ? ['lark-cli.cmd', 'lark-cli.exe', 'lark-cli']
-    : ['lark-cli']
+  const names = commandNames(commandName, env)
   for (const directory of pathValue.split(delimiter)) {
     if (!directory) continue
     for (const name of names) {
@@ -70,6 +75,15 @@ export function resolveFeishuCliPath(
     }
   }
   return undefined
+}
+
+function commandNames(commandName: string, env: Record<string, string | undefined>) {
+  if (!isWindowsEnv(env) || /\.[^\\/]+$/.test(commandName)) return [commandName]
+  return [`${commandName}.cmd`, `${commandName}.exe`, `${commandName}.bat`, commandName]
+}
+
+function isWindowsEnv(env: Record<string, string | undefined>) {
+  return process.platform === 'win32' || env.OS === 'Windows_NT'
 }
 
 export async function getFeishuCliVersion(ctx: FeishuCliContext): Promise<FeishuCliJsonResult & { version?: string }> {
