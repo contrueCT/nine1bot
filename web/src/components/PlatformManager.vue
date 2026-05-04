@@ -341,6 +341,10 @@ function actionFieldError(action: PlatformActionDescriptor, key: string) {
   return actionJsonErrors[action.id]?.[key]
 }
 
+function actionFieldId(action: PlatformActionDescriptor, field: PlatformConfigField) {
+  return `platform-action-${action.id.replace(/[^\w-]/g, '-')}-${field.key.replace(/[^\w-]/g, '-')}`
+}
+
 function buildActionInput(action: PlatformActionDescriptor) {
   const values = ensureActionValues(action)
   const errors: Record<string, string> = {}
@@ -546,12 +550,13 @@ function buildActionInput(action: PlatformActionDescriptor) {
                       <span v-if="section.description" class="text-muted text-sm">{{ section.description }}</span>
                     </div>
 
-                    <label v-for="field in section.fields" :key="field.key" class="platform-field">
-                      <span class="platform-field-label">{{ field.label }}</span>
+                    <div v-for="field in section.fields" :key="field.key" class="platform-field">
+                      <label class="platform-field-label" :for="actionFieldId(action, field)">{{ field.label }}</label>
                       <span v-if="field.description" class="platform-field-desc text-muted text-sm">{{ field.description }}</span>
 
                       <select
                         v-if="field.type === 'select'"
+                        :id="actionFieldId(action, field)"
                         :value="actionTextValue(action, field.key)"
                         class="input platform-input"
                         @change="setActionTextValue(action, field, $event)"
@@ -561,6 +566,7 @@ function buildActionInput(action: PlatformActionDescriptor) {
 
                       <label v-else-if="field.type === 'boolean'" class="platform-switch inline">
                         <input
+                          :id="actionFieldId(action, field)"
                           :checked="actionBooleanValue(action, field.key)"
                           type="checkbox"
                           @change="setActionBooleanValue(action, field, $event)"
@@ -570,6 +576,7 @@ function buildActionInput(action: PlatformActionDescriptor) {
 
                       <textarea
                         v-else-if="field.type === 'string-list' || field.type === 'json'"
+                        :id="actionFieldId(action, field)"
                         :value="actionTextValue(action, field.key)"
                         class="input platform-textarea"
                         :placeholder="field.type === 'string-list' ? '每行一个值' : '{}'"
@@ -578,6 +585,7 @@ function buildActionInput(action: PlatformActionDescriptor) {
 
                       <input
                         v-else
+                        :id="actionFieldId(action, field)"
                         :value="actionTextValue(action, field.key)"
                         class="input platform-input"
                         :type="fieldInputType(field)"
@@ -587,7 +595,7 @@ function buildActionInput(action: PlatformActionDescriptor) {
                       <span v-if="actionFieldError(action, field.key)" class="platform-field-error">
                         {{ actionFieldError(action, field.key) }}
                       </span>
-                    </label>
+                    </div>
                   </div>
                 </div>
               </form>

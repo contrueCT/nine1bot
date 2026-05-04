@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises"
+import { chmod, mkdtemp, readFile, rm, writeFile } from "fs/promises"
 import { tmpdir } from "os"
 import path from "path"
 import { Instance } from "../../src/project/instance"
@@ -7,6 +7,7 @@ import { Server } from "../../src/server/server"
 import { RuntimePlatformAdapterRegistry } from "../../src/runtime/platform/adapter"
 import { Log } from "../../src/util/log"
 import {
+  getBuiltinPlatformManager,
   registerBuiltinPlatformAdapters,
   resetBuiltinPlatformManagerForTesting,
 } from "../../../../../packages/nine1bot/src/platform/builtin"
@@ -166,5 +167,29 @@ describe("nine1bot platform api", () => {
       status: "failed",
       message: "Action is not implemented: connection.test",
     })
+  })
+
+  test("restores in-memory platform settings when action persistence fails", async () => {
+    const { configPath } = await setupPlatformConfig({})
+    await chmod(configPath, 0o444)
+
+    try {
+      const response = await request("/nine1bot/platforms/feishu/actions/skills.configureDirectory", {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          input: {
+            directory: "",
+          },
+        }),
+      })
+
+      expect(response.status).toBe(500)
+      expect(getBuiltinPlatformManager().configSnapshot().feishu).toBeUndefined()
+      const stored = JSON.parse(await readFile(configPath, "utf-8"))
+      expect(stored.platforms).toBeUndefined()
+    } finally {
+      await chmod(configPath, 0o666).catch(() => undefined)
+    }
   })
 })

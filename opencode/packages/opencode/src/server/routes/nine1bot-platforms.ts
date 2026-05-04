@@ -145,6 +145,7 @@ export const Nine1BotPlatformRoutes = () =>
       }
     })
     .post("/:id/actions/:actionId", async (c) => {
+      let previousConfig
       try {
         const parsed = PlatformActionBodySchema.safeParse(await parseJson(c))
         if (!parsed.success) {
@@ -157,12 +158,21 @@ export const Nine1BotPlatformRoutes = () =>
         }
 
         const manager = getBuiltinPlatformManager()
+        previousConfig = manager.configSnapshot()
         const result = await manager.executeAction(c.req.param("id"), c.req.param("actionId"), parsed.data)
         if (result.updatedSettings !== undefined) {
           await writePlatformManagerConfig(manager.configSnapshot())
         }
         return c.json(result)
       } catch (error) {
+        if (previousConfig) {
+          try {
+            registerBuiltinPlatformAdapters({
+              config: previousConfig,
+              secrets: platformSecrets(),
+            })
+          } catch {}
+        }
         return c.json(errorBody(error), errorStatus(error))
       }
     })
