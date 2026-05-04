@@ -199,6 +199,7 @@ export class PlatformAdapterManager {
   private readonly secrets: PlatformSecretAccess
   private readonly audit: PlatformAuditWriter
   private readonly env: Record<string, string | undefined>
+  private backgroundStopPromise: Promise<void> | undefined
   private config: PlatformManagerConfig
 
   constructor(options: PlatformAdapterManagerOptions) {
@@ -368,23 +369,36 @@ export class PlatformAdapterManager {
   async stopBackgroundServices(): Promise<void> {
     const active = Array.from(this.backgroundServices.values())
     this.backgroundServices.clear()
-    await Promise.all(active.map(async (service) => {
-      try {
-        await service.handle.stop()
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        this.writeAudit({
-          platformId: service.platformId,
-          level: 'warn',
-          stage: 'background-service-stop',
-          message,
-          reason: 'background-service-stop-failed',
-          data: {
-            serviceId: service.serviceId,
-          },
-        })
+    const stopActive = async () => {
+      await Promise.all(active.map(async (service) => {
+        try {
+          await service.handle.stop()
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          this.writeAudit({
+            platformId: service.platformId,
+            level: 'warn',
+            stage: 'background-service-stop',
+            message,
+            reason: 'background-service-stop-failed',
+            data: {
+              serviceId: service.serviceId,
+            },
+          })
+        }
+      }))
+    }
+    const previousStop = this.backgroundStopPromise
+    const stopPromise = previousStop
+      ? previousStop.then(stopActive, stopActive)
+      : stopActive()
+    const trackedPromise = stopPromise.finally(() => {
+      if (this.backgroundStopPromise === trackedPromise) {
+        this.backgroundStopPromise = undefined
       }
-    }))
+    })
+    this.backgroundStopPromise = trackedPromise
+    await this.backgroundStopPromise
   }
 
   unregisterRuntimeAdapters(): PlatformManagerRecord[] {

@@ -561,6 +561,41 @@ describe('PlatformAdapterManager', () => {
     expect(starts).toBe(2)
   })
 
+  it('waits for configure-triggered background service stops before starting new ones', async () => {
+    const events: string[] = []
+    let releaseStop: (() => void) | undefined
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', { defaultEnabled: true }),
+        backgroundServices: () => [{
+          id: 'demo-background',
+          async start() {
+            events.push('start')
+            return {
+              async stop() {
+                events.push('stop-begin')
+                await new Promise<void>((resolve) => {
+                  releaseStop = resolve
+                })
+                events.push('stop-end')
+              },
+            }
+          },
+        }],
+      }],
+    })
+
+    await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:4096' })
+    manager.configure({ demo: { enabled: true } })
+    const restart = manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:4096' })
+    await Promise.resolve()
+
+    expect(events).toEqual(['start', 'stop-begin'])
+    releaseStop?.()
+    await restart
+    expect(events).toEqual(['start', 'stop-begin', 'stop-end', 'start'])
+  })
+
   it('does not leave runtime sources behind when adapter creation fails', async () => {
     const manager = new PlatformAdapterManager({
       contributions: [

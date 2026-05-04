@@ -136,6 +136,7 @@ describe('Feishu IM skeleton', () => {
       },
       event: {
         sender: {
+          sender_type: 'user',
           sender_id: {
             open_id: 'ou_sender',
           },
@@ -164,6 +165,7 @@ describe('Feishu IM skeleton', () => {
       text: '@bot hello',
       sender: {
         openId: 'ou_sender',
+        name: undefined,
       },
     })
 

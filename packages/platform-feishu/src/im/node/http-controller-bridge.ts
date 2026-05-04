@@ -45,6 +45,20 @@ export function createHttpFeishuControllerBridge(options: FeishuHttpControllerBr
       headers.set('content-type', 'application/json')
     }
 
+    if (options.platformController?.requestJson && !init.acceptSse && !init.allowStatus?.length) {
+      const body = await options.platformController.requestJson<T>(`${url.pathname}${url.search}`, {
+        method: init.method ?? 'GET',
+        headers: headersToRecord(headers),
+        body: init.body,
+      })
+      return {
+        status: 200,
+        ok: true,
+        body,
+        response: new Response(JSON.stringify(body), { status: 200 }),
+      }
+    }
+
     const timeoutMs = init.timeoutMs ?? options.requestTimeoutMs ?? 30_000
     const controller = new AbortController()
     const timeout = timeoutMs > 0
@@ -172,6 +186,14 @@ export function createHttpFeishuControllerBridge(options: FeishuHttpControllerBr
   }
 }
 
+function headersToRecord(headers: Headers): Record<string, string> {
+  const record: Record<string, string> = {}
+  headers.forEach((value, key) => {
+    record[key] = value
+  })
+  return record
+}
+
 async function consumeSse(input: {
   localUrl: string
   authHeader?: string
@@ -194,6 +216,25 @@ async function consumeSse(input: {
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let dataLines: string[] = []
+  const dispatch = async () => {
+    if (dataLines.length === 0) return
+    const payload = dataLines.join('\n').trimEnd()
+    dataLines = []
+    if (!payload) return
+    const parsed = JSON.parse(payload) as FeishuRuntimeEventEnvelope
+    await input.onEvent(parsed)
+  }
+  const processLine = async (rawLine: string) => {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+    if (line === '') {
+      await dispatch()
+      return
+    }
+    if (!line.startsWith('data:')) return
+    const value = line.slice(5)
+    dataLines.push(value.startsWith(' ') ? value.slice(1) : value)
+  }
   try {
     while (!input.signal.aborted) {
       const { done, value } = await reader.read()
@@ -202,11 +243,12 @@ async function consumeSse(input: {
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
       for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const parsed = JSON.parse(line.slice(6)) as FeishuRuntimeEventEnvelope
-        await input.onEvent(parsed)
+        await processLine(line)
       }
     }
+    buffer += decoder.decode()
+    if (buffer) await processLine(buffer)
+    await dispatch()
   } finally {
     reader.releaseLock()
   }

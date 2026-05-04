@@ -46,7 +46,7 @@ function senderFrom(input: unknown): FeishuIMSender {
     userId: stringValue(senderId?.user_id),
     unionId: stringValue(senderId?.union_id),
     tenantKey: stringValue(sender?.tenant_key),
-    name: stringValue(sender?.sender_type),
+    name: stringValue(sender?.name) ?? stringValue(sender?.display_name),
   }
 }
 

@@ -97,6 +97,40 @@ describe('Feishu HTTP controller bridge', () => {
     await expect(bridge.getProject('new')).resolves.toMatchObject({ id: 'new' })
   })
 
+  test('uses shared platform controller for simple JSON requests', async () => {
+    const seen: Array<{ path: string; init: unknown }> = []
+    globalThis.fetch = mockFetch(async () => {
+      throw new Error('fetch should not be called')
+    })
+
+    const bridge = createHttpFeishuControllerBridge({
+      localUrl: 'http://127.0.0.1:4096',
+      platformController: {
+        localUrl: 'http://127.0.0.1:4096',
+        async requestJson<T = unknown>(path: string, init: unknown): Promise<T> {
+          seen.push({ path, init })
+          return [
+            { id: 'old', name: 'Old', time: { updated: 1 } },
+            { id: 'new', name: 'New', time: { updated: 2 } },
+          ] as T
+        },
+      },
+    })
+
+    await expect(bridge.listProjects()).resolves.toMatchObject([
+      { id: 'new' },
+      { id: 'old' },
+    ])
+    expect(seen).toEqual([{
+      path: '/project',
+      init: {
+        method: 'GET',
+        headers: {},
+        body: undefined,
+      },
+    }])
+  })
+
   test('aborts sessions through the public session API', async () => {
     const seen: Array<{ url: string; init: RequestInit }> = []
     globalThis.fetch = mockFetch(async (url, init) => {
@@ -118,6 +152,48 @@ describe('Feishu HTTP controller bridge', () => {
     expect(new URL(seen[0]!.url).searchParams.get('directory')).toBe('C:/work')
     expect(seen[0]!.init.method).toBe('POST')
     expect(new Headers(seen[0]!.init.headers).get('authorization')).toBe('Basic test')
+  })
+
+  test('parses CRLF and multi-line SSE data frames', async () => {
+    const encoder = new TextEncoder()
+    globalThis.fetch = mockFetch(async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":\r\n'))
+        controller.enqueue(encoder.encode('data: "runtime.turn.completed","turnSnapshotId":"turn_1"}\r\n\r\n'))
+        controller.close()
+      },
+    }), {
+      status: 200,
+      headers: {
+        'content-type': 'text/event-stream',
+      },
+    }))
+
+    const bridge = createHttpFeishuControllerBridge({
+      localUrl: 'http://127.0.0.1:4096',
+    })
+    const events: unknown[] = []
+    const errors: Error[] = []
+    const done = new Promise<void>((resolve) => {
+      bridge.subscribeEvents({
+        sessionId: 'ses_1',
+        onEvent(event) {
+          events.push(event)
+          resolve()
+        },
+        onError(error) {
+          errors.push(error)
+          resolve()
+        },
+      })
+    })
+
+    await done
+    expect(errors).toEqual([])
+    expect(events).toEqual([{
+      type: 'runtime.turn.completed',
+      turnSnapshotId: 'turn_1',
+    }])
   })
 })
 

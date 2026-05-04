@@ -471,10 +471,12 @@ async function handleFeishuAction(
 
 function withFeishuIMStatus(status: PlatformRuntimeStatus, ctx: PlatformAdapterContext): PlatformRuntimeStatus {
   const imStatus = getFeishuIMRuntimeStatus(ctx)
-  const mergedStatus = higherSeverity(status.status, imStatus.status)
+  const mergedStatus = imStatus.status === 'disabled'
+    ? status.status
+    : higherSeverity(status.status, imStatus.status)
   return {
     status: mergedStatus,
-    message: mergedStatus === imStatus.status && imStatus.status !== 'disabled'
+    message: mergedStatus === imStatus.status
       ? imStatus.message
       : status.message,
     cards: [
