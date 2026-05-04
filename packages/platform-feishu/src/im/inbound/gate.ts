@@ -12,29 +12,32 @@ export function evaluateFeishuIMGate(
     botUserId?: string
   } = {},
 ): FeishuIMGateDecision {
-  if (!config.enabled) return { allowed: false, reason: 'not-allowlisted' }
+  if (!config.enabled) return { action: 'drop', allowed: false, reason: 'not-allowlisted' }
 
   if (config.policy.allowFrom.length > 0 && !matchesAllowList(message, config.policy.allowFrom)) {
-    return { allowed: false, reason: 'not-allowlisted' }
+    return { action: 'drop', allowed: false, reason: 'not-allowlisted' }
   }
 
   if (message.chatType === 'p2p') {
     return config.policy.dmPolicy === 'deny'
-      ? { allowed: false, reason: 'dm-denied' }
-      : { allowed: true }
+      ? { action: 'drop', allowed: false, reason: 'dm-denied' }
+      : { action: 'dispatch', allowed: true }
   }
 
   if (message.chatType === 'group') {
     if (config.policy.groupPolicy === 'deny') {
-      return { allowed: false, reason: 'group-denied' }
+      return { action: 'drop', allowed: false, reason: 'group-denied' }
     }
-    if ((config.policy.groupPolicy === 'mention-only' || config.policy.requireMention) && !mentionsBot(message, options)) {
-      return { allowed: false, reason: 'mention-required' }
+    if (config.policy.groupPolicy === 'allow' && config.policy.requireMention === false) {
+      return { action: 'dispatch', allowed: true }
     }
-    return { allowed: true }
+    if (mentionsBot(message, options)) {
+      return { action: 'dispatch', allowed: true }
+    }
+    return { action: 'history', allowed: false, reason: 'mention-required' }
   }
 
-  return { allowed: false, reason: 'not-allowlisted' }
+  return { action: 'drop', allowed: false, reason: 'not-allowlisted' }
 }
 
 function matchesAllowList(message: FeishuIMIncomingMessage, allowFrom: string[]): boolean {

@@ -1,0 +1,403 @@
+import {
+  FEISHU_CONTROLLER_CAPABILITIES,
+  feishuControllerEntry,
+  projectDirectory,
+  projectDisplayName,
+  type FeishuControllerBridge,
+  type FeishuControllerContextBlock,
+  type FeishuControllerProject,
+} from './controller-bridge'
+import { evaluateFeishuIMGate } from './inbound/gate'
+import { routeKeyForFeishuMessage, serializeFeishuRouteKey, type FeishuIMRouteKey } from './route'
+import type { FeishuIMBindingStore, FeishuIMSessionBinding } from './store/binding-store'
+import {
+  type FeishuIMAccount,
+  type FeishuIMControlResult,
+  type FeishuIMControllerMessagePart,
+  type FeishuIMHandleMessageResult,
+  type FeishuIMIncomingMessage,
+  type FeishuIMNormalizedConfig,
+} from './types'
+import { FeishuIMMessageBuffer, type FeishuIMBufferedBatch } from './buffer/message-buffer'
+import { FeishuIMHistoryStore } from './history'
+
+export type FeishuIMSessionManagerOptions = {
+  account: FeishuIMAccount
+  config: FeishuIMNormalizedConfig
+  controller: FeishuControllerBridge
+  store: FeishuIMBindingStore
+  defaultDirectory?: string
+  botOpenId?: string
+  botUserId?: string
+  resolveDirectory?: (baseDirectory: string | undefined, input: string) => Promise<string>
+  history?: FeishuIMHistoryStore
+  onFlushResult?: (result: FeishuIMHandleMessageResult) => void | Promise<void>
+}
+
+export class FeishuIMSessionManager {
+  private readonly buffer: FeishuIMMessageBuffer
+  private readonly history: FeishuIMHistoryStore
+  private readonly activeRoutes = new Set<string>()
+
+  constructor(private readonly options: FeishuIMSessionManagerOptions) {
+    this.history = options.history ?? new FeishuIMHistoryStore()
+    this.buffer = new FeishuIMMessageBuffer({
+      messageBufferMs: options.config.policy.messageBufferMs,
+      maxBufferMs: options.config.policy.maxBufferMs,
+      onDue: async (routeKeyString) => {
+        const result = await this.flushRoute(routeKeyString)
+        if (result) await this.options.onFlushResult?.(result)
+      },
+    })
+  }
+
+  async resolveOrCreateSession(routeKey: FeishuIMRouteKey, directory?: string): Promise<FeishuIMSessionBinding> {
+    const routeKeyString = serializeFeishuRouteKey(routeKey)
+    const existing = await this.options.store.get(routeKeyString)
+    if (existing) {
+      const session = await this.options.controller.getSession({
+        sessionId: existing.sessionId,
+        directory: existing.directory,
+      })
+      if (session) return existing
+    }
+    return this.createAndBindSession(routeKey, directory ?? this.defaultDirectory())
+  }
+
+  async handleIncomingMessage(message: FeishuIMIncomingMessage): Promise<FeishuIMHandleMessageResult> {
+    const routeKey = routeKeyForFeishuMessage(message, { accountId: this.options.account.id })
+    const routeKeyString = serializeFeishuRouteKey(routeKey)
+    const gate = evaluateFeishuIMGate(message, this.options.config, {
+      botOpenId: this.options.botOpenId,
+      botUserId: this.options.botUserId,
+    })
+
+    if (gate.action === 'drop') {
+      return { status: 'ignored', reason: gate.reason }
+    }
+
+    if (gate.action === 'history') {
+      this.history.record(routeKeyString, message)
+      return { status: 'history-recorded', routeKey: routeKeyString }
+    }
+
+    const control = await this.handleControlCommand(routeKey, message)
+    if (control) {
+      return { status: 'control', routeKey: routeKeyString, control }
+    }
+
+    if (this.activeRoutes.has(routeKeyString)) {
+      return { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText }
+    }
+
+    const enqueued = this.buffer.enqueue({
+      routeKey,
+      routeKeyString,
+      message,
+    })
+    if (enqueued.status === 'ready') {
+      return await this.flushRoute(routeKeyString) ?? {
+        status: 'failed',
+        routeKey: routeKeyString,
+        message: 'No buffered messages to flush',
+      }
+    }
+
+    return {
+      status: 'buffered',
+      routeKey: routeKeyString,
+      messageCount: enqueued.messageCount,
+    }
+  }
+
+  async flushRoute(routeKeyString: string): Promise<FeishuIMHandleMessageResult | undefined> {
+    const batch = this.buffer.drain(routeKeyString)
+    if (!batch) return undefined
+    if (this.activeRoutes.has(routeKeyString)) {
+      return { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText }
+    }
+    this.activeRoutes.add(routeKeyString)
+    try {
+      const binding = await this.resolveOrCreateSession(batch.routeKey)
+      const response = await this.options.controller.sendMessage({
+        sessionId: binding.sessionId,
+        directory: binding.directory,
+        messageId: batch.messages.at(-1)?.messageId,
+        parts: partsFromBatch(batch),
+        contextBlocks: this.contextBlocksForBatch(batch),
+        entry: feishuControllerEntry(batch.messages.at(-1)?.eventId),
+      })
+
+      if (!response.accepted || response.busy) {
+        return { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText }
+      }
+
+      await this.options.store.set(routeKeyString, {
+        ...binding,
+        updatedAt: new Date().toISOString(),
+      })
+      return {
+        status: 'accepted',
+        routeKey: routeKeyString,
+        sessionId: binding.sessionId,
+        turnSnapshotId: response.turnSnapshotId,
+      }
+    } catch (error) {
+      return {
+        status: 'failed',
+        routeKey: routeKeyString,
+        message: error instanceof Error ? error.message : String(error),
+      }
+    } finally {
+      this.activeRoutes.delete(routeKeyString)
+    }
+  }
+
+  async resetRoute(routeKey: FeishuIMRouteKey): Promise<FeishuIMSessionBinding> {
+    const current = await this.options.store.get(serializeFeishuRouteKey(routeKey))
+    return this.createAndBindSession(routeKey, current?.directory ?? this.defaultDirectory())
+  }
+
+  async switchDirectory(routeKey: FeishuIMRouteKey, input: string): Promise<FeishuIMSessionBinding> {
+    const current = await this.options.store.get(serializeFeishuRouteKey(routeKey))
+    const directory = await this.resolveDirectory(current?.directory ?? this.defaultDirectory(), input)
+    return this.createAndBindSession(routeKey, directory)
+  }
+
+  async switchProject(routeKey: FeishuIMRouteKey, input: string): Promise<FeishuIMSessionBinding & { project: FeishuControllerProject }> {
+    const projects = await this.sortedProjects()
+    const project = matchProject(projects, input)
+    if (!project) throw new Error(`Project not found: ${input}`)
+    const directory = projectDirectory(project)
+    if (!directory) throw new Error(`Project has no usable directory: ${project.id}`)
+    const binding = await this.createAndBindSession(routeKey, directory)
+    return { ...binding, project }
+  }
+
+  stop() {
+    this.buffer.clear()
+    this.activeRoutes.clear()
+  }
+
+  private async handleControlCommand(
+    routeKey: FeishuIMRouteKey,
+    message: FeishuIMIncomingMessage,
+  ): Promise<FeishuIMControlResult | undefined> {
+    const text = message.text?.trim()
+    if (!text?.startsWith('/')) return undefined
+
+    if (text === '/new') {
+      const binding = await this.resetRoute(routeKey)
+      return {
+        type: 'new-session',
+        sessionId: binding.sessionId,
+        directory: binding.directory,
+        projectId: binding.projectId,
+      }
+    }
+
+    if (text === '/cwd') {
+      const binding = await this.resolveOrCreateSession(routeKey)
+      return {
+        type: 'cwd-current',
+        sessionId: binding.sessionId,
+        directory: binding.directory,
+        projectId: binding.projectId,
+      }
+    }
+
+    if (text.startsWith('/cwd ')) {
+      const raw = trimWrappedQuotes(text.slice(5).trim())
+      if (!raw) return { type: 'failed', command: '/cwd', message: 'Directory is required' }
+      try {
+        const binding = await this.switchDirectory(routeKey, raw)
+        return {
+          type: 'cwd-switched',
+          sessionId: binding.sessionId,
+          directory: binding.directory ?? raw,
+          projectId: binding.projectId,
+        }
+      } catch (error) {
+        return { type: 'failed', command: '/cwd', message: error instanceof Error ? error.message : String(error) }
+      }
+    }
+
+    if (text === '/project') {
+      const binding = await this.resolveOrCreateSession(routeKey)
+      const project = binding.projectId ? await this.options.controller.getProject(binding.projectId) : undefined
+      return {
+        type: 'project-current',
+        sessionId: binding.sessionId,
+        projectId: binding.projectId,
+        projectName: project ? projectDisplayName(project) : undefined,
+        directory: project ? projectDirectory(project) ?? binding.directory : binding.directory,
+      }
+    }
+
+    if (text === '/project list') {
+      const projects = await this.sortedProjects()
+      return {
+        type: 'project-list',
+        projects: projects.map((project) => ({
+          id: project.id,
+          name: projectDisplayName(project),
+          directory: projectDirectory(project),
+        })),
+      }
+    }
+
+    if (text.startsWith('/project ')) {
+      const raw = trimWrappedQuotes(text.slice(9).trim())
+      if (!raw) return { type: 'failed', command: '/project', message: 'Project id or name is required' }
+      try {
+        const binding = await this.switchProject(routeKey, raw)
+        return {
+          type: 'project-switched',
+          sessionId: binding.sessionId,
+          projectId: binding.project.id,
+          projectName: projectDisplayName(binding.project),
+          directory: binding.directory ?? projectDirectory(binding.project) ?? '',
+        }
+      } catch (error) {
+        return { type: 'failed', command: '/project', message: error instanceof Error ? error.message : String(error) }
+      }
+    }
+
+    return {
+      type: 'unknown-command',
+      command: text,
+    }
+  }
+
+  private async createAndBindSession(routeKey: FeishuIMRouteKey, directory?: string): Promise<FeishuIMSessionBinding> {
+    const created = await this.options.controller.createSession({
+      title: titleForRoute(routeKey),
+      directory,
+      entry: feishuControllerEntry(),
+    })
+    const binding: FeishuIMSessionBinding = {
+      routeKey,
+      sessionId: created.session.id,
+      directory: created.session.directory || directory,
+      projectId: created.session.projectID,
+      updatedAt: new Date().toISOString(),
+    }
+    await this.options.store.set(serializeFeishuRouteKey(routeKey), binding)
+    return binding
+  }
+
+  private contextBlocksForBatch(batch: FeishuIMBufferedBatch): FeishuControllerContextBlock[] {
+    const history = this.history.list(batch.routeKeyString)
+    const blocks: FeishuControllerContextBlock[] = [{
+      id: 'platform:feishu-im-route',
+      layer: 'platform',
+      source: 'feishu-im.route',
+      enabled: true,
+      priority: 68,
+      lifecycle: 'turn',
+      visibility: 'system-required',
+      mergeKey: batch.routeKeyString,
+      content: renderRoute(batch.routeKey),
+    }, {
+      id: 'turn:feishu-im-batch',
+      layer: 'turn',
+      source: 'feishu-im.batch',
+      enabled: true,
+      priority: 66,
+      lifecycle: 'turn',
+      visibility: 'system-required',
+      mergeKey: batch.routeKeyString,
+      content: renderMessages('Feishu messages in this turn', batch.messages),
+    }]
+
+    if (history.length > 0) {
+      blocks.push({
+        id: 'turn:feishu-im-history',
+        layer: 'turn',
+        source: 'feishu-im.group-history',
+        enabled: true,
+        priority: 58,
+        lifecycle: 'turn',
+        visibility: 'developer-toggle',
+        mergeKey: `${batch.routeKeyString}:history`,
+        content: renderMessages('Recent Feishu group history', history),
+      })
+    }
+
+    return blocks
+  }
+
+  private async sortedProjects(): Promise<FeishuControllerProject[]> {
+    const projects = await this.options.controller.listProjects()
+    return [...projects].sort((a, b) => (b.time?.updated || 0) - (a.time?.updated || 0))
+  }
+
+  private defaultDirectory(): string | undefined {
+    return this.options.account.defaultDirectory ?? this.options.defaultDirectory
+  }
+
+  private async resolveDirectory(baseDirectory: string | undefined, input: string): Promise<string> {
+    return this.options.resolveDirectory
+      ? this.options.resolveDirectory(baseDirectory, input)
+      : input
+  }
+}
+
+function partsFromBatch(batch: FeishuIMBufferedBatch): FeishuIMControllerMessagePart[] {
+  return [{
+    type: 'text',
+    text: renderMessages('Feishu messages in this turn', batch.messages),
+  }]
+}
+
+function renderRoute(routeKey: FeishuIMRouteKey): string {
+  return [
+    'Platform: Feishu/Lark IM',
+    `Account: ${routeKey.accountId}`,
+    `Route: ${serializeFeishuRouteKey(routeKey)}`,
+    `Chat: ${routeKey.chatId}`,
+    routeKey.openId ? `Open ID: ${routeKey.openId}` : undefined,
+    routeKey.threadId ? `Thread: ${routeKey.threadId}` : undefined,
+    `Controller capabilities: ${Object.keys(FEISHU_CONTROLLER_CAPABILITIES).join(', ')}`,
+  ].filter(Boolean).join('\n')
+}
+
+function renderMessages(title: string, messages: FeishuIMIncomingMessage[]): string {
+  return [
+    `${title}:`,
+    '',
+    ...messages.map((message, index) => [
+      `[${index + 1}] ${senderLabel(message)}, ${timeLabel(message)}, message_id: ${message.messageId}`,
+      message.text || `[${message.messageType}]`,
+    ].join('\n')),
+  ].join('\n\n')
+}
+
+function senderLabel(message: FeishuIMIncomingMessage): string {
+  return message.sender.name || message.sender.openId || message.sender.userId || message.sender.unionId || 'unknown sender'
+}
+
+function timeLabel(message: FeishuIMIncomingMessage): string {
+  return message.createTime ? new Date(message.createTime).toISOString() : 'unknown time'
+}
+
+function titleForRoute(routeKey: FeishuIMRouteKey): string {
+  if (routeKey.kind === 'dm') return `Feishu DM ${routeKey.openId || routeKey.chatId}`
+  if (routeKey.kind === 'thread') return `Feishu thread ${routeKey.threadId || routeKey.chatId}`
+  return `Feishu group ${routeKey.chatId}`
+}
+
+function matchProject(projects: FeishuControllerProject[], input: string): FeishuControllerProject | undefined {
+  const byId = projects.find((project) => project.id === input)
+  if (byId) return byId
+  const byName = projects.filter((project) => projectDisplayName(project) === input)
+  return byName.length === 1 ? byName[0] : undefined
+}
+
+function trimWrappedQuotes(input: string): string {
+  const trimmed = input.trim()
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).trim()
+  }
+  return trimmed
+}

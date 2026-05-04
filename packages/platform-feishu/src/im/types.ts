@@ -4,6 +4,8 @@ export type FeishuIMConnectionMode = 'websocket'
 
 export type FeishuIMChatType = 'p2p' | 'group' | 'unknown'
 
+export type FeishuIMRouteKind = 'dm' | 'group' | 'thread'
+
 export type FeishuIMAccount = {
   id: string
   name?: string
@@ -84,6 +86,108 @@ export type FeishuIMIncomingMessage = {
 }
 
 export type FeishuIMGateDecision = {
+  action: 'dispatch' | 'history' | 'drop'
   allowed: boolean
   reason?: 'dm-denied' | 'group-denied' | 'mention-required' | 'not-allowlisted'
 }
+
+export type FeishuIMControllerTextPart = {
+  type: 'text'
+  text: string
+}
+
+export type FeishuIMControllerFilePart = {
+  type: 'file'
+  filename: string
+  mime: string
+  url: string
+}
+
+export type FeishuIMControllerMessagePart = FeishuIMControllerTextPart | FeishuIMControllerFilePart
+
+export type FeishuIMControlResult =
+  | {
+      type: 'new-session'
+      sessionId: string
+      directory?: string
+      projectId?: string
+    }
+  | {
+      type: 'cwd-current'
+      sessionId: string
+      directory?: string
+      projectId?: string
+    }
+  | {
+      type: 'cwd-switched'
+      sessionId: string
+      directory: string
+      projectId?: string
+    }
+  | {
+      type: 'project-current'
+      sessionId: string
+      projectId?: string
+      projectName?: string
+      directory?: string
+    }
+  | {
+      type: 'project-list'
+      projects: Array<{
+        id: string
+        name?: string
+        directory?: string
+      }>
+    }
+  | {
+      type: 'project-switched'
+      sessionId: string
+      projectId: string
+      projectName?: string
+      directory: string
+    }
+  | {
+      type: 'unknown-command'
+      command: string
+    }
+  | {
+      type: 'failed'
+      command: string
+      message: string
+    }
+
+export type FeishuIMHandleMessageResult =
+  | {
+      status: 'ignored'
+      reason?: string
+    }
+  | {
+      status: 'history-recorded'
+      routeKey: string
+    }
+  | {
+      status: 'buffered'
+      routeKey: string
+      messageCount: number
+    }
+  | {
+      status: 'accepted'
+      routeKey: string
+      sessionId: string
+      turnSnapshotId?: string
+    }
+  | {
+      status: 'busy'
+      routeKey: string
+      message: string
+    }
+  | {
+      status: 'control'
+      routeKey: string
+      control: FeishuIMControlResult
+    }
+  | {
+      status: 'failed'
+      routeKey?: string
+      message: string
+    }

@@ -19,6 +19,28 @@ export {
   getFeishuIMRuntimeStatus,
 } from './runtime'
 export {
+  FEISHU_CONTROLLER_CAPABILITIES,
+  controlResultLabel,
+  feishuControllerEntry,
+  projectDirectory,
+  projectDisplayName,
+  type FeishuControllerBridge,
+  type FeishuControllerContextBlock,
+  type FeishuControllerCreateSessionInput,
+  type FeishuControllerCreateSessionResult,
+  type FeishuControllerEntry,
+  type FeishuControllerMessageResult,
+  type FeishuControllerProject,
+  type FeishuControllerSendMessageInput,
+  type FeishuControllerSession,
+  type FeishuInteractionAnswerInput,
+  type FeishuRuntimeEventEnvelope,
+  type FeishuRuntimeEventSubscription,
+} from './controller-bridge'
+export { FeishuIMHistoryStore, type FeishuIMHistoryEntry } from './history'
+export { FeishuIMMessageBuffer, type FeishuIMBufferedBatch } from './buffer/message-buffer'
+export { FeishuIMSessionManager, type FeishuIMSessionManagerOptions } from './session-manager'
+export {
   routeKeyForFeishuMessage,
   serializeFeishuRouteKey,
   type FeishuIMRouteKey,

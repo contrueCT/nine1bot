@@ -30,3 +30,5 @@ export type {
   FeishuCliRunResult,
   FeishuCliRunner,
 } from './cli'
+export { createHttpFeishuControllerBridge } from './im/node/http-controller-bridge'
+export type { FeishuHttpControllerBridgeOptions } from './im/node/http-controller-bridge'

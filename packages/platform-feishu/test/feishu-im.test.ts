@@ -141,13 +141,15 @@ describe('Feishu IM skeleton', () => {
       imDefaultAppSecret: secretRef,
       imGroupPolicy: 'mention-only',
     })
-    expect(evaluateFeishuIMGate(message!, config, { botOpenId: 'ou_bot' })).toEqual({
+    expect(evaluateFeishuIMGate(message!, config, { botOpenId: 'ou_bot' })).toMatchObject({
+      action: 'dispatch',
       allowed: true,
     })
     expect(evaluateFeishuIMGate({
       ...message!,
       mentions: [],
     }, config, { botOpenId: 'ou_bot' })).toEqual({
+      action: 'history',
       allowed: false,
       reason: 'mention-required',
     })
@@ -180,6 +182,8 @@ describe('Feishu IM skeleton', () => {
     await expect(store.get(serialized)).resolves.toMatchObject({
       sessionId: 'ses_1',
       routeKey: {
+        accountId: 'default',
+        kind: 'dm',
         chatId: 'oc_p2p',
       },
     })
