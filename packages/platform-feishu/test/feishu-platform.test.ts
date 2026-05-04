@@ -127,12 +127,33 @@ describe('Feishu platform adapter package', () => {
 
     expect(templateIds).toEqual(['browser-feishu', 'feishu-wiki'])
     expect(adapter.inferTemplateIds({ entry: { platform: 'feishu' }, page })).toEqual(templateIds)
-    expect(adapter.templateContextBlocks({ templateIds, page }).map((block) => block.source)).toEqual([
+    const templateBlocks = adapter.templateContextBlocks({ templateIds, page })
+    expect(templateBlocks.map((block) => block.source)).toEqual([
       'template.browser-feishu',
       'template.feishu-wiki',
     ])
-    expect(adapter.resourceContributions({ templateIds })?.builtinTools.enabledGroups).toContain('feishu-context')
-    expect(adapter.resourceContributions({ templateIds })?.skills.skills).toContain(FEISHU_CURRENT_PAGE_SKILL)
+    expect(templateBlocks[0]?.content).toEqual(expect.stringContaining('official lark-cli'))
+    expect(templateBlocks[0]?.content).toEqual(expect.stringContaining('dry-run first'))
+    expect(templateBlocks[0]?.content).toEqual(expect.stringContaining('existing Nine1Bot permissions'))
+    expect(templateBlocks[1]?.content).toEqual(expect.stringContaining('official lark-cli'))
+
+    const resources = adapter.resourceContributions({ templateIds })
+    expect(resources?.builtinTools.enabledGroups).toEqual(['feishu-context'])
+    expect(resources?.skills.skills).toEqual([FEISHU_CURRENT_PAGE_SKILL])
+  })
+
+  test('documents write guidance without adding a CLI wrapper boundary', async () => {
+    const skillText = await Bun.file(join(import.meta.dir, '..', 'skills', FEISHU_CURRENT_PAGE_SKILL, 'SKILL.md')).text()
+
+    expect(skillText).toEqual(expect.stringContaining('## Write Operations'))
+    expect(skillText).toEqual(expect.stringContaining('Target object'))
+    expect(skillText).toEqual(expect.stringContaining('Impact scope'))
+    expect(skillText).toEqual(expect.stringContaining('--dry-run'))
+    expect(skillText).toEqual(expect.stringContaining('Do not invent dry-run behavior'))
+    expect(skillText).toEqual(expect.stringContaining('Do not build a Nine1Bot-specific wrapper'))
+    expect(skillText).toEqual(expect.stringContaining('never use a wiki node token directly as a docx/file token for writes'))
+    expect(skillText).toEqual(expect.stringContaining('do not require a separate Nine1Bot high-risk API confirmation layer'))
+    expect(skillText).toEqual(expect.stringContaining('Do not ask the user to copy access tokens'))
   })
 
   test('discovers companion and official skill directories', async () => {

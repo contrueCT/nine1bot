@@ -389,7 +389,10 @@ function buildFeishuTemplateContextBlocks(templateIds: string[], page?: PageCont
         id: 'template:browser-feishu',
         layer: 'platform',
         source: 'template.browser-feishu',
-        content: 'This session can use Feishu/Lark browser context. Treat the current Feishu/Lark page as active work context and use the official lark-cli when the user asks to access Feishu/Lark data.',
+        content: [
+          'This session can use Feishu/Lark browser context. Treat the current Feishu/Lark page as active work context and use the official lark-cli when the user asks to access Feishu/Lark data.',
+          feishuWriteSafetyContext(),
+        ].join('\n'),
         lifecycle: 'session',
         visibility: 'developer-toggle',
         enabled: true,
@@ -419,9 +422,14 @@ function renderFeishuTemplateContext(templateId: string, page?: PageContextPaylo
     page?.title ? `Initial page title: ${page.title}` : undefined,
     page?.url ? `Initial page URL: ${page.url}` : undefined,
     page?.objectKey ? `Initial object key: ${page.objectKey}` : undefined,
+    feishuWriteSafetyContext(),
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+function feishuWriteSafetyContext() {
+  return 'Feishu/Lark write operations should prefer the official lark-cli, respect CLI-native prompts and existing Nine1Bot permissions, and use dry-run first when the chosen command supports it. Nine1Bot does not wrap or intercept arbitrary lark-cli write commands.'
 }
 
 function renderPlatform(page: PageContextPayload, feishu?: Record<string, unknown>) {

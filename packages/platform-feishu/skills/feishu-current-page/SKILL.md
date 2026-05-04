@@ -72,6 +72,23 @@ Use scope hints when available:
 
 Search results are for locating likely context. Do not automatically read every result. Read only the relevant item or ask the user to choose when multiple results look plausible.
 
+## Write Operations
+
+When the user asks you to create, update, move, delete, share, or otherwise modify Feishu/Lark content, first make the intended change explicit:
+
+- Target object: current page, resolved object token/type, or a search result chosen by the user.
+- Action type: create, append, replace, move, delete, permission change, share setting, or another operation.
+- Impact scope: one block, one document, selected records, one folder, or a batch.
+- Current-page dependency: whether the change is based on the active browser page, current selection, or metadata from `page:feishu-metadata`.
+
+Prefer official `lark-cli` shortcuts and raw API commands. If the specific command supports `--dry-run`, run dry-run first, summarize the planned change, and wait for the normal Nine1Bot/tool permission flow or the user's confirmation before executing the real write. Do not invent dry-run behavior for commands that do not support it.
+
+For commands without dry-run, reduce risk by using narrow parameters and explicit object tokens. Do not build a Nine1Bot-specific wrapper, do not reinterpret the entire CLI schema, and do not bypass the official CLI's own prompts or the existing Nine1Bot permission mechanism.
+
+For Wiki pages, writes must use the resolved object type and token from metadata whenever available. If metadata is missing, resolve the wiki node first with `wiki spaces get_node`; never use a wiki node token directly as a docx/file token for writes.
+
+Permission changes, bulk deletes, bulk moves, and public sharing need especially clear impact summaries, but they do not require a separate Nine1Bot high-risk API confirmation layer. Follow the official CLI behavior and existing shell/tool permission flow.
+
 ## Safety
 
 Do not ask the user to copy access tokens, cookies, or CLI private config. The official `lark-cli` owns authentication. If CLI auth is missing, guide the user through official CLI login instead of inventing a separate auth flow.
