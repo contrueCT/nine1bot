@@ -105,7 +105,7 @@ export const feishuPlatformDescriptor = {
       {
         id: 'im',
         title: 'IM',
-        description: 'Feishu/Lark IM skeleton settings. Phase 1 stages configuration and pure message logic without taking over the legacy websocket service.',
+        description: 'Feishu/Lark IM settings. The new platform-feishu IM layer stays staged until the legacy websocket path is migrated.',
         fields: [
           {
             key: 'imEnabled',
@@ -166,8 +166,22 @@ export const feishuPlatformDescriptor = {
           {
             key: 'imReplyMode',
             type: 'select',
-            label: 'Reply mode',
+            label: 'Reply target',
+            description: 'Where IM replies are posted. Message replies to the incoming message; thread replies in Feishu thread context when available.',
             options: ['message', 'thread'],
+          },
+          {
+            key: 'imReplyPresentation',
+            type: 'select',
+            label: 'Reply presentation',
+            description: 'How agent output is rendered in Feishu. Auto uses text for DM and cards for groups or threads.',
+            options: ['auto', 'text', 'card'],
+          },
+          {
+            key: 'imReplyTimeoutMs',
+            type: 'number',
+            label: 'Reply timeout',
+            description: 'Milliseconds before an active IM reply is marked timed out. Default: 600000.',
           },
           {
             key: 'imMessageBufferMs',

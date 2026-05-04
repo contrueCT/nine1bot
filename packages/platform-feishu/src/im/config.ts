@@ -13,6 +13,7 @@ import type {
 
 export const FEISHU_IM_DEFAULT_BUFFER_MS = 1_500
 export const FEISHU_IM_DEFAULT_MAX_BUFFER_MS = 8_000
+export const FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS = 600_000
 export const FEISHU_IM_DEFAULT_BUSY_TEXT = '当前会话正在处理中，请稍后再试。'
 
 export function normalizeFeishuIMConfig(
@@ -61,6 +62,12 @@ export function validateFeishuIMConfig(settings: unknown): PlatformValidationRes
   }
   if (record.imMaxBufferMs !== undefined && !validNumber(record.imMaxBufferMs, 0)) {
     fieldErrors.imMaxBufferMs = 'Must be a non-negative number'
+  }
+  if (record.imReplyTimeoutMs !== undefined && !validNumber(record.imReplyTimeoutMs, 1)) {
+    fieldErrors.imReplyTimeoutMs = 'Must be a positive number'
+  }
+  if (record.imReplyPresentation !== undefined && !replyPresentationValue(record.imReplyPresentation)) {
+    fieldErrors.imReplyPresentation = 'Must be one of auto, text, card, or streaming-card'
   }
 
   const bufferMs = numberValue(record.imMessageBufferMs, FEISHU_IM_DEFAULT_BUFFER_MS)
@@ -196,6 +203,8 @@ function readPolicy(settings: Record<string, unknown>): FeishuIMPolicy {
     requireMention: booleanValue(settings.imRequireMention) ?? true,
     allowFrom: stringListValue(settings.imAllowFrom),
     replyMode: settings.imReplyMode === 'thread' ? 'thread' : 'message',
+    replyPresentation: replyPresentationValue(settings.imReplyPresentation) ?? 'auto',
+    replyTimeoutMs: numberValue(settings.imReplyTimeoutMs, FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS),
     messageBufferMs: numberValue(settings.imMessageBufferMs, FEISHU_IM_DEFAULT_BUFFER_MS),
     maxBufferMs: numberValue(settings.imMaxBufferMs, FEISHU_IM_DEFAULT_MAX_BUFFER_MS),
     busyRejectText: stringValue(settings.imBusyRejectText) ?? FEISHU_IM_DEFAULT_BUSY_TEXT,
@@ -215,6 +224,13 @@ function readLegacyState(input: unknown): FeishuIMLegacyState {
 
 function connectionModeValue(input: unknown): FeishuIMConnectionMode | undefined {
   return input === undefined || input === null || input === '' || input === 'websocket' ? 'websocket' : undefined
+}
+
+function replyPresentationValue(input: unknown): FeishuIMPolicy['replyPresentation'] | undefined {
+  if (input === undefined || input === null || input === '') return undefined
+  if (input === 'auto' || input === 'text' || input === 'card') return input
+  if (input === 'streaming-card') return 'card'
+  return undefined
 }
 
 function booleanValue(input: unknown): boolean | undefined {

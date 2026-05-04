@@ -104,9 +104,18 @@ export type FeishuInteractionAnswerInput = {
 
 export type FeishuRuntimeEventEnvelope = {
   id?: string
+  version?: string
+  sessionId?: string
+  turnSnapshotId?: string
+  createdAt?: number
   type: string
   at?: number
+  data?: unknown
   properties?: Record<string, unknown>
+  legacy?: {
+    type: string
+    properties?: unknown
+  }
 }
 
 export type FeishuRuntimeEventSubscription = {

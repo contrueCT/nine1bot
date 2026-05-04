@@ -9,6 +9,7 @@ import type {
 } from '@nine1bot/platform-protocol'
 import { normalizeFeishuIMConfig } from './config'
 import type { FeishuIMNormalizedConfig, FeishuIMRuntimeSnapshot } from './types'
+import { getFeishuIMReplyRuntimeSummary } from './reply-telemetry'
 
 const FEISHU_IM_SERVICE_ID = 'feishu-im'
 
@@ -119,6 +120,7 @@ function statusFromConfig(config: FeishuIMNormalizedConfig): PlatformRuntimeStat
 }
 
 function cardsFromConfig(config: FeishuIMNormalizedConfig, phase: string): PlatformStatusCard[] {
+  const reply = getFeishuIMReplyRuntimeSummary()
   return [
     {
       id: 'im-runtime',
@@ -139,6 +141,36 @@ function cardsFromConfig(config: FeishuIMNormalizedConfig, phase: string): Platf
       tone: 'neutral',
     },
     {
+      id: 'im-reply',
+      label: 'IM reply',
+      value: `${config.policy.replyPresentation} · ${config.policy.replyMode}`,
+      tone: 'neutral',
+    },
+    {
+      id: 'im-active-sinks',
+      label: 'Reply sinks',
+      value: String(reply.activeSinks),
+      tone: reply.activeSinks > 0 ? 'success' : 'neutral',
+    },
+    {
+      id: 'im-pending-interactions',
+      label: 'Interactions',
+      value: String(reply.pendingInteractions),
+      tone: reply.pendingInteractions > 0 ? 'warning' : 'neutral',
+    },
+    {
+      id: 'im-last-reply-error',
+      label: 'Reply error',
+      value: reply.lastReplyError ?? 'none',
+      tone: reply.lastReplyError ? 'danger' : 'neutral',
+    },
+    {
+      id: 'im-last-card-action',
+      label: 'Card action',
+      value: reply.lastCardAction ?? 'none',
+      tone: reply.lastCardAction ? 'success' : 'neutral',
+    },
+    {
       id: 'im-legacy',
       label: 'Legacy IM',
       value: config.legacy.enabled ? 'active' : 'inactive',
@@ -156,11 +188,16 @@ function snapshotFrom(
       ? 'disabled'
       : 'staged',
 ): FeishuIMRuntimeSnapshot {
+  const reply = getFeishuIMReplyRuntimeSummary()
   return {
     phase,
     status,
     accountCount: config.accounts.length,
     legacyActive: config.legacy.enabled,
+    activeReplySinks: reply.activeSinks,
+    pendingInteractions: reply.pendingInteractions,
+    lastReplyError: reply.lastReplyError,
+    lastCardAction: reply.lastCardAction,
     updatedAt: new Date().toISOString(),
   }
 }

@@ -45,3 +45,45 @@ export function serializeFeishuRouteKey(key: FeishuIMRouteKey): string {
   }
   return [key.platform, key.accountId, 'group', key.chatId].join(':')
 }
+
+export function parseFeishuRouteKey(input: string): FeishuIMRouteKey | undefined {
+  const parts = input.split(':')
+  if (parts[0] !== 'feishu') return undefined
+  const accountId = parts[1]
+  const kind = parts[2]
+  if (!accountId) return undefined
+  if (kind === 'dm') {
+    const openId = parts[3]
+    if (!openId) return undefined
+    return {
+      platform: 'feishu',
+      accountId,
+      kind,
+      chatId: openId,
+      openId,
+    }
+  }
+  if (kind === 'group') {
+    const chatId = parts[3]
+    if (!chatId) return undefined
+    return {
+      platform: 'feishu',
+      accountId,
+      kind,
+      chatId,
+    }
+  }
+  if (kind === 'thread') {
+    const chatId = parts[3]
+    const threadId = parts[4]
+    if (!chatId || !threadId) return undefined
+    return {
+      platform: 'feishu',
+      accountId,
+      kind,
+      chatId,
+      threadId,
+    }
+  }
+  return undefined
+}

@@ -236,6 +236,16 @@ describe('Feishu platform adapter package', () => {
     expect(status?.cards).toContainEqual(expect.objectContaining({ id: 'skills' }))
   })
 
+  test('registers Feishu IM reply settings in platform descriptor', () => {
+    const imSection = feishuPlatformContribution.descriptor.config?.sections.find((section) => section.id === 'im')
+    expect(imSection?.fields.map((field) => field.key)).toContain('imReplyPresentation')
+    expect(imSection?.fields.map((field) => field.key)).toContain('imReplyTimeoutMs')
+    expect(imSection?.fields.find((field) => field.key === 'imReplyPresentation')).toMatchObject({
+      type: 'select',
+      options: ['auto', 'text', 'card'],
+    })
+  })
+
   test('handles official skills directory actions without mutating CLI auth state', async () => {
     await withTempDir(async (officialDirectory) => {
       await writeSkill(officialDirectory, 'lark-doc')

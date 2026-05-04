@@ -6,6 +6,8 @@ export type FeishuIMChatType = 'p2p' | 'group' | 'unknown'
 
 export type FeishuIMRouteKind = 'dm' | 'group' | 'thread'
 
+export type FeishuIMReplyPresentation = 'auto' | 'text' | 'card'
+
 export type FeishuIMAccount = {
   id: string
   name?: string
@@ -22,6 +24,8 @@ export type FeishuIMPolicy = {
   requireMention: boolean
   allowFrom: string[]
   replyMode: 'message' | 'thread'
+  replyPresentation: FeishuIMReplyPresentation
+  replyTimeoutMs: number
   messageBufferMs: number
   maxBufferMs: number
   busyRejectText: string
@@ -51,6 +55,10 @@ export type FeishuIMRuntimeSnapshot = {
   status: PlatformRuntimeStatus
   accountCount: number
   legacyActive: boolean
+  activeReplySinks?: number
+  pendingInteractions?: number
+  lastReplyError?: string
+  lastCardAction?: string
   updatedAt: string
 }
 
@@ -107,6 +115,14 @@ export type FeishuIMControllerMessagePart = FeishuIMControllerTextPart | FeishuI
 
 export type FeishuIMControlResult =
   | {
+      type: 'control-panel'
+      sessionId: string
+      routeKey: string
+      directory?: string
+      projectId?: string
+      projectName?: string
+    }
+  | {
       type: 'new-session'
       sessionId: string
       directory?: string
@@ -154,6 +170,10 @@ export type FeishuIMControlResult =
       type: 'failed'
       command: string
       message: string
+    }
+  | {
+      type: 'help'
+      commands: string[]
     }
 
 export type FeishuIMHandleMessageResult =

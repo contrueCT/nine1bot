@@ -32,3 +32,5 @@ export type {
 } from './cli'
 export { createHttpFeishuControllerBridge } from './im/node/http-controller-bridge'
 export type { FeishuHttpControllerBridgeOptions } from './im/node/http-controller-bridge'
+export { createFeishuNodeReplyClient } from './im/node/reply-client'
+export type { FeishuNodeReplyClientOptions } from './im/node/reply-client'

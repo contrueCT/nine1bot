@@ -64,6 +64,8 @@ describe('Feishu IM skeleton', () => {
       messageBufferMs: 1200,
       maxBufferMs: 3000,
       groupPolicy: 'mention-only',
+      replyPresentation: 'auto',
+      replyTimeoutMs: 600_000,
     })
 
     expect(validateFeishuIMConfig({
@@ -89,6 +91,30 @@ describe('Feishu IM skeleton', () => {
       ok: false,
       fieldErrors: {
         imAccounts: expect.stringContaining('At least one IM account'),
+      },
+    })
+  })
+
+  test('normalizes reply presentation and validates timeout settings', () => {
+    expect(normalizeFeishuIMConfig({
+      imEnabled: true,
+      imDefaultAppId: 'cli_xxx',
+      imDefaultAppSecret: secretRef,
+      imReplyPresentation: 'streaming-card',
+      imReplyTimeoutMs: 12_000,
+    }).policy).toMatchObject({
+      replyPresentation: 'card',
+      replyTimeoutMs: 12_000,
+    })
+
+    expect(validateFeishuIMConfig({
+      imReplyPresentation: 'unknown',
+      imReplyTimeoutMs: 0,
+    })).toMatchObject({
+      ok: false,
+      fieldErrors: {
+        imReplyPresentation: expect.stringContaining('auto'),
+        imReplyTimeoutMs: expect.stringContaining('positive'),
       },
     })
   })

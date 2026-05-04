@@ -8,7 +8,7 @@ import {
   type FeishuControllerProject,
 } from './controller-bridge'
 import { evaluateFeishuIMGate } from './inbound/gate'
-import { routeKeyForFeishuMessage, serializeFeishuRouteKey, type FeishuIMRouteKey } from './route'
+import { parseFeishuRouteKey, routeKeyForFeishuMessage, serializeFeishuRouteKey, type FeishuIMRouteKey } from './route'
 import type { FeishuIMBindingStore, FeishuIMSessionBinding } from './store/binding-store'
 import {
   type FeishuIMAccount,
@@ -20,6 +20,32 @@ import {
 } from './types'
 import { FeishuIMMessageBuffer, type FeishuIMBufferedBatch } from './buffer/message-buffer'
 import { FeishuIMHistoryStore } from './history'
+import type { FeishuCardActionPayload, FeishuCardActionValue } from './interactions'
+import { recordFeishuIMCardAction } from './reply-telemetry'
+
+export type FeishuIMReplySinkFactoryInput = {
+  account: FeishuIMAccount
+  config: FeishuIMNormalizedConfig
+  routeKey: FeishuIMRouteKey
+  routeKeyString: string
+  binding: FeishuIMSessionBinding
+  batch: FeishuIMBufferedBatch
+  rootMessageId?: string
+}
+
+export type FeishuIMReplySinkHandle = {
+  done?: Promise<unknown>
+  start?: () => void | Promise<void>
+  bindTurnSnapshotId?: (turnSnapshotId?: string) => void | Promise<void>
+  stop: () => void | Promise<void>
+}
+
+export type FeishuIMImmediateReplyInput = {
+  result: FeishuIMHandleMessageResult
+  routeKey?: FeishuIMRouteKey
+  routeKeyString?: string
+  binding?: FeishuIMSessionBinding
+}
 
 export type FeishuIMSessionManagerOptions = {
   account: FeishuIMAccount
@@ -32,12 +58,15 @@ export type FeishuIMSessionManagerOptions = {
   resolveDirectory?: (baseDirectory: string | undefined, input: string) => Promise<string>
   history?: FeishuIMHistoryStore
   onFlushResult?: (result: FeishuIMHandleMessageResult) => void | Promise<void>
+  replySinkFactory?: (input: FeishuIMReplySinkFactoryInput) => FeishuIMReplySinkHandle | Promise<FeishuIMReplySinkHandle>
+  onImmediateReply?: (input: FeishuIMImmediateReplyInput) => void | Promise<void>
 }
 
 export class FeishuIMSessionManager {
   private readonly buffer: FeishuIMMessageBuffer
   private readonly history: FeishuIMHistoryStore
   private readonly activeRoutes = new Set<string>()
+  private readonly replySinks = new Set<FeishuIMReplySinkHandle>()
 
   constructor(private readonly options: FeishuIMSessionManagerOptions) {
     this.history = options.history ?? new FeishuIMHistoryStore()
@@ -83,11 +112,15 @@ export class FeishuIMSessionManager {
 
     const control = await this.handleControlCommand(routeKey, message)
     if (control) {
-      return { status: 'control', routeKey: routeKeyString, control }
+      const result = { status: 'control', routeKey: routeKeyString, control } satisfies FeishuIMHandleMessageResult
+      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString })
+      return result
     }
 
     if (this.activeRoutes.has(routeKeyString)) {
-      return { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText }
+      const result = { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText } satisfies FeishuIMHandleMessageResult
+      await this.options.onImmediateReply?.({ result, routeKey, routeKeyString })
+      return result
     }
 
     const enqueued = this.buffer.enqueue({
@@ -114,11 +147,28 @@ export class FeishuIMSessionManager {
     const batch = this.buffer.drain(routeKeyString)
     if (!batch) return undefined
     if (this.activeRoutes.has(routeKeyString)) {
-      return { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText }
+      const result = { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText } satisfies FeishuIMHandleMessageResult
+      await this.options.onImmediateReply?.({ result, routeKey: batch.routeKey, routeKeyString })
+      return result
     }
     this.activeRoutes.add(routeKeyString)
+    let releaseOnFinally = true
+    let sink: FeishuIMReplySinkHandle | undefined
     try {
       const binding = await this.resolveOrCreateSession(batch.routeKey)
+      sink = await this.options.replySinkFactory?.({
+        account: this.options.account,
+        config: this.options.config,
+        routeKey: batch.routeKey,
+        routeKeyString,
+        binding,
+        batch,
+        rootMessageId: batch.messages.at(-1)?.messageId,
+      })
+      if (sink) {
+        this.replySinks.add(sink)
+        await sink.start?.()
+      }
       const response = await this.options.controller.sendMessage({
         sessionId: binding.sessionId,
         directory: binding.directory,
@@ -129,13 +179,25 @@ export class FeishuIMSessionManager {
       })
 
       if (!response.accepted || response.busy) {
-        return { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText }
+        await this.stopReplySink(sink)
+        const result = { status: 'busy', routeKey: routeKeyString, message: this.options.config.policy.busyRejectText } satisfies FeishuIMHandleMessageResult
+        await this.options.onImmediateReply?.({ result, routeKey: batch.routeKey, routeKeyString, binding })
+        return result
       }
 
       await this.options.store.set(routeKeyString, {
         ...binding,
         updatedAt: new Date().toISOString(),
       })
+      await sink?.bindTurnSnapshotId?.(response.turnSnapshotId)
+      if (sink?.done) {
+        const activeSink = sink
+        releaseOnFinally = false
+        void activeSink.done!.finally(() => {
+          this.replySinks.delete(activeSink)
+          this.activeRoutes.delete(routeKeyString)
+        })
+      }
       return {
         status: 'accepted',
         routeKey: routeKeyString,
@@ -143,13 +205,16 @@ export class FeishuIMSessionManager {
         turnSnapshotId: response.turnSnapshotId,
       }
     } catch (error) {
-      return {
+      await this.stopReplySink(sink)
+      const result = {
         status: 'failed',
         routeKey: routeKeyString,
         message: error instanceof Error ? error.message : String(error),
-      }
+      } satisfies FeishuIMHandleMessageResult
+      await this.options.onImmediateReply?.({ result, routeKey: batch.routeKey, routeKeyString })
+      return result
     } finally {
-      this.activeRoutes.delete(routeKeyString)
+      if (releaseOnFinally) this.activeRoutes.delete(routeKeyString)
     }
   }
 
@@ -174,8 +239,78 @@ export class FeishuIMSessionManager {
     return { ...binding, project }
   }
 
+  async handleCardAction(payload: FeishuCardActionPayload, value: FeishuCardActionValue = {}): Promise<FeishuIMControlResult> {
+    recordFeishuIMCardAction(payload.action)
+    if (payload.accountId !== this.options.account.id) {
+      return { type: 'failed', command: payload.action, message: 'Card action account does not match this IM account' }
+    }
+    const routeKey = parseFeishuRouteKey(payload.routeKey)
+    if (!routeKey) {
+      return { type: 'failed', command: payload.action, message: 'Card action route is invalid' }
+    }
+    const current = await this.options.store.get(payload.routeKey)
+    if (payload.sessionId && current?.sessionId && payload.sessionId !== current.sessionId && payload.action !== 'control.newSession') {
+      return { type: 'failed', command: payload.action, message: 'Card action session is no longer current' }
+    }
+
+    try {
+      if (payload.action === 'control.newSession') {
+        const binding = await this.resetRoute(routeKey)
+        return {
+          type: 'new-session',
+          sessionId: binding.sessionId,
+          directory: binding.directory,
+          projectId: binding.projectId,
+        }
+      }
+      if (payload.action === 'control.projectList') {
+        const projects = await this.sortedProjects()
+        return {
+          type: 'project-list',
+          projects: projects.map((project) => ({
+            id: project.id,
+            name: projectDisplayName(project),
+            directory: projectDirectory(project),
+          })),
+        }
+      }
+      if (payload.action === 'control.switchProject') {
+        const projectId = value.projectId ?? value.value
+        if (!projectId) return { type: 'failed', command: payload.action, message: 'Project id is required' }
+        const binding = await this.switchProject(routeKey, projectId)
+        return {
+          type: 'project-switched',
+          sessionId: binding.sessionId,
+          projectId: binding.project.id,
+          projectName: projectDisplayName(binding.project),
+          directory: binding.directory ?? projectDirectory(binding.project) ?? '',
+        }
+      }
+      if (payload.action === 'control.showCwd') {
+        const binding = await this.resolveOrCreateSession(routeKey)
+        return {
+          type: 'cwd-current',
+          sessionId: binding.sessionId,
+          directory: binding.directory,
+          projectId: binding.projectId,
+        }
+      }
+      if (payload.action === 'control.help' || payload.action === 'control.openWeb') {
+        return { type: 'help', commands: CONTROL_COMMANDS }
+      }
+    } catch (error) {
+      return { type: 'failed', command: payload.action, message: error instanceof Error ? error.message : String(error) }
+    }
+
+    return { type: 'failed', command: payload.action, message: 'Unsupported control card action' }
+  }
+
   stop() {
     this.buffer.clear()
+    for (const sink of this.replySinks) {
+      void this.stopReplySink(sink)
+    }
+    this.replySinks.clear()
     this.activeRoutes.clear()
   }
 
@@ -185,6 +320,23 @@ export class FeishuIMSessionManager {
   ): Promise<FeishuIMControlResult | undefined> {
     const text = message.text?.trim()
     if (!text?.startsWith('/')) return undefined
+
+    if (text === '/control') {
+      const binding = await this.resolveOrCreateSession(routeKey)
+      const project = binding.projectId ? await this.options.controller.getProject(binding.projectId) : undefined
+      return {
+        type: 'control-panel',
+        sessionId: binding.sessionId,
+        routeKey: serializeFeishuRouteKey(routeKey),
+        projectId: binding.projectId,
+        projectName: project ? projectDisplayName(project) : undefined,
+        directory: project ? projectDirectory(project) ?? binding.directory : binding.directory,
+      }
+    }
+
+    if (text === '/help') {
+      return { type: 'help', commands: CONTROL_COMMANDS }
+    }
 
     if (text === '/new') {
       const binding = await this.resetRoute(routeKey)
@@ -341,7 +493,23 @@ export class FeishuIMSessionManager {
       ? this.options.resolveDirectory(baseDirectory, input)
       : input
   }
+
+  private async stopReplySink(sink: FeishuIMReplySinkHandle | undefined): Promise<void> {
+    if (!sink) return
+    this.replySinks.delete(sink)
+    await sink.stop()
+  }
 }
+
+const CONTROL_COMMANDS = [
+  '/control',
+  '/new',
+  '/cwd',
+  '/cwd <path>',
+  '/project',
+  '/project list',
+  '/project <id或名称>',
+]
 
 function partsFromBatch(batch: FeishuIMBufferedBatch): FeishuIMControllerMessagePart[] {
   return [{
