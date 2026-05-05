@@ -14,6 +14,17 @@ export type FeishuIMGatewayCardActionEvent = {
   raw: unknown
 }
 
+export type FeishuIMGatewayCardActionResponse = FeishuIMCard | {
+  toast: {
+    type: 'success' | 'info' | 'warning' | 'error'
+    content: string
+  }
+  card: {
+    type: 'raw'
+    data: FeishuIMCard
+  }
+}
+
 export type FeishuIMGatewayOptions = {
   account: FeishuIMAccount
   onMessage: (event: FeishuIMGatewayEvent) => void | Promise<void>
@@ -24,7 +35,7 @@ export type FeishuIMGatewayHandle = {
   start(): Promise<void>
   stop(): Promise<void>
   injectMessage(message: FeishuIMIncomingMessage): Promise<void>
-  injectCardAction(input: unknown): Promise<FeishuIMCard | undefined>
+  injectCardAction(input: unknown): Promise<FeishuIMGatewayCardActionResponse | undefined>
   isStarted(): boolean
 }
 
@@ -49,15 +60,51 @@ export function createFeishuIMGateway(options: FeishuIMGatewayOptions): FeishuIM
       if (!started || !options.onCardAction) return undefined
       const parsed = parseFeishuCardAction(input)
       if (!parsed.ok) return undefined
-      return await options.onCardAction({
+      const card = await options.onCardAction({
         accountId: options.account.id,
         payload: parsed.payload,
         value: parsed.value,
         raw: input,
       })
+      return formatFeishuCardActionResponse(input, card)
     },
     isStarted() {
       return started
     },
   }
+}
+
+export function formatFeishuCardActionResponse(
+  raw: unknown,
+  card: FeishuIMCard | undefined,
+): FeishuIMGatewayCardActionResponse | undefined {
+  if (!card) return undefined
+  if (cardActionEventType(raw) === 'card.action.trigger') {
+    return {
+      toast: {
+        type: 'success',
+        content: '操作已处理',
+      },
+      card: {
+        type: 'raw',
+        data: card,
+      },
+    }
+  }
+  return card
+}
+
+function cardActionEventType(raw: unknown): string | undefined {
+  const record = asRecord(raw)
+  return stringValue(record?.event_type)
+    ?? stringValue(asRecord(record?.header)?.event_type)
+    ?? stringValue(record?.type)
+}
+
+function asRecord(input: unknown): Record<string, unknown> | undefined {
+  return input && typeof input === 'object' ? input as Record<string, unknown> : undefined
+}
+
+function stringValue(input: unknown): string | undefined {
+  return typeof input === 'string' && input.trim() ? input.trim() : undefined
 }

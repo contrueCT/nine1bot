@@ -18,7 +18,9 @@ export {
 } from './abort'
 export {
   createFeishuIMGateway,
+  formatFeishuCardActionResponse,
   type FeishuIMGatewayCardActionEvent,
+  type FeishuIMGatewayCardActionResponse,
   type FeishuIMGatewayEvent,
   type FeishuIMGatewayHandle,
   type FeishuIMGatewayOptions,

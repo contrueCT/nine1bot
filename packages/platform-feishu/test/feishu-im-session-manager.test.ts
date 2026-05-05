@@ -85,8 +85,9 @@ describe('Feishu IM session manager', () => {
     })
     expect(bridge.sent).toHaveLength(1)
     const text = (bridge.sent[0]?.parts[0] as { text: string }).text
-    expect(text).toEqual(expect.stringContaining('first'))
-    expect(text).toEqual(expect.stringContaining('second'))
+    expect(text).toBe('first\n\nsecond')
+    expect(text).not.toContain('message_id')
+    expect(text).not.toContain('Feishu messages in this turn')
   })
 
   test('abort text cancels pending buffer before it reaches controller', async () => {

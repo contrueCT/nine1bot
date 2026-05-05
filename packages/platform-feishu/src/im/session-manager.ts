@@ -679,8 +679,15 @@ const CONTROL_COMMANDS = [
 function partsFromBatch(batch: FeishuIMBufferedBatch): FeishuIMControllerMessagePart[] {
   return [{
     type: 'text',
-    text: renderMessages('Feishu messages in this turn', batch.messages),
+    text: renderUserMessages(batch.messages),
   }]
+}
+
+function renderUserMessages(messages: FeishuIMIncomingMessage[]): string {
+  return messages
+    .map((message) => message.text?.trim() || `[${message.messageType}]`)
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 function renderRoute(routeKey: FeishuIMRouteKey): string {

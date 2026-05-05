@@ -37,6 +37,8 @@ type FeishuNodeCardKitElementApi = {
   content?: (input: unknown) => Promise<unknown>
 }
 
+type FeishuMessageIdentity = Pick<FeishuIMSentMessage, 'messageId' | 'cardId'>
+
 export function createFeishuNodeReplyClient(options: FeishuNodeReplyClientOptions): FeishuIMReplyClient {
   const receiveIdType = options.receiveIdType ?? 'chat_id'
   const messageApi = options.client.im?.message
@@ -44,24 +46,34 @@ export function createFeishuNodeReplyClient(options: FeishuNodeReplyClientOption
   const cardElementApi = options.client.cardkit?.v1?.cardElement
   return {
     async sendText(input) {
-      return normalizeSentMessage(await sendMessage(messageApi, input, 'text', { text: input.text }, receiveIdType))
+      const response = await sendMessage(messageApi, input, 'text', { text: input.text }, receiveIdType)
+      return normalizeSentMessage(response)
     },
     async sendCard(input) {
-      return normalizeSentMessage(await sendMessage(messageApi, input, 'interactive', input.card, receiveIdType))
+      const response = await sendMessage(messageApi, input, 'interactive', input.card, receiveIdType)
+      return normalizeSentMessage(response)
     },
     async updateCard(input) {
       if (!messageApi?.update && !messageApi?.patch) {
         throw new Error('Feishu message update API is unavailable')
       }
+      if (!input.messageId) {
+        throw new Error('Feishu message update requires message_id')
+      }
       const method = messageApi.patch ?? messageApi.update!
-      return normalizeSentMessage(await method({
+      const response = await method({
         path: {
           message_id: input.messageId,
         },
         data: {
           content: JSON.stringify(input.card),
         },
-      }))
+      })
+      assertFeishuOk(response, 'im.message.patch')
+      return normalizeSentMessage(response, {
+        messageId: input.messageId,
+        cardId: input.cardId,
+      })
     },
     async createCardEntity(input) {
       if (!cardApi?.create) throw new Error('Feishu CardKit create API is unavailable')
@@ -78,13 +90,14 @@ export function createFeishuNodeReplyClient(options: FeishuNodeReplyClientOption
       return { cardId, raw: response }
     },
     async sendCardEntity(input) {
-      return normalizeSentMessage(await sendMessage(
+      const response = await sendMessage(
         messageApi,
         input,
         'interactive',
         { type: 'card', data: { card_id: input.cardId } },
         receiveIdType,
-      ))
+      )
+      return normalizeSentMessage(response, { cardId: input.cardId })
     },
     async streamCardContent(input) {
       if (!cardElementApi?.content) throw new Error('Feishu CardKit content API is unavailable')
@@ -152,7 +165,7 @@ async function sendMessage(
     content: JSON.stringify(content),
   }
   if (input.rootMessageId && api.reply) {
-    return api.reply({
+    const response = await api.reply({
       path: {
         message_id: input.rootMessageId,
       },
@@ -162,24 +175,28 @@ async function sendMessage(
         reply_in_thread: input.replyTarget === 'thread',
       },
     })
+    assertFeishuOk(response, 'im.message.reply')
+    return response
   }
-  return api.create!({
+  const response = await api.create!({
     params: {
       receive_id_type: receiveIdType,
     },
     data,
   })
+  assertFeishuOk(response, 'im.message.create')
+  return response
 }
 
-function normalizeSentMessage(input: unknown): FeishuIMSentMessage {
+function normalizeSentMessage(input: unknown, fallback: FeishuMessageIdentity = {}): FeishuIMSentMessage {
   const record = asRecord(input)
   const data = asRecord(record?.data) ?? record
   const messageId = stringValue(data?.message_id)
     ?? stringValue(data?.messageId)
     ?? stringValue(asRecord(data?.message)?.message_id)
   return {
-    messageId,
-    cardId: stringValue(data?.card_id) ?? stringValue(data?.cardId),
+    messageId: messageId ?? fallback.messageId,
+    cardId: stringValue(data?.card_id) ?? stringValue(data?.cardId) ?? fallback.cardId,
     raw: input,
   }
 }
@@ -188,8 +205,16 @@ function assertFeishuOk(input: unknown, api: string): void {
   const record = asRecord(input)
   const code = typeof record?.code === 'number' ? record.code : 0
   if (code && code !== 0) {
-    const message = stringValue(record?.msg) ?? `${api} failed with code ${code}`
-    throw new Error(message)
+    const error = asRecord(record?.error)
+    const details = [
+      `code=${code}`,
+      stringValue(record?.msg) ? `msg=${stringValue(record?.msg)}` : undefined,
+      stringValue(record?.log_id) ? `log_id=${stringValue(record?.log_id)}` : undefined,
+      stringValue(error?.log_id) ? `log_id=${stringValue(error?.log_id)}` : undefined,
+      stringValue(record?.troubleshooter) ? `troubleshooter=${stringValue(record?.troubleshooter)}` : undefined,
+      stringValue(error?.troubleshooter) ? `troubleshooter=${stringValue(error?.troubleshooter)}` : undefined,
+    ].filter(Boolean).join(', ')
+    throw new Error(`${api} failed: ${details}`)
   }
 }
 

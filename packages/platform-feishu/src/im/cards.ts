@@ -64,8 +64,6 @@ export function renderFeishuTurnCard(input: FeishuTurnCardInput): FeishuIMCard {
     elements: [
       markdown([
         `**状态**：${statusText}`,
-        `**会话**：${input.sessionId ?? 'unknown'}`,
-        `**Route**：${serializeFeishuRouteKey(input.routeKey)}`,
         input.content ? `\n${input.content}` : undefined,
         input.error ? `\n**错误**：${input.error}` : undefined,
         input.resourceFailure ? `\n**资源提示**：${input.resourceFailure}` : undefined,
@@ -97,17 +95,12 @@ export function renderFeishuStreamingTurnCard(input: FeishuStreamingTurnCardInpu
     title: input.title ?? 'Nine1Bot 正在回复',
     template: input.status === 'final' ? 'green' : input.status === 'running' ? 'blue' : 'red',
     elements: [
-      markdown([
-        `**状态**：${statusText}`,
-        `**Session**：${input.sessionId ?? 'unknown'}`,
-        `**Route**：${serializeFeishuRouteKey(input.routeKey)}`,
-      ].join('\n')),
+      markdown(`**状态**：${statusText}`),
       markdown(content.text || '正在等待 Agent 输出...'),
       content.truncated
         ? markdown('内容较长，已在飞书卡片中截断。可以在 Web 端查看完整输出。')
         : undefined,
       input.tools?.length ? markdown(renderToolStatusLines(input.tools)) : undefined,
-      input.transport ? markdown(`**投递**：${input.transport}${input.fallbackReason ? ` (${input.fallbackReason})` : ''}`) : undefined,
       input.error ? markdown(`**错误**：${input.error}`) : undefined,
       input.resourceFailure ? markdown(`**资源提示**：${input.resourceFailure}`) : undefined,
       actionItems.length > 0 ? actions(actionItems) : undefined,
@@ -124,18 +117,9 @@ export function renderFeishuStreamingCardKitInitialCard(input: FeishuStreamingTu
     {
       tag: 'markdown',
       element_id: FEISHU_STREAMING_CARD_CONTENT_ELEMENT_ID,
-      content: '',
+      content: '正在等待 Agent 输出...',
       text_align: 'left',
       text_size: 'normal_v2',
-    },
-    {
-      tag: 'markdown',
-      element_id: 'nine1bot_streaming_meta',
-      content: [
-        `Session: ${input.sessionId ?? 'unknown'}`,
-        `Route: ${serializeFeishuRouteKey(input.routeKey)}`,
-      ].join('\n'),
-      text_size: 'notation',
     },
   ]
   if (input.status === 'running' && input.sessionId) {
@@ -198,11 +182,7 @@ export function renderFeishuStreamingCardKitFinalCard(input: FeishuStreamingTurn
       : undefined,
     {
       tag: 'markdown',
-      content: [
-        `状态：${statusText}`,
-        `Session：${input.sessionId ?? 'unknown'}`,
-        `Route：${serializeFeishuRouteKey(input.routeKey)}`,
-      ].join('\n'),
+      content: `状态：${statusText}`,
       text_size: 'notation',
     },
     input.error ? { tag: 'markdown', content: `**错误**：${input.error}` } : undefined,

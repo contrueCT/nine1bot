@@ -7,11 +7,13 @@ import {
   createFeishuIMReplySinkFactory,
   FeishuIMSessionManager,
   FeishuReplySink,
+  formatFeishuCardActionResponse,
   getFeishuIMReplyRuntimeSummary,
   MemoryFeishuIMBindingStore,
   MemoryFeishuIMReplyClient,
   normalizeFeishuIMConfig,
   parseFeishuCardAction,
+  renderFeishuStreamingTurnCard,
   routeKeyForFeishuMessage,
   serializeFeishuRouteKey,
   type FeishuCardActionPayload,
@@ -30,6 +32,7 @@ import {
   type FeishuRuntimeEventEnvelope,
   type FeishuRuntimeEventSubscription,
 } from '../src/im'
+import { createFeishuNodeReplyClient } from '../src/node'
 
 const secretRef: PlatformSecretRef = {
   provider: 'nine1bot-local',
@@ -269,6 +272,131 @@ describe('Feishu IM reply sink', () => {
     expect(JSON.stringify(client.updates.at(-1)?.card)).toContain('abcd')
   })
 
+  test('node message patch keeps the original card identity when Feishu returns empty data', async () => {
+    const bridge = new EventBridge()
+    const calls = {
+      replies: [] as unknown[],
+      patches: [] as unknown[],
+    }
+    const client = createFeishuNodeReplyClient({
+      client: {
+        im: {
+          message: {
+            reply: async (input: unknown) => {
+              calls.replies.push(input)
+              return {
+                code: 0,
+                data: {
+                  message_id: 'om_card_1',
+                  card_id: 'card_1',
+                },
+              }
+            },
+            patch: async (input: unknown) => {
+              calls.patches.push(input)
+              return { code: 0, data: {} }
+            },
+          },
+        },
+      },
+    })
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 5,
+      rootMessageId: 'om_user_1',
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'hello' } } })
+    await sleep(15)
+    await bridge.emit({ type: 'runtime.turn.completed', turnSnapshotId: 'turn_1' })
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+
+    expect(calls.replies).toHaveLength(1)
+    expect(calls.patches.length).toBeGreaterThanOrEqual(1)
+    expect(calls.patches.every((call) => messageIdFromPatchCall(call) === 'om_card_1')).toBe(true)
+  })
+
+  test('CardKit create failure falls back to message patch without creating a second card', async () => {
+    const bridge = new EventBridge()
+    const calls = {
+      cardKitCreates: [] as unknown[],
+      replies: [] as unknown[],
+      patches: [] as unknown[],
+    }
+    const client = createFeishuNodeReplyClient({
+      client: {
+        im: {
+          message: {
+            reply: async (input: unknown) => {
+              calls.replies.push(input)
+              return {
+                code: 0,
+                data: {
+                  message_id: 'om_fallback_card',
+                  card_id: 'fallback_card',
+                },
+              }
+            },
+            patch: async (input: unknown) => {
+              calls.patches.push(input)
+              return { code: 0, data: {} }
+            },
+          },
+        },
+        cardkit: {
+          v1: {
+            card: {
+              create: async (input: unknown) => {
+                calls.cardKitCreates.push(input)
+                return {
+                  code: 300303,
+                  msg: 'cardkit create denied',
+                  error: {
+                    log_id: 'log_cardkit_create',
+                    troubleshooter: 'https://open.feishu.cn/trouble',
+                  },
+                }
+              },
+            },
+          },
+        },
+      },
+    })
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 5,
+      rootMessageId: 'om_user_1',
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'fallback text' } } })
+    await sleep(15)
+    await bridge.emit({ type: 'runtime.turn.completed', turnSnapshotId: 'turn_1' })
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+
+    expect(calls.cardKitCreates).toHaveLength(1)
+    expect(calls.replies).toHaveLength(1)
+    expect(calls.patches.length).toBeGreaterThanOrEqual(1)
+    expect(calls.patches.every((call) => messageIdFromPatchCall(call) === 'om_fallback_card')).toBe(true)
+  })
+
   test('streaming card uses CardKit native transport when client supports it', async () => {
     const bridge = new EventBridge()
     const client = new CardKitReplyClient()
@@ -340,6 +468,101 @@ describe('Feishu IM reply sink', () => {
     expect(summary.streamingFallbacks).toBeGreaterThan(0)
     expect(summary.lastStreamingTransport).toBe('patch')
     sink.stop()
+  })
+
+  test('streaming group cards hide internal session route and transport metadata', async () => {
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 10,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'clean content' } } })
+    await sleep(15)
+    await bridge.emit({ type: 'runtime.turn.completed', turnSnapshotId: 'turn_1' })
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+
+    for (const card of [client.cards[0]?.card, ...client.updates.map((update) => update.card)]) {
+      const rendered = JSON.stringify(card)
+      expect(rendered).not.toContain('Session')
+      expect(rendered).not.toContain('Route')
+      expect(rendered).not.toContain('投递')
+      expect(rendered).not.toContain('cardkit create failed')
+    }
+  })
+
+  test('new card action trigger responses wrap updated cards in the official raw card envelope', () => {
+    const routeKey = routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id })
+    const card = renderFeishuStreamingTurnCard({
+      accountId: account.id,
+      routeKey,
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_1',
+      status: 'running',
+      maxChars: 1000,
+      content: 'working',
+    })
+
+    const response = formatFeishuCardActionResponse({
+      header: {
+        event_type: 'card.action.trigger',
+      },
+    }, card)
+    expect(response).toMatchObject({
+      toast: {
+        type: 'success',
+      },
+      card: {
+        type: 'raw',
+        data: card,
+      },
+    })
+    expect(parseFirstPayload((response as { card: { data: FeishuIMCard } }).card.data, 'turn.abort')).toMatchObject({
+      action: 'turn.abort',
+      routeKey: serializeFeishuRouteKey(routeKey),
+    })
+
+    expect(formatFeishuCardActionResponse({
+      header: {
+        event_type: 'card.action.trigger_v1',
+      },
+    }, card)).toBe(card)
+  })
+
+  test('Feishu API errors include response troubleshooting fields', async () => {
+    const client = createFeishuNodeReplyClient({
+      client: {
+        im: {
+          message: {
+            reply: async () => ({
+              code: 19001,
+              msg: 'permission denied',
+              error: {
+                log_id: 'log_permission',
+                troubleshooter: 'https://open.feishu.cn/trouble',
+              },
+            }),
+          },
+        },
+      },
+    })
+
+    await expect(client.sendCard({
+      chatId: 'oc_group',
+      rootMessageId: 'om_user',
+      replyTarget: 'thread',
+      card: { elements: [] },
+    })).rejects.toThrow(/im\.message\.reply failed: code=19001, msg=permission denied, log_id=log_permission, troubleshooter=https:\/\/open\.feishu\.cn\/trouble/)
   })
 
   test('streaming card renders sanitized tool-use status', async () => {
@@ -737,6 +960,12 @@ function parseFirstPayload(card: Record<string, unknown>, action?: string): Feis
   const result = parseFeishuCardAction({ action: { value: buttons[0]!.value } })
   if (!result.ok) throw new Error(result.reason)
   return result.payload
+}
+
+function messageIdFromPatchCall(input: unknown): string | undefined {
+  const record = input && typeof input === 'object' ? input as Record<string, unknown> : undefined
+  const path = record?.path && typeof record.path === 'object' ? record.path as Record<string, unknown> : undefined
+  return typeof path?.message_id === 'string' ? path.message_id : undefined
 }
 
 class EventBridge implements FeishuControllerBridge {

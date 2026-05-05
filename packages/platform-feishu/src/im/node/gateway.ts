@@ -2,7 +2,13 @@ import { AppType, Domain, EventDispatcher, LoggerLevel, WSClient } from '@larksu
 import { FeishuEventDeduplicator } from '../dedup'
 import { parseFeishuCardAction } from '../interactions'
 import { parseFeishuIMEvent } from '../inbound/parse'
-import type { FeishuIMGatewayCardActionEvent, FeishuIMGatewayEvent, FeishuIMGatewayHandle } from '../gateway'
+import {
+  formatFeishuCardActionResponse,
+  type FeishuIMGatewayCardActionEvent,
+  type FeishuIMGatewayCardActionResponse,
+  type FeishuIMGatewayEvent,
+  type FeishuIMGatewayHandle,
+} from '../gateway'
 import type { FeishuIMCard } from '../reply-client'
 import type { FeishuIMAccount } from '../types'
 
@@ -38,7 +44,7 @@ export function createFeishuNodeIMGateway(options: FeishuNodeIMGatewayOptions): 
     })
   }
 
-  const handleRawCardAction = async (raw: unknown): Promise<FeishuIMCard | undefined> => {
+  const handleRawCardAction = async (raw: unknown): Promise<FeishuIMGatewayCardActionResponse | undefined> => {
     if (!options.onCardAction) return undefined
     const parsed = parseFeishuCardAction(raw)
     if (!parsed.ok) {
@@ -46,12 +52,13 @@ export function createFeishuNodeIMGateway(options: FeishuNodeIMGatewayOptions): 
       return undefined
     }
     if (!dedup.accept(`card-action:${parsed.payload.nonce}`)) return undefined
-    return await options.onCardAction({
+    const card = await options.onCardAction({
       accountId: options.account.id,
       payload: parsed.payload,
       value: parsed.value,
       raw,
     })
+    return formatFeishuCardActionResponse(raw, card)
   }
 
   return {
