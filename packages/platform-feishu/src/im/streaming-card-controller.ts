@@ -83,6 +83,13 @@ export class FeishuStreamingCardController {
     await this.scheduleRunningFlush()
   }
 
+  clearText(): void {
+    this.textBuffer = ''
+    this.patchContentFlushed = false
+    this.lastFlushAt = 0
+    this.clearTimer()
+  }
+
   async handleRuntimeEvent(event: FeishuRuntimeEventEnvelope): Promise<boolean> {
     const tool = toolStatusFromEvent(event)
     if (!tool) return false

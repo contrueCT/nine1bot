@@ -272,6 +272,80 @@ describe('Feishu IM reply sink', () => {
     expect(JSON.stringify(client.updates.at(-1)?.card)).toContain('abcd')
   })
 
+  test('streaming card hides pre-tool assistant notes and waits for post-tool final text', async () => {
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 5,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await bridge.emit({
+      type: 'runtime.message.part.updated',
+      turnSnapshotId: 'turn_1',
+      data: { delta: { text: '用户想要查看当前目录下有什么文件。我需要使用 bash 命令来列出目录内容。' } },
+    })
+    await sleep(15)
+    expect(JSON.stringify(client.updates.at(-1)?.card)).toContain('我需要使用 bash')
+
+    await bridge.emit({
+      type: 'runtime.tool.started',
+      turnSnapshotId: 'turn_1',
+      data: {
+        toolCallId: 'tool_1',
+        tool: 'bash',
+        input: { description: 'List files in current directory', command: 'ls -la' },
+      },
+    })
+    await sleep(15)
+    const toolCard = JSON.stringify(client.updates.at(-1)?.card)
+    expect(toolCard).toContain('工具状态')
+    expect(toolCard).not.toContain('我需要使用 bash')
+
+    await bridge.emit({
+      type: 'runtime.tool.completed',
+      turnSnapshotId: 'turn_1',
+      data: {
+        toolCallId: 'tool_1',
+        tool: 'bash',
+        title: 'List files in current directory',
+        durationMs: 105,
+      },
+    })
+    await bridge.emit({
+      type: 'session.idle',
+      properties: {
+        turnSnapshotId: 'turn_1',
+      },
+    })
+
+    await sleep(80)
+    await bridge.emit({
+      type: 'runtime.message.part.updated',
+      turnSnapshotId: 'turn_1',
+      data: {
+        delta: {
+          text: '当前目录 C:\\code\\nine1bot 包含：docs、opencode、packages、scripts、web。',
+        },
+      },
+    })
+
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+    const finalCard = JSON.stringify(client.updates.at(-1)?.card)
+    expect(finalCard).toContain('当前目录 C:\\\\code\\\\nine1bot 包含')
+    expect(finalCard).not.toContain('我需要使用 bash')
+    expect(finalCard).not.toContain('用户想要查看当前目录')
+  })
+
   test('node message patch keeps the original card identity when Feishu returns empty data', async () => {
     const bridge = new EventBridge()
     const calls = {

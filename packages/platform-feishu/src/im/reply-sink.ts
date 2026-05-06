@@ -28,6 +28,8 @@ import {
   recordFeishuIMReplyError,
 } from './reply-telemetry'
 
+const LEGACY_IDLE_COMPLETION_GRACE_MS = 350
+
 export type FeishuReplySinkOptions = {
   accountId: string
   routeKey: FeishuIMRouteKey
@@ -75,6 +77,9 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
   private streamingController?: FeishuStreamingCardController
   private resourceFailure?: string
   private errorMessage?: string
+  private toolActivitySeen = false
+  private postToolTextSeen = false
+  private legacyIdleFinishTimer?: ReturnType<typeof setTimeout>
   private readonly partTextLengths = new Map<string, number>()
   private readonly pendingInteractions = new Set<string>()
 
@@ -135,11 +140,11 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
         await this.handlePartUpdated(event)
         return
       }
-      if (
-        this.presentation() === 'streaming-card' &&
-        (type === 'runtime.tool.started' || type === 'runtime.tool.completed' || type === 'runtime.tool.failed')
-      ) {
-        await this.streaming().handleRuntimeEvent(event)
+      if (isToolEvent(type)) {
+        this.noteToolActivity()
+        if (this.presentation() === 'streaming-card') {
+          await this.streaming().handleRuntimeEvent(event)
+        }
         return
       }
       if (type === 'runtime.interaction.requested') {
@@ -155,6 +160,10 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
         return
       }
       if (type === 'runtime.turn.completed') {
+        if (this.shouldDeferTurnCompletion(event)) {
+          this.scheduleDeferredFinal()
+          return
+        }
         await this.finish('final')
         return
       }
@@ -175,6 +184,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     this.subscription = undefined
     if (this.timeout) clearTimeout(this.timeout)
     this.timeout = undefined
+    this.clearDeferredFinal()
     this.streamingController?.stop()
     for (const _id of this.pendingInteractions) {
       decrementFeishuIMPendingInteractions()
@@ -186,11 +196,19 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
   }
 
   private async handlePartUpdated(event: FeishuRuntimeEventEnvelope): Promise<void> {
+    const toolPartUpdate = isToolPartUpdate(event)
+    if (toolPartUpdate) {
+      this.noteToolActivity()
+    }
     if (this.presentation() === 'streaming-card') {
       await this.streaming().handleRuntimeEvent(event)
     }
+    if (toolPartUpdate) return
     const text = textDeltaFromEvent(event, this.partTextLengths)
     if (!text) return
+    if (this.toolActivitySeen) {
+      this.postToolTextSeen = true
+    }
     this.textBuffer += text
     if (this.presentation() === 'text') {
       await this.options.client.sendText({
@@ -282,6 +300,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     this.completed = true
     if (this.timeout) clearTimeout(this.timeout)
     this.timeout = undefined
+    this.clearDeferredFinal()
     if (status === 'final') {
       if (this.presentation() === 'card') {
         await this.upsertTurnCard('final')
@@ -357,6 +376,30 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
         recordFeishuIMReplyError(error),
       )
     }, this.options.timeoutMs)
+  }
+
+  private noteToolActivity(): void {
+    if (this.toolActivitySeen) return
+    this.toolActivitySeen = true
+    this.textBuffer = ''
+    this.streamingController?.clearText()
+  }
+
+  private shouldDeferTurnCompletion(event: FeishuRuntimeEventEnvelope): boolean {
+    return isLegacyIdleCompletion(event) && this.toolActivitySeen && !this.postToolTextSeen
+  }
+
+  private scheduleDeferredFinal(): void {
+    if (this.legacyIdleFinishTimer) return
+    this.legacyIdleFinishTimer = setTimeout(() => {
+      this.legacyIdleFinishTimer = undefined
+      this.finish('final').catch((error) => recordFeishuIMReplyError(error))
+    }, LEGACY_IDLE_COMPLETION_GRACE_MS)
+  }
+
+  private clearDeferredFinal(): void {
+    if (this.legacyIdleFinishTimer) clearTimeout(this.legacyIdleFinishTimer)
+    this.legacyIdleFinishTimer = undefined
   }
 
   private presentation(): FeishuIMResolvedPresentation {
@@ -460,6 +503,23 @@ function shouldBufferUntilTurn(event: FeishuRuntimeEventEnvelope): boolean {
     || type === 'runtime.turn.failed'
 }
 
+function isToolEvent(type: string): boolean {
+  return type === 'runtime.tool.started'
+    || type === 'runtime.tool.completed'
+    || type === 'runtime.tool.failed'
+}
+
+function isLegacyIdleCompletion(event: FeishuRuntimeEventEnvelope): boolean {
+  return event.type === 'session.idle'
+}
+
+function isToolPartUpdate(event: FeishuRuntimeEventEnvelope): boolean {
+  const type = normalizedEventType(event)
+  if (type !== 'runtime.message.part.updated') return false
+  const part = asRecord(eventData(event).part) ?? asRecord(asRecord(event.properties)?.part)
+  return part?.type === 'tool'
+}
+
 function eventData(event: FeishuRuntimeEventEnvelope): Record<string, unknown> {
   if (event.data && typeof event.data === 'object') return event.data as Record<string, unknown>
   if (event.properties) return event.properties
@@ -468,6 +528,8 @@ function eventData(event: FeishuRuntimeEventEnvelope): Record<string, unknown> {
 
 function textDeltaFromEvent(event: FeishuRuntimeEventEnvelope, lengths: Map<string, number>): string | undefined {
   const data = eventData(event)
+  const part = asRecord(data.part)
+  if (part && !isVisibleTextPart(part)) return undefined
   const delta = data.delta
   const deltaRecord = asRecord(delta)
   const deltaText = typeof delta === 'string'
@@ -475,7 +537,6 @@ function textDeltaFromEvent(event: FeishuRuntimeEventEnvelope, lengths: Map<stri
     : stringValue(deltaRecord?.text)
   if (deltaText) return deltaText
 
-  const part = asRecord(data.part)
   if (!part || part.type !== 'text') return undefined
   const partText = stringValue(part.text)
   if (!partText) return undefined
@@ -483,6 +544,14 @@ function textDeltaFromEvent(event: FeishuRuntimeEventEnvelope, lengths: Map<stri
   const previousLength = lengths.get(partId) ?? 0
   lengths.set(partId, partText.length)
   return partText.length > previousLength ? partText.slice(previousLength) : undefined
+}
+
+function isVisibleTextPart(part: Record<string, unknown>): boolean {
+  if (part.type !== 'text') return false
+  if (part.ignored === true || part.synthetic === true) return false
+  const metadata = asRecord(part.metadata)
+  const kind = stringValue(metadata?.kind) ?? stringValue(metadata?.type)
+  return kind !== 'reasoning' && kind !== 'thinking'
 }
 
 function messageFromEvent(event: FeishuRuntimeEventEnvelope): string | undefined {
