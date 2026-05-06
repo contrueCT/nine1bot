@@ -29,6 +29,8 @@ import {
 } from './reply-telemetry'
 
 const LEGACY_IDLE_COMPLETION_GRACE_MS = 350
+const SUBSCRIPTION_READY_TIMEOUT_MS = 1_000
+const TERMINAL_DELIVERY_TIMEOUT_MS = 5_000
 
 export type FeishuReplySinkOptions = {
   accountId: string
@@ -103,6 +105,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     if (this.presentation() === 'streaming-card') {
       this.activateStreamingTelemetry()
     }
+    await this.waitForSubscriptionReady()
     if (this.options.turnSnapshotId !== undefined) {
       await this.bindTurnSnapshotId(this.options.turnSnapshotId)
     }
@@ -301,30 +304,20 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     if (this.timeout) clearTimeout(this.timeout)
     this.timeout = undefined
     this.clearDeferredFinal()
-    if (status === 'final') {
-      if (this.presentation() === 'card') {
-        await this.upsertTurnCard('final')
-      } else if (this.presentation() === 'streaming-card') {
-        await this.streaming().finish('final')
-      } else if (!this.textBuffer.trim()) {
-        await this.options.client.sendText({
-          ...this.delivery(),
-          text: '已完成。',
-        })
+
+    let resultMessage = message
+    try {
+      await this.deliverTerminalState(status, message)
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error))
+      recordFeishuIMReplyError(normalized)
+      try {
+        await this.options.onError?.(normalized)
+      } catch (onErrorFailure) {
+        recordFeishuIMReplyError(onErrorFailure instanceof Error ? onErrorFailure : new Error(String(onErrorFailure)))
       }
-    } else if (status === 'error' || status === 'timeout') {
-      const text = message ?? (status === 'timeout' ? '飞书回复等待超时，请在 Web 端继续。' : '处理失败。')
-      this.errorMessage = text
-      if (this.presentation() === 'card') {
-        await this.upsertTurnCard(status, { error: text })
-      } else if (this.presentation() === 'streaming-card') {
-        await this.streaming().finish(status, text)
-      } else {
-        await this.options.client.sendText({
-          ...this.delivery(),
-          text,
-        })
-      }
+      resultMessage ??= normalized.message
+      await this.sendTerminalFallback(status, resultMessage)
     }
 
     for (const _id of this.pendingInteractions) {
@@ -335,10 +328,63 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     this.subscription = undefined
     decrementFeishuIMActiveReplySinks()
     this.deactivateStreamingTelemetry()
-    const result = { status, message } satisfies FeishuReplySinkDoneResult
-    await this.options.onDone?.(result)
+    const result = { status, message: resultMessage } satisfies FeishuReplySinkDoneResult
+    try {
+      await this.options.onDone?.(result)
+    } catch (error) {
+      recordFeishuIMReplyError(error instanceof Error ? error : new Error(String(error)))
+    }
     this.resolveDoneOnce(result)
     this.stopped = true
+  }
+
+  private async deliverTerminalState(status: FeishuReplySinkDoneResult['status'], message?: string): Promise<void> {
+    const delivery = (async () => {
+      if (status === 'final') {
+        if (this.presentation() === 'card') {
+          await this.upsertTurnCard('final')
+        } else if (this.presentation() === 'streaming-card') {
+          await this.streaming().finish('final')
+        } else if (!this.textBuffer.trim()) {
+          await this.options.client.sendText({
+            ...this.delivery(),
+            text: '已完成。',
+          })
+        }
+        return
+      }
+
+      if (status === 'error' || status === 'timeout') {
+        const text = message ?? (status === 'timeout' ? '飞书回复等待超时，请在 Web 端继续。' : '处理失败。')
+        this.errorMessage = text
+        if (this.presentation() === 'card') {
+          await this.upsertTurnCard(status, { error: text })
+        } else if (this.presentation() === 'streaming-card') {
+          await this.streaming().finish(status, text)
+        } else {
+          await this.options.client.sendText({
+            ...this.delivery(),
+            text,
+          })
+        }
+      }
+    })()
+    delivery.catch((error) => {
+      recordFeishuIMReplyError(error instanceof Error ? error : new Error(String(error)))
+    })
+    await withTimeout(delivery, TERMINAL_DELIVERY_TIMEOUT_MS, 'Feishu terminal reply delivery timed out')
+  }
+
+  private async sendTerminalFallback(status: FeishuReplySinkDoneResult['status'], message?: string): Promise<void> {
+    const text = status === 'final'
+      ? this.textBuffer.trim() || '已完成，可在 Web 端继续查看。'
+      : message ?? (status === 'timeout' ? '飞书回复等待超时，请在 Web 端继续。' : '处理失败。')
+    await this.options.client.sendText({
+      ...this.delivery(),
+      text,
+    }).catch((error) => {
+      recordFeishuIMReplyError(error instanceof Error ? error : new Error(String(error)))
+    })
   }
 
   private async upsertTurnCard(
@@ -376,6 +422,14 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
         recordFeishuIMReplyError(error),
       )
     }, this.options.timeoutMs)
+  }
+
+  private async waitForSubscriptionReady(): Promise<void> {
+    const ready = this.subscription?.ready
+    if (!ready) return
+    await withTimeout(ready, SUBSCRIPTION_READY_TIMEOUT_MS, 'Feishu event subscription ready timed out').catch((error) => {
+      recordFeishuIMReplyError(error instanceof Error ? error : new Error(String(error)))
+    })
   }
 
   private noteToolActivity(): void {
@@ -560,6 +614,18 @@ function messageFromEvent(event: FeishuRuntimeEventEnvelope): string | undefined
   if (direct) return direct
   const error = asRecord(data.error)
   return stringValue(error?.message) ?? stringValue(error?.name)
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  if (timeoutMs <= 0) return promise
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const timer = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs)
+    timeout.unref?.()
+  })
+  return Promise.race([promise, timer]).finally(() => {
+    if (timeout) clearTimeout(timeout)
+  })
 }
 
 function asRecord(input: unknown): Record<string, unknown> | undefined {

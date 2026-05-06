@@ -164,11 +164,16 @@ export function createHttpFeishuControllerBridge(options: FeishuHttpControllerBr
     },
     subscribeEvents(input): FeishuRuntimeEventSubscription {
       const abort = new AbortController()
+      let resolveReady!: () => void
+      const ready = new Promise<void>((resolve) => {
+        resolveReady = resolve
+      })
       consumeSse({
         localUrl: options.localUrl,
         authHeader: options.authHeader,
         sessionId: input.sessionId,
         signal: abort.signal,
+        onOpen: resolveReady,
         onEvent: input.onEvent,
         onError: input.onError,
       }).catch((error) => {
@@ -177,6 +182,7 @@ export function createHttpFeishuControllerBridge(options: FeishuHttpControllerBr
         }
       })
       return {
+        ready,
         stop() {
           abort.abort()
         },
@@ -198,6 +204,7 @@ async function consumeSse(input: {
   authHeader?: string
   sessionId: string
   signal: AbortSignal
+  onOpen?: () => void
   onEvent: (event: FeishuRuntimeEventEnvelope) => void | Promise<void>
   onError?: (error: Error) => void | Promise<void>
 }) {
@@ -211,6 +218,7 @@ async function consumeSse(input: {
   if (!response.ok || !response.body) {
     throw new Error(`Event subscription failed: ${response.status} ${response.statusText}`)
   }
+  input.onOpen?.()
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()

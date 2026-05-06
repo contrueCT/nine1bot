@@ -125,6 +125,7 @@ export type FeishuRuntimeEventEnvelope = {
 }
 
 export type FeishuRuntimeEventSubscription = {
+  ready?: Promise<void>
   stop(): void
 }
 

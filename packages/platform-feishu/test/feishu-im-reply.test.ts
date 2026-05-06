@@ -83,6 +83,37 @@ describe('Feishu IM reply sink', () => {
     expect(client.texts).toEqual([expect.objectContaining({ text: 'hello' })])
   })
 
+  test('reply sink releases completion even when terminal delivery fails', async () => {
+    const bridge = new EventBridge()
+    const client = new FailingTextReplyClient()
+    const routeKey = routeKeyForFeishuMessage(message(), { accountId: account.id })
+    const errors: Error[] = []
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey,
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'message',
+      presentation: 'text',
+      timeoutMs: 10_000,
+      onError: (error) => {
+        errors.push(error)
+      },
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await bridge.emit({
+      type: 'runtime.turn.completed',
+      turnSnapshotId: 'turn_1',
+      data: { status: 'idle' },
+    })
+
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+    expect(errors.at(-1)?.message).toContain('send text failed')
+  })
+
   test('card sink creates and updates simplified cards for progress and errors', async () => {
     const bridge = new EventBridge()
     const client = new MemoryFeishuIMReplyClient()
@@ -1122,6 +1153,13 @@ class FailingUpdateReplyClient extends MemoryFeishuIMReplyClient {
   async updateCard(input: { messageId?: string; cardId?: string; card: Record<string, unknown> }): Promise<FeishuIMSentMessage> {
     this.updates.push(JSON.parse(JSON.stringify(input)))
     throw new Error('update failed')
+  }
+}
+
+class FailingTextReplyClient extends MemoryFeishuIMReplyClient {
+  async sendText(input: { chatId: string; rootMessageId?: string; replyTarget: 'message' | 'thread'; text: string }): Promise<FeishuIMSentMessage> {
+    this.texts.push(JSON.parse(JSON.stringify(input)))
+    throw new Error('send text failed')
   }
 }
 
