@@ -9,19 +9,16 @@ import type {
 } from '@nine1bot/platform-protocol'
 import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
-import { AppType, Client, Domain, LoggerLevel } from '@larksuiteoapi/node-sdk'
 import { normalizeFeishuIMConfig } from './config'
 import type { FeishuIMAccount, FeishuIMNormalizedConfig, FeishuIMRuntimeSnapshot } from './types'
 import { getFeishuIMReplyRuntimeSummary } from './reply-telemetry'
 import type { FeishuIMGatewayHandle } from './gateway'
-import { FeishuIMSessionManager } from './session-manager'
-import { createFeishuIMCardActionHandler, createFeishuIMImmediateReplyHandler, createFeishuIMReplySinkFactory } from './reply-coordinator'
-import { FeishuFileIMBindingStore } from './node/binding-store'
-import { createHttpFeishuControllerBridge } from './node/http-controller-bridge'
-import { createFeishuNodeReplyClient } from './node/reply-client'
-import { createFeishuNodeIMGateway } from './node/gateway'
 
 const FEISHU_IM_SERVICE_ID = 'feishu-im'
+
+type FeishuIMRuntimeManagerHandle = {
+  stop(): void
+}
 
 let latestSnapshot: FeishuIMRuntimeSnapshot | undefined
 
@@ -63,7 +60,7 @@ function createFeishuIMBackgroundService(): PlatformBackgroundService {
 class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
   private status: PlatformRuntimeStatus
   private readonly gateways: FeishuIMGatewayHandle[] = []
-  private readonly managers: FeishuIMSessionManager[] = []
+  private readonly managers: FeishuIMRuntimeManagerHandle[] = []
 
   constructor(private readonly ctx: PlatformBackgroundServiceContext) {
     this.status = statusFromConfig(this.config())
@@ -80,6 +77,41 @@ class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
       return
     }
 
+    if (process.platform === 'win32' && config.legacy.enabled) {
+      this.status = {
+        status: 'degraded',
+        message: 'Feishu IM is staged because both legacy feishu.enabled and platform IM are enabled on Windows.',
+        cards: cardsFromConfig(config, 'staged'),
+        recentEvents: [
+          event('warn', 'runtime', 'Platform Feishu IM websocket was not started while legacy Feishu config is still enabled on Windows.'),
+        ],
+      }
+      latestSnapshot = snapshotFrom(config, this.status, 'staged')
+      return
+    }
+
+    const [
+      sdk,
+      { FeishuIMSessionManager },
+      {
+        createFeishuIMCardActionHandler,
+        createFeishuIMImmediateReplyHandler,
+        createFeishuIMReplySinkFactory,
+      },
+      { FeishuFileIMBindingStore },
+      { createHttpFeishuControllerBridge },
+      { createFeishuNodeReplyClient },
+      { createFeishuNodeIMGateway },
+    ] = await Promise.all([
+      import('@larksuiteoapi/node-sdk'),
+      import('./session-manager'),
+      import('./reply-coordinator'),
+      import('./node/binding-store'),
+      import('./node/http-controller-bridge'),
+      import('./node/reply-client'),
+      import('./node/gateway'),
+    ])
+
     const controller = createHttpFeishuControllerBridge({
       localUrl: this.ctx.localUrl,
       authHeader: this.ctx.authHeader,
@@ -93,7 +125,7 @@ class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
         if (!appSecret) {
           throw new Error(`Secret ref is missing for account "${account.id}"`)
         }
-        const client = createClient(account, appSecret)
+        const client = createClient(sdk, account, appSecret)
         const replyClient = createFeishuNodeReplyClient({ client: client as any })
         const manager = new FeishuIMSessionManager({
           account,
@@ -392,7 +424,12 @@ function legacyEvents(config: FeishuIMNormalizedConfig): PlatformRecentEvent[] {
     : []
 }
 
-function createClient(account: FeishuIMAccount, appSecret: string) {
+function createClient(
+  sdk: typeof import('@larksuiteoapi/node-sdk'),
+  account: FeishuIMAccount,
+  appSecret: string,
+) {
+  const { AppType, Client, Domain, LoggerLevel } = sdk
   return new Client({
     appId: account.appId,
     appSecret,

@@ -29,10 +29,12 @@ import {
   FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS,
   FEISHU_IM_DEFAULT_STREAMING_CARD_MAX_CHARS,
   FEISHU_IM_DEFAULT_STREAMING_CARD_UPDATE_MS,
+  validateFeishuIMConfig,
+} from './im/config'
+import {
   createFeishuIMBackgroundServices,
   getFeishuIMRuntimeStatus,
-  validateFeishuIMConfig,
-} from './im'
+} from './im/runtime'
 import type {
   PlatformActionResult,
   PlatformAdapterContext,

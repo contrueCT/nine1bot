@@ -12,5 +12,16 @@ export {
   normalizeFeishuPagePayload,
 } from './runtime'
 export type { FeishuPlatformAdapter } from './runtime'
-export * from './im'
+export {
+  FEISHU_IM_DEFAULT_BUFFER_MS,
+  FEISHU_IM_DEFAULT_BUSY_TEXT,
+  FEISHU_IM_DEFAULT_MAX_BUFFER_MS,
+  FEISHU_IM_DEFAULT_REPLY_TIMEOUT_MS,
+  FEISHU_IM_DEFAULT_STREAMING_CARD_MAX_CHARS,
+  FEISHU_IM_DEFAULT_STREAMING_CARD_UPDATE_MS,
+  isPlatformSecretRef,
+  normalizeFeishuIMConfig,
+  validateFeishuIMConfig,
+} from './im/config'
+export type * from './im/types'
 export type * from './types'

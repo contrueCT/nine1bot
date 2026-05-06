@@ -296,7 +296,7 @@ describe('Feishu IM skeleton', () => {
     }
   })
 
-  test('does not let legacy Feishu config start the removed legacy service', async () => {
+  test('stages platform IM on Windows when legacy Feishu config is still enabled', async () => {
     clearFeishuIMRuntimeSnapshotForTesting()
     const ctx = platformContext({
       imEnabled: true,
@@ -319,11 +319,15 @@ describe('Feishu IM skeleton', () => {
     })
 
     expect(handle.getStatus?.()).toMatchObject({
-      status: 'error',
-      message: expect.stringContaining('Secret ref is missing'),
+      status: process.platform === 'win32' ? 'degraded' : 'error',
+      message: process.platform === 'win32'
+        ? expect.stringContaining('legacy feishu.enabled')
+        : expect.stringContaining('Secret ref is missing'),
     })
     expect(handle.getStatus?.().recentEvents).toContainEqual(expect.objectContaining({
-      message: expect.stringContaining('legacy Feishu service is disabled'),
+      message: process.platform === 'win32'
+        ? expect.stringContaining('not started while legacy Feishu config is still enabled')
+        : expect.stringContaining('legacy Feishu service is disabled'),
     }))
     await handle.stop()
   })

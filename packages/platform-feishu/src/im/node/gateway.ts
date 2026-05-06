@@ -1,4 +1,3 @@
-import { AppType, Domain, EventDispatcher, LoggerLevel, WSClient } from '@larksuiteoapi/node-sdk'
 import { FeishuEventDeduplicator } from '../dedup'
 import { parseFeishuCardAction } from '../interactions'
 import { parseFeishuIMEvent } from '../inbound/parse'
@@ -22,14 +21,10 @@ export type FeishuNodeIMGatewayOptions = {
 
 export function createFeishuNodeIMGateway(options: FeishuNodeIMGatewayOptions): FeishuIMGatewayHandle {
   const dedup = new FeishuEventDeduplicator()
-  const wsClient = new WSClient({
-    appId: options.account.appId,
-    appSecret: options.appSecret,
-    domain: Domain.Feishu,
-    logger: createLogger(options.onError),
-    loggerLevel: LoggerLevel.info,
-    autoReconnect: true,
-  })
+  let wsClient: {
+    start(input: unknown): Promise<void>
+    close(input: { force: boolean }): void
+  } | undefined
   let started = false
 
   const handleRawMessage = async (raw: unknown) => {
@@ -64,6 +59,15 @@ export function createFeishuNodeIMGateway(options: FeishuNodeIMGatewayOptions): 
   return {
     async start() {
       if (started) return
+      const { Domain, EventDispatcher, LoggerLevel, WSClient } = await import('@larksuiteoapi/node-sdk')
+      wsClient = new WSClient({
+        appId: options.account.appId,
+        appSecret: options.appSecret,
+        domain: Domain.Feishu,
+        logger: createLogger(options.onError),
+        loggerLevel: LoggerLevel.info,
+        autoReconnect: true,
+      })
       await wsClient.start({
         eventDispatcher: new EventDispatcher({}).register({
           'im.message.receive_v1': handleRawMessage,
@@ -78,7 +82,8 @@ export function createFeishuNodeIMGateway(options: FeishuNodeIMGatewayOptions): 
       if (!started) return
       started = false
       dedup.clear()
-      wsClient.close({ force: true })
+      wsClient?.close({ force: true })
+      wsClient = undefined
     },
     async injectMessage(message) {
       if (!started) return
