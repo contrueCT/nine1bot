@@ -10,6 +10,7 @@ import {
   type FeishuControllerProject,
   type FeishuControllerSendMessageInput,
   type FeishuControllerSession,
+  type FeishuControllerTurnResult,
   type FeishuInteractionAnswerInput,
   type FeishuRuntimeEventEnvelope,
   type FeishuRuntimeEventSubscription,
@@ -134,6 +135,14 @@ export function createHttpFeishuControllerBridge(options: FeishuHttpControllerBr
         status: result.status,
       }
     },
+    async getLatestTurnResult(input): Promise<FeishuControllerTurnResult | undefined> {
+      const result = await request<unknown[]>(`/session/${encodeURIComponent(input.sessionId)}/message?limit=8`, {
+        directory: input.directory,
+        allowStatus: [404],
+      }).catch(() => undefined)
+      if (!result?.ok || !Array.isArray(result.body)) return undefined
+      return latestTurnResultFromMessages(result.body)
+    },
     async abortSession(input: FeishuControllerAbortSessionInput): Promise<boolean> {
       const result = await request<boolean>(`/session/${encodeURIComponent(input.sessionId)}/abort`, {
         method: 'POST',
@@ -191,12 +200,50 @@ export function createHttpFeishuControllerBridge(options: FeishuHttpControllerBr
   }
 }
 
+function latestTurnResultFromMessages(messages: unknown[]): FeishuControllerTurnResult | undefined {
+  const latestAssistant = [...messages]
+    .reverse()
+    .map(asRecord)
+    .find((message) => asRecord(message?.info)?.role === 'assistant')
+  if (!latestAssistant) return undefined
+
+  const info = asRecord(latestAssistant.info)
+  const error = asRecord(info?.error)
+  const completed = Boolean(asRecord(info?.time)?.completed) || Boolean(info?.finish) || Boolean(info?.error)
+  return {
+    completed,
+    failed: Boolean(info?.error),
+    text: textFromMessageParts(Array.isArray(latestAssistant.parts) ? latestAssistant.parts : []),
+    error: stringValue(error?.message) ?? stringValue(error?.name),
+  }
+}
+
+function textFromMessageParts(parts: unknown[]): string | undefined {
+  const text = parts
+    .map(asRecord)
+    .filter((part) => part?.type === 'text' && part.ignored !== true && part.synthetic !== true)
+    .map((part) => stringValue(part?.text))
+    .filter((part): part is string => Boolean(part))
+    .filter((part) => !part.trimStart().startsWith('<system-hint'))
+    .join('\n\n')
+    .trim()
+  return text || undefined
+}
+
 function headersToRecord(headers: Headers): Record<string, string> {
   const record: Record<string, string> = {}
   headers.forEach((value, key) => {
     record[key] = value
   })
   return record
+}
+
+function asRecord(input: unknown): Record<string, unknown> | undefined {
+  return input && typeof input === 'object' ? input as Record<string, unknown> : undefined
+}
+
+function stringValue(input: unknown): string | undefined {
+  return typeof input === 'string' && input.trim() ? input.trim() : undefined
 }
 
 async function consumeSse(input: {

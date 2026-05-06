@@ -90,6 +90,13 @@ export class FeishuStreamingCardController {
     this.clearTimer()
   }
 
+  replaceText(text: string): void {
+    this.textBuffer = text
+    this.patchContentFlushed = false
+    this.lastFlushAt = 0
+    this.clearTimer()
+  }
+
   async handleRuntimeEvent(event: FeishuRuntimeEventEnvelope): Promise<boolean> {
     const tool = toolStatusFromEvent(event)
     if (!tool) return false

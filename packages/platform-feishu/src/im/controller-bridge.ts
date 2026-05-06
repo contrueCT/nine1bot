@@ -89,6 +89,13 @@ export type FeishuControllerMessageResult = {
   }
 }
 
+export type FeishuControllerTurnResult = {
+  completed: boolean
+  failed?: boolean
+  text?: string
+  error?: string
+}
+
 export type FeishuControllerAbortSessionInput = {
   sessionId: string
   directory?: string
@@ -133,6 +140,7 @@ export type FeishuControllerBridge = {
   createSession(input: FeishuControllerCreateSessionInput): Promise<FeishuControllerCreateSessionResult>
   getSession(input: { sessionId: string; directory?: string }): Promise<FeishuControllerSession | undefined>
   sendMessage(input: FeishuControllerSendMessageInput): Promise<FeishuControllerMessageResult>
+  getLatestTurnResult?(input: { sessionId: string; directory?: string }): Promise<FeishuControllerTurnResult | undefined>
   abortSession(input: FeishuControllerAbortSessionInput): Promise<boolean>
   answerInteraction(input: FeishuInteractionAnswerInput): Promise<boolean>
   listProjects(): Promise<FeishuControllerProject[]>

@@ -24,6 +24,7 @@ import {
   type FeishuControllerProject,
   type FeishuControllerSendMessageInput,
   type FeishuControllerSession,
+  type FeishuControllerTurnResult,
   type FeishuIMCard,
   type FeishuIMCardEntity,
   type FeishuIMAccount,
@@ -112,6 +113,37 @@ describe('Feishu IM reply sink', () => {
 
     await expect(sink.done).resolves.toMatchObject({ status: 'final' })
     expect(errors.at(-1)?.message).toContain('send text failed')
+  })
+
+  test('streaming card polls completed session result when runtime events are missed', async () => {
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    bridge.latestTurnResult = {
+      completed: true,
+      text: '已记录请假申请到飞书多维表格。',
+    }
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      directory: 'C:/work',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 5,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+
+    const finalCard = JSON.stringify(client.updates.at(-1)?.card)
+    expect(finalCard).toContain('已记录请假申请')
+    expect(client.updates.at(-1)?.card).toEqual(expect.objectContaining({
+      header: expect.objectContaining({ template: 'green' }),
+    }))
   })
 
   test('card sink creates and updates simplified cards for progress and errors', async () => {
@@ -1078,6 +1110,7 @@ class EventBridge implements FeishuControllerBridge {
   sent: FeishuControllerSendMessageInput[] = []
   aborts: any[] = []
   answers: any[] = []
+  latestTurnResult?: FeishuControllerTurnResult
   private sequence = 0
   private subscribers: Array<(event: FeishuRuntimeEventEnvelope) => void | Promise<void>> = []
 
@@ -1109,6 +1142,10 @@ class EventBridge implements FeishuControllerBridge {
       turnSnapshotId: `turn_${this.sent.length}`,
       status: 202,
     }
+  }
+
+  async getLatestTurnResult(): Promise<FeishuControllerTurnResult | undefined> {
+    return this.latestTurnResult
   }
 
   async abortSession(input: any): Promise<boolean> {

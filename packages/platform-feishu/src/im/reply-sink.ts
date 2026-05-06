@@ -29,6 +29,8 @@ import {
 } from './reply-telemetry'
 
 const LEGACY_IDLE_COMPLETION_GRACE_MS = 350
+const TURN_RESULT_POLL_INITIAL_DELAY_MS = 1_500
+const TURN_RESULT_POLL_INTERVAL_MS = 1_500
 const SUBSCRIPTION_READY_TIMEOUT_MS = 1_000
 const TERMINAL_DELIVERY_TIMEOUT_MS = 5_000
 
@@ -36,6 +38,7 @@ export type FeishuReplySinkOptions = {
   accountId: string
   routeKey: FeishuIMRouteKey
   sessionId: string
+  directory?: string
   turnSnapshotId?: string
   controller: FeishuControllerBridge
   client: FeishuIMReplyClient
@@ -82,6 +85,8 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
   private toolActivitySeen = false
   private postToolTextSeen = false
   private legacyIdleFinishTimer?: ReturnType<typeof setTimeout>
+  private turnResultPollTimer?: ReturnType<typeof setTimeout>
+  private turnResultPollInProgress = false
   private readonly partTextLengths = new Map<string, number>()
   private readonly pendingInteractions = new Set<string>()
 
@@ -121,6 +126,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     } else if (this.presentation() === 'streaming-card') {
       await this.streaming().start(turnSnapshotId)
     }
+    this.startTurnResultPoll()
     const pending = this.pendingEvents
     this.pendingEvents = []
     for (const event of pending) {
@@ -188,6 +194,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     if (this.timeout) clearTimeout(this.timeout)
     this.timeout = undefined
     this.clearDeferredFinal()
+    this.clearTurnResultPoll()
     this.streamingController?.stop()
     for (const _id of this.pendingInteractions) {
       decrementFeishuIMPendingInteractions()
@@ -304,6 +311,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     if (this.timeout) clearTimeout(this.timeout)
     this.timeout = undefined
     this.clearDeferredFinal()
+    this.clearTurnResultPoll()
 
     let resultMessage = message
     try {
@@ -422,6 +430,70 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
         recordFeishuIMReplyError(error),
       )
     }, this.options.timeoutMs)
+  }
+
+  private startTurnResultPoll(): void {
+    if (!this.options.controller.getLatestTurnResult || this.turnResultPollTimer || this.completed || this.stopped) return
+    this.turnResultPollTimer = setTimeout(() => {
+      this.turnResultPollTimer = undefined
+      this.pollTurnResult().catch((error) => {
+        recordFeishuIMReplyError(error instanceof Error ? error : new Error(String(error)))
+        this.scheduleNextTurnResultPoll()
+      })
+    }, TURN_RESULT_POLL_INITIAL_DELAY_MS)
+    this.turnResultPollTimer.unref?.()
+  }
+
+  private scheduleNextTurnResultPoll(): void {
+    if (!this.options.controller.getLatestTurnResult || this.turnResultPollTimer || this.completed || this.stopped) return
+    this.turnResultPollTimer = setTimeout(() => {
+      this.turnResultPollTimer = undefined
+      this.pollTurnResult().catch((error) => {
+        recordFeishuIMReplyError(error instanceof Error ? error : new Error(String(error)))
+        this.scheduleNextTurnResultPoll()
+      })
+    }, TURN_RESULT_POLL_INTERVAL_MS)
+    this.turnResultPollTimer.unref?.()
+  }
+
+  private clearTurnResultPoll(): void {
+    if (this.turnResultPollTimer) clearTimeout(this.turnResultPollTimer)
+    this.turnResultPollTimer = undefined
+  }
+
+  private async pollTurnResult(): Promise<void> {
+    if (this.completed || this.stopped || this.turnResultPollInProgress || !this.options.controller.getLatestTurnResult) return
+    this.turnResultPollInProgress = true
+    try {
+      const result = await this.options.controller.getLatestTurnResult({
+        sessionId: this.options.sessionId,
+        directory: this.options.directory,
+      })
+      if (!result?.completed) {
+        this.scheduleNextTurnResultPoll()
+        return
+      }
+      if (result.failed) {
+        await this.finish('error', result.error ?? 'Agent turn failed.')
+        return
+      }
+      if (result.text) {
+        await this.replaceVisibleText(result.text)
+      }
+      await this.finish('final')
+    } finally {
+      this.turnResultPollInProgress = false
+    }
+  }
+
+  private async replaceVisibleText(text: string): Promise<void> {
+    const normalized = text.trim()
+    if (!normalized) return
+    if (this.textBuffer.trim() === normalized) return
+    this.textBuffer = normalized
+    if (this.presentation() === 'streaming-card') {
+      this.streaming().replaceText(normalized)
+    }
   }
 
   private async waitForSubscriptionReady(): Promise<void> {

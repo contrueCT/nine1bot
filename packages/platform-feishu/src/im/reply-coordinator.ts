@@ -32,6 +32,7 @@ export function createFeishuIMReplySinkFactory(
     accountId: options.account.id,
     routeKey: input.routeKey,
     sessionId: input.binding.sessionId,
+    directory: input.binding.directory,
     controller: options.controller,
     client: options.client,
     replyMode: options.config.policy.replyMode,

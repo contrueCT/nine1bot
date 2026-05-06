@@ -46,6 +46,7 @@ export {
   type FeishuControllerProject,
   type FeishuControllerSendMessageInput,
   type FeishuControllerSession,
+  type FeishuControllerTurnResult,
   type FeishuInteractionAnswerInput,
   type FeishuRuntimeEventEnvelope,
   type FeishuRuntimeEventSubscription,
