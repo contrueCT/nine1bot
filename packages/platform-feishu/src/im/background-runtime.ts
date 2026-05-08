@@ -14,7 +14,12 @@ import type {
   FeishuIMGatewayHandle,
 } from './gateway-interface'
 import { normalizeFeishuIMConfig } from './config'
-import { getFeishuIMReplyRuntimeSummary } from './reply-telemetry'
+import {
+  getFeishuIMReplyRuntimeRecentEvents,
+  getFeishuIMReplyRuntimeSummary,
+  resetFeishuIMReplyRuntimeSummary,
+  subscribeFeishuIMReplyRuntimeSummary,
+} from './reply-telemetry'
 import type { FeishuNodeIMGatewayOptions } from './node/ws-gateway'
 import type {
   FeishuIMAccount,
@@ -134,6 +139,7 @@ class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
   private readonly retryBackoffMs: number[]
   private readonly stabilityWindowMs: number
   private readonly gatewayFactoryOverride?: FeishuIMGatewayFactory
+  private unsubscribeReplyTelemetry?: () => void
 
   constructor(private readonly ctx: PlatformBackgroundServiceContext) {
     const hooks = runtimeTestHooks
@@ -150,6 +156,9 @@ class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
     const config = this.config()
     this.runtimes.clear()
     this.recentEvents = []
+    this.unsubscribeReplyTelemetry?.()
+    this.unsubscribeReplyTelemetry = undefined
+    resetFeishuIMReplyRuntimeSummary()
 
     if (!config.enabled || config.accounts.length === 0) {
       this.status = statusFromConfig(config)
@@ -174,6 +183,10 @@ class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
       latestSnapshot = snapshotFrom(config, this.status, 'staged')
       return
     }
+
+    this.unsubscribeReplyTelemetry = subscribeFeishuIMReplyRuntimeSummary(() => {
+      this.refreshStatus()
+    })
 
     const [
       sdk,
@@ -295,6 +308,9 @@ class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
       runtime.manager = undefined
       runtime.connectionState = 'stopped'
     }
+    this.unsubscribeReplyTelemetry?.()
+    this.unsubscribeReplyTelemetry = undefined
+    resetFeishuIMReplyRuntimeSummary()
     this.runtimes.clear()
     this.recentEvents = []
     this.status = {
@@ -376,17 +392,17 @@ class FeishuIMBackgroundHandle implements PlatformBackgroundServiceHandle {
       this.clearRestartTimer(runtime)
       runtime.connectionState = 'connected'
       runtime.lastConnectionError = undefined
-      this.recordRecentEvent(
-        'info',
-        'im-gateway',
-        runtime.restartAttempt > 0
-          ? `Feishu IM account "${accountId}" gateway connected after restart attempt ${runtime.restartAttempt}.`
-          : `Feishu IM account "${accountId}" gateway connected.`,
-        {
-          accountId,
-          event: 'connected',
-        },
-      )
+      if (runtime.restartAttempt > 0) {
+        this.recordRecentEvent(
+          'info',
+          'im-gateway',
+          `Feishu IM account "${accountId}" gateway connected after restart attempt ${runtime.restartAttempt}.`,
+          {
+            accountId,
+            event: 'connected',
+          },
+        )
+      }
       this.startStabilityTimer(runtime, generation)
       this.refreshStatus()
       return
@@ -597,7 +613,7 @@ function statusFromRuntime(
   const starting = runtimes.filter((runtime) => runtime.connectionState === 'starting')
   const errors = runtimes.filter((runtime) => runtime.connectionState === 'error')
   const unhealthyCount = runtimes.length - healthy.length
-  const recentEvents = [...legacyEvents(config), ...runtimeEvents]
+  const recentEvents = mergedRecentEvents(config, runtimeEvents)
 
   if (healthy.length === runtimes.length) {
     return {
@@ -640,11 +656,9 @@ function cardsFromConfig(
   phase: string,
   runtimes: FeishuIMAccountRuntime[] = [],
 ): PlatformStatusCard[] {
-  const reply = getFeishuIMReplyRuntimeSummary()
   const gateway = summarizeGatewayState(phase, runtimes)
   const restartAttempts = summarizeRestartAttempts(runtimes)
-
-  return [
+  const cards: PlatformStatusCard[] = [
     {
       id: 'im-runtime',
       label: 'IM runtime',
@@ -669,103 +683,18 @@ function cardsFromConfig(
       value: String(config.accounts.length),
       tone: config.accounts.length > 0 ? 'success' : config.enabled ? 'danger' : 'neutral',
     },
-    {
-      id: 'im-buffer',
-      label: 'IM buffer',
-      value: `${config.policy.messageBufferMs}ms / max ${config.policy.maxBufferMs}ms`,
-      tone: 'neutral',
-    },
-    {
-      id: 'im-reply',
-      label: 'IM reply',
-      value: `${config.policy.replyPresentation} · ${config.policy.replyMode}`,
-      tone: 'neutral',
-    },
-    {
-      id: 'im-streaming-card',
-      label: 'Streaming card',
-      value: `${config.policy.streamingCardUpdateMs}ms / max ${config.policy.streamingCardMaxChars} chars`,
-      tone: config.policy.replyPresentation === 'streaming-card' || config.policy.replyPresentation === 'auto' ? 'success' : 'neutral',
-    },
-    {
-      id: 'im-active-sinks',
-      label: 'Reply sinks',
-      value: String(reply.activeSinks),
-      tone: reply.activeSinks > 0 ? 'success' : 'neutral',
-    },
-    {
-      id: 'im-active-turns',
-      label: 'Active turns',
-      value: String(reply.activeTurns),
-      tone: reply.activeTurns > 0 ? 'warning' : 'neutral',
-    },
-    {
-      id: 'im-pending-buffers',
-      label: 'Buffers',
-      value: `${reply.pendingBuffers} routes / ${reply.bufferedMessages} messages`,
-      tone: reply.pendingBuffers > 0 ? 'warning' : 'neutral',
-    },
-    {
-      id: 'im-pending-interactions',
-      label: 'Interactions',
-      value: String(reply.pendingInteractions),
-      tone: reply.pendingInteractions > 0 ? 'warning' : 'neutral',
-    },
-    {
-      id: 'im-active-streaming-cards',
-      label: 'Streaming cards',
-      value: String(reply.activeStreamingCards),
-      tone: reply.activeStreamingCards > 0 ? 'success' : 'neutral',
-    },
-    {
-      id: 'im-streaming-transport',
-      label: 'Streaming transport',
-      value: reply.lastStreamingTransport ?? 'none',
-      tone: reply.lastStreamingTransport === 'cardkit' ? 'success' : reply.lastStreamingTransport ? 'warning' : 'neutral',
-    },
-    {
-      id: 'im-streaming-fallbacks',
-      label: 'Streaming fallbacks',
-      value: String(reply.streamingFallbacks),
-      tone: reply.streamingFallbacks > 0 ? 'warning' : 'neutral',
-    },
-    {
-      id: 'im-last-streaming-fallback',
-      label: 'Streaming fallback',
-      value: reply.lastStreamingFallbackReason ?? 'none',
-      tone: reply.lastStreamingFallbackReason ? 'warning' : 'neutral',
-    },
-    {
-      id: 'im-card-update-failures',
-      label: 'Card failures',
-      value: String(reply.cardUpdateFailures),
-      tone: reply.cardUpdateFailures > 0 ? 'danger' : 'neutral',
-    },
-    {
-      id: 'im-last-card-update-error',
-      label: 'Card update error',
-      value: reply.lastCardUpdateError ?? 'none',
-      tone: reply.lastCardUpdateError ? 'danger' : 'neutral',
-    },
-    {
-      id: 'im-last-reply-error',
-      label: 'Reply error',
-      value: reply.lastReplyError ?? 'none',
-      tone: reply.lastReplyError ? 'danger' : 'neutral',
-    },
-    {
-      id: 'im-last-card-action',
-      label: 'Card action',
-      value: reply.lastCardAction ?? 'none',
-      tone: reply.lastCardAction ? 'success' : 'neutral',
-    },
-    {
+  ]
+
+  if (config.legacy.enabled) {
+    cards.push({
       id: 'im-legacy',
       label: 'Legacy IM',
-      value: config.legacy.enabled ? 'active' : 'inactive',
-      tone: config.legacy.enabled ? 'warning' : 'neutral',
-    },
-  ]
+      value: 'active',
+      tone: 'warning',
+    })
+  }
+
+  return cards
 }
 
 function summarizeGatewayState(
@@ -901,6 +830,19 @@ function legacyEvents(config: FeishuIMNormalizedConfig): PlatformRecentEvent[] {
       { event: 'legacy-config-present' },
     )]
     : []
+}
+
+function mergedRecentEvents(
+  config: FeishuIMNormalizedConfig,
+  runtimeEvents: PlatformRecentEvent[],
+): PlatformRecentEvent[] {
+  return [
+    ...legacyEvents(config),
+    ...runtimeEvents,
+    ...getFeishuIMReplyRuntimeRecentEvents(),
+  ]
+    .sort((left, right) => right.at.localeCompare(left.at) || right.id.localeCompare(left.id))
+    .slice(0, FEISHU_IM_RECENT_EVENT_LIMIT)
 }
 
 function createGatewayForAccount(options: {

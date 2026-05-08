@@ -134,6 +134,7 @@ export {
 export {
   clearFeishuIMReplyRuntimeSummaryForTesting,
   decrementFeishuIMActiveStreamingCards,
+  getFeishuIMReplyRuntimeRecentEvents,
   getFeishuIMReplyRuntimeSummary,
   incrementFeishuIMActiveStreamingCards,
   recordFeishuIMCardAction,
@@ -142,6 +143,8 @@ export {
   recordFeishuIMSessionManagerSnapshot,
   recordFeishuIMStreamingFallback,
   recordFeishuIMStreamingTransport,
+  resetFeishuIMReplyRuntimeSummary,
+  subscribeFeishuIMReplyRuntimeSummary,
   type FeishuIMReplyRuntimeSummary,
 } from './reply-telemetry'
 export {

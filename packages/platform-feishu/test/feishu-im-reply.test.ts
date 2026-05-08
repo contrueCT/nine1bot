@@ -2,12 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import type { PlatformSecretRef } from '@nine1bot/platform-protocol'
 import {
   answerFeishuCardInteraction,
+  clearFeishuIMReplyRuntimeSummaryForTesting,
   createFeishuIMCardActionHandler,
   createFeishuIMImmediateReplyHandler,
   createFeishuIMReplySinkFactory,
   FeishuIMSessionManager,
   FeishuReplySink,
   formatFeishuCardActionResponse,
+  getFeishuIMReplyRuntimeRecentEvents,
   getFeishuIMReplyRuntimeSummary,
   MemoryFeishuIMBindingStore,
   MemoryFeishuIMReplyClient,
@@ -579,6 +581,7 @@ describe('Feishu IM reply sink', () => {
   })
 
   test('streaming card falls back from CardKit content to message patch', async () => {
+    clearFeishuIMReplyRuntimeSummaryForTesting()
     const bridge = new EventBridge()
     const client = new FailingCardKitContentReplyClient()
     const sink = new FeishuReplySink({
@@ -604,6 +607,14 @@ describe('Feishu IM reply sink', () => {
     const summary = getFeishuIMReplyRuntimeSummary()
     expect(summary.streamingFallbacks).toBeGreaterThan(0)
     expect(summary.lastStreamingTransport).toBe('patch')
+    expect(getFeishuIMReplyRuntimeRecentEvents()).toContainEqual(expect.objectContaining({
+      stage: 'im-reply',
+      data: expect.objectContaining({
+        event: 'streaming-fallback',
+        transport: 'patch',
+        reason: 'cardkit content failed',
+      }),
+    }))
     sink.stop()
   })
 
@@ -741,6 +752,7 @@ describe('Feishu IM reply sink', () => {
   })
 
   test('streaming card truncates long content and degrades when card update fails', async () => {
+    clearFeishuIMReplyRuntimeSummaryForTesting()
     const bridge = new EventBridge()
     const client = new FailingUpdateReplyClient()
     const sink = new FeishuReplySink({
@@ -768,6 +780,13 @@ describe('Feishu IM reply sink', () => {
     expect(JSON.stringify(client.updates[0]?.card)).toContain('内容较长')
     expect(client.texts.at(-1)?.text).toContain('流式卡片更新失败')
     expect(getFeishuIMReplyRuntimeSummary().cardUpdateFailures).toBeGreaterThan(0)
+    expect(getFeishuIMReplyRuntimeRecentEvents()).toContainEqual(expect.objectContaining({
+      stage: 'im-reply',
+      data: expect.objectContaining({
+        event: 'card-update-failed',
+      }),
+    }))
+    expect(getFeishuIMReplyRuntimeRecentEvents().filter((event) => event.data?.event === 'reply-error')).toHaveLength(0)
     sink.stop()
   })
 

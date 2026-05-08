@@ -14,6 +14,14 @@ import {
   parseFeishuUrl,
 } from '../src'
 import {
+  clearFeishuIMReplyRuntimeSummaryForTesting,
+  createFeishuIMBackgroundServices,
+} from '../src/im'
+import {
+  clearFeishuIMRuntimeSnapshotForTesting,
+  setFeishuIMRuntimeTestHooksForTesting,
+} from '../src/im/background-runtime'
+import {
   enrichFeishuPageContext,
   getFeishuAuthStatus,
   getFeishuCliVersion,
@@ -306,6 +314,72 @@ describe('Feishu platform adapter package', () => {
       type: 'select',
       options: ['auto', 'text', 'card', 'streaming-card'],
     })
+  })
+
+  test('merges compact IM runtime cards into platform status details', async () => {
+    clearFeishuIMReplyRuntimeSummaryForTesting()
+    clearFeishuIMRuntimeSnapshotForTesting()
+    setFeishuIMRuntimeTestHooksForTesting({
+      createGateway: createAutoConnectedGatewayFactory(),
+    })
+
+    const ctx: PlatformAdapterContext = {
+      platformId: 'feishu',
+      enabled: true,
+      settings: {
+        imEnabled: true,
+        imDefaultAppId: 'cli_xxx',
+        imDefaultAppSecret: {
+          provider: 'nine1bot-local',
+          key: 'platform:feishu:default:imDefaultAppSecret',
+        },
+      },
+      features: {},
+      env: { PATH: '' },
+      secrets: {
+        async get() { return 'secret' },
+        async set() {},
+        async delete() {},
+        async has() { return true },
+      },
+      audit: {
+        write() {},
+      },
+    }
+
+    const services = createFeishuIMBackgroundServices(ctx)
+    expect(services).toHaveLength(1)
+    const handle = await services[0]!.start({
+      ...ctx,
+      localUrl: 'http://127.0.0.1:4096',
+    })
+
+    try {
+      const status = await feishuPlatformContribution.getStatus?.(ctx)
+      const ids = status?.cards?.map((card) => card.id) ?? []
+
+      expect(ids).toEqual(expect.arrayContaining([
+        'cli',
+        'auth',
+        'context',
+        'companion',
+        'skills',
+        'im-runtime',
+        'im-gateway-state',
+        'im-restart-attempts',
+        'im-accounts',
+      ]))
+      expect(ids).not.toContain('im-last-reply-error')
+      expect(ids).not.toContain('im-last-card-update-error')
+      expect(ids).not.toContain('im-last-streaming-fallback')
+      expect(ids).not.toContain('im-streaming-fallbacks')
+      expect(ids).not.toContain('im-buffer')
+      expect(ids).not.toContain('im-reply')
+    } finally {
+      await handle.stop()
+      clearFeishuIMReplyRuntimeSummaryForTesting()
+      clearFeishuIMRuntimeSnapshotForTesting()
+    }
   })
 
   test('handles official skills directory actions without mutating CLI auth state', async () => {
@@ -730,4 +804,38 @@ function restoreEnv(key: string, value: string | undefined) {
     return
   }
   process.env[key] = value
+}
+
+function createAutoConnectedGatewayFactory() {
+  return (options: {
+    account: { id: string }
+    onConnectionStateChange?: (event: {
+      accountId: string
+      state: 'connected' | 'reconnecting' | 'connection-error' | 'stopped'
+      at: string
+      message?: string
+    }) => void | Promise<void>
+  }) => ({
+    async start() {
+      await options.onConnectionStateChange?.({
+        accountId: options.account.id,
+        state: 'connected',
+        at: new Date().toISOString(),
+      })
+    },
+    async stop() {
+      await options.onConnectionStateChange?.({
+        accountId: options.account.id,
+        state: 'stopped',
+        at: new Date().toISOString(),
+      })
+    },
+    async injectMessage() {},
+    async injectCardAction() {
+      return undefined
+    },
+    isStarted() {
+      return true
+    },
+  })
 }

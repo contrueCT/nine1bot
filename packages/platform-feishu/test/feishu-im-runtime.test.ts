@@ -8,6 +8,9 @@ import type {
 import {
   clearFeishuIMReplyRuntimeSummaryForTesting,
   createFeishuIMBackgroundServices,
+  recordFeishuIMCardUpdateFailure,
+  recordFeishuIMReplyError,
+  recordFeishuIMStreamingFallback,
 } from '../src/im'
 import {
   clearFeishuIMRuntimeSnapshotForTesting,
@@ -49,6 +52,7 @@ describe('Feishu IM runtime supervisor', () => {
       message: expect.stringContaining('boot failed'),
     })
     expect(cardValue(handle, 'im-restart-attempts')).toBe('1')
+    expect(cardIds(handle)).toEqual(['im-runtime', 'im-gateway-state', 'im-restart-attempts', 'im-accounts'])
     expect(scheduler.pendingDelays()).toEqual([1])
 
     await scheduler.runNext()
@@ -93,6 +97,8 @@ describe('Feishu IM runtime supervisor', () => {
     expect(handle.getStatus?.().status).toBe('available')
     expect(gateways.count('default')).toBe(1)
     expect(gateways.count('team-a')).toBe(1)
+    expect(recentEvent(handle, 'connected')).toBeUndefined()
+    expect(cardIds(handle)).toEqual(['im-runtime', 'im-gateway-state', 'im-restart-attempts', 'im-accounts'])
 
     await gateways.latest('default')!.emit('reconnecting', 'socket closed')
 
@@ -115,6 +121,7 @@ describe('Feishu IM runtime supervisor', () => {
     expect(gateways.count('default')).toBe(2)
     expect(gateways.count('team-a')).toBe(1)
     expect(handle.getStatus?.().status).toBe('available')
+    expect(recentEvent(handle, 'connected')).toBeDefined()
     await handle.stop()
   })
 
@@ -146,10 +153,59 @@ describe('Feishu IM runtime supervisor', () => {
     expect(scheduler.pendingCount()).toBe(0)
     expect(gateways.count('default')).toBe(1)
   })
+
+  test('reply and streaming failures surface in recent events instead of runtime cards', async () => {
+    const scheduler = createManualScheduler()
+    const gateways = createFakeGatewayHarness()
+
+    setFeishuIMRuntimeTestHooksForTesting({
+      createGateway: gateways.factory,
+      scheduler: scheduler.scheduler,
+      retryBackoffMs: [1, 3, 10, 30, 60],
+      stabilityWindowMs: 5,
+    })
+
+    const handle = await startService({
+      imEnabled: true,
+      imDefaultAppId: 'cli_xxx',
+      imDefaultAppSecret: secretRef,
+    })
+
+    recordFeishuIMCardUpdateFailure(new Error('cardkit.card.create failed'))
+    recordFeishuIMStreamingFallback('cardkit create failed', 'patch')
+    recordFeishuIMReplyError(new Error('reply delivery failed'))
+    await flushMicrotasks()
+
+    expect(cardIds(handle)).toEqual(['im-runtime', 'im-gateway-state', 'im-restart-attempts', 'im-accounts'])
+    expect(handle.getStatus?.().cards?.map((card) => card.label)).not.toContain('Reply error')
+    expect(handle.getStatus?.().cards?.map((card) => card.label)).not.toContain('Card update error')
+    expect(handle.getStatus?.().cards?.map((card) => card.label)).not.toContain('Streaming fallback')
+
+    const events = handle.getStatus?.().recentEvents ?? []
+    expect(events).toContainEqual(expect.objectContaining({
+      stage: 'im-reply',
+      data: expect.objectContaining({ event: 'card-update-failed' }),
+    }))
+    expect(events).toContainEqual(expect.objectContaining({
+      stage: 'im-reply',
+      data: expect.objectContaining({ event: 'streaming-fallback', transport: 'patch' }),
+    }))
+    expect(events).toContainEqual(expect.objectContaining({
+      stage: 'im-reply',
+      data: expect.objectContaining({ event: 'reply-error', error: 'reply delivery failed' }),
+    }))
+    expect(events.filter((entry) => entry.data?.event === 'reply-error' && entry.data?.error === 'cardkit.card.create failed')).toHaveLength(0)
+
+    await handle.stop()
+  })
 })
 
 function cardValue(handle: PlatformBackgroundServiceHandle, id: string): string | undefined {
   return handle.getStatus?.().cards?.find((card) => card.id === id)?.value
+}
+
+function cardIds(handle: PlatformBackgroundServiceHandle): string[] {
+  return handle.getStatus?.().cards?.map((card) => card.id) ?? []
 }
 
 function recentEvent(handle: PlatformBackgroundServiceHandle, eventName: string): PlatformRecentEvent | undefined {
