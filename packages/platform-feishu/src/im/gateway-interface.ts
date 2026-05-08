@@ -25,10 +25,21 @@ export type FeishuIMGatewayCardActionResponse = FeishuIMCard | {
   }
 }
 
+export type FeishuIMGatewayConnectionState = 'connected' | 'reconnecting' | 'connection-error' | 'stopped'
+
+export type FeishuIMGatewayConnectionStateEvent = {
+  accountId: string
+  state: FeishuIMGatewayConnectionState
+  at: string
+  message?: string
+}
+
 export type FeishuIMGatewayOptions = {
   account: FeishuIMAccount
   onMessage: (event: FeishuIMGatewayEvent) => void | Promise<void>
   onCardAction?: (event: FeishuIMGatewayCardActionEvent) => FeishuIMCard | undefined | Promise<FeishuIMCard | undefined>
+  onConnectionStateChange?: (event: FeishuIMGatewayConnectionStateEvent) => void | Promise<void>
+  onOperationalError?: (error: Error) => void | Promise<void>
 }
 
 export type FeishuIMGatewayHandle = {
@@ -44,29 +55,45 @@ export function createFeishuIMGateway(options: FeishuIMGatewayOptions): FeishuIM
 
   return {
     async start() {
+      if (started) return
       started = true
+      await emitConnectionState(options, 'connected')
     },
     async stop() {
+      if (!started) return
       started = false
+      await emitConnectionState(options, 'stopped')
     },
     async injectMessage(message) {
       if (!started) return
-      await options.onMessage({
-        accountId: options.account.id,
-        message,
-      })
+      try {
+        await options.onMessage({
+          accountId: options.account.id,
+          message,
+        })
+      } catch (error) {
+        await emitOperationalError(options, error)
+      }
     },
     async injectCardAction(input) {
       if (!started || !options.onCardAction) return undefined
       const parsed = parseFeishuCardAction(input)
-      if (!parsed.ok) return undefined
-      const card = await options.onCardAction({
-        accountId: options.account.id,
-        payload: parsed.payload,
-        value: parsed.value,
-        raw: input,
-      })
-      return formatFeishuCardActionResponse(input, card)
+      if (!parsed.ok) {
+        await emitOperationalError(options, new Error(`Invalid Feishu card action: ${parsed.reason}`))
+        return undefined
+      }
+      try {
+        const card = await options.onCardAction({
+          accountId: options.account.id,
+          payload: parsed.payload,
+          value: parsed.value,
+          raw: input,
+        })
+        return formatFeishuCardActionResponse(input, card)
+      } catch (error) {
+        await emitOperationalError(options, error)
+        return undefined
+      }
     },
     isStarted() {
       return started
@@ -107,4 +134,25 @@ function asRecord(input: unknown): Record<string, unknown> | undefined {
 
 function stringValue(input: unknown): string | undefined {
   return typeof input === 'string' && input.trim() ? input.trim() : undefined
+}
+
+async function emitConnectionState(
+  options: Pick<FeishuIMGatewayOptions, 'account' | 'onConnectionStateChange'>,
+  state: FeishuIMGatewayConnectionState,
+  message?: string,
+) {
+  await options.onConnectionStateChange?.({
+    accountId: options.account.id,
+    state,
+    at: new Date().toISOString(),
+    message,
+  })
+}
+
+async function emitOperationalError(
+  options: Pick<FeishuIMGatewayOptions, 'onOperationalError'>,
+  error: unknown,
+) {
+  const normalized = error instanceof Error ? error : new Error(String(error))
+  await options.onOperationalError?.(normalized)
 }

@@ -39,5 +39,5 @@ export {
   FeishuFileIMBindingStore,
 } from './im/node/binding-store'
 export type { FeishuFileIMBindingStoreOptions } from './im/node/binding-store'
-export { createFeishuNodeIMGateway } from './im/node/gateway'
-export type { FeishuNodeIMGatewayOptions } from './im/node/gateway'
+export { createFeishuNodeIMGateway } from './im/node/ws-gateway'
+export type { FeishuNodeIMGatewayOptions } from './im/node/ws-gateway'

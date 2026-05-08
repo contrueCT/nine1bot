@@ -10,8 +10,8 @@ export {
   feishuPlatformContribution,
   feishuPlatformDescriptor,
   normalizeFeishuPagePayload,
-} from './runtime'
-export type { FeishuPlatformAdapter } from './runtime'
+} from './platform-runtime'
+export type { FeishuPlatformAdapter } from './platform-runtime'
 export {
   FEISHU_IM_DEFAULT_BUFFER_MS,
   FEISHU_IM_DEFAULT_BUSY_TEXT,

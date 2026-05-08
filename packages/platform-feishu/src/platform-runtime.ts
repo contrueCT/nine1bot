@@ -34,7 +34,7 @@ import {
 import {
   createFeishuIMBackgroundServices,
   getFeishuIMRuntimeStatus,
-} from './im/runtime'
+} from './im/background-runtime'
 import type {
   PlatformActionResult,
   PlatformAdapterContext,

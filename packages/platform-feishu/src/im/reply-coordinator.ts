@@ -1,6 +1,6 @@
 import { renderControlText, renderFeishuControlCard, renderFeishuInteractionAnsweredCard } from './cards'
 import type { FeishuControllerBridge } from './controller-bridge'
-import type { FeishuIMGatewayCardActionEvent } from './gateway'
+import type { FeishuIMGatewayCardActionEvent } from './gateway-interface'
 import { answerFeishuCardInteraction, routeFromFeishuCardAction } from './interactions'
 import { FeishuReplySink } from './reply-sink'
 import type { FeishuIMReplyClient } from './reply-client'

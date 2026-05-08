@@ -6,7 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./browser": "./src/browser.ts",
-    "./runtime": "./src/runtime.ts",
+    "./runtime": "./src/platform-runtime.ts",
     "./node": "./src/node.ts"
   },
   "scripts": {

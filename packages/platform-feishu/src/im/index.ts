@@ -21,15 +21,17 @@ export {
   formatFeishuCardActionResponse,
   type FeishuIMGatewayCardActionEvent,
   type FeishuIMGatewayCardActionResponse,
+  type FeishuIMGatewayConnectionState,
+  type FeishuIMGatewayConnectionStateEvent,
   type FeishuIMGatewayEvent,
   type FeishuIMGatewayHandle,
   type FeishuIMGatewayOptions,
-} from './gateway'
+} from './gateway-interface'
 export {
   clearFeishuIMRuntimeSnapshotForTesting,
   createFeishuIMBackgroundServices,
   getFeishuIMRuntimeStatus,
-} from './runtime'
+} from './background-runtime'
 export {
   FEISHU_CONTROLLER_CAPABILITIES,
   controlResultLabel,
