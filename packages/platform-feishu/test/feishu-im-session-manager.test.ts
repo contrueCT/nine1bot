@@ -301,6 +301,99 @@ describe('Feishu IM session manager', () => {
       },
     })
   })
+
+  test('mention-only group slash control commands bypass mention gate', async () => {
+    const bridge = new FakeBridge({
+      projects: [{
+        id: 'proj_1',
+        name: 'Project One',
+        rootDirectory: 'C:/project-one',
+      }],
+    })
+    const manager = sessionManager({
+      bridge,
+      messageBufferMs: 0,
+      groupPolicy: 'mention-only',
+    })
+
+    await expect(manager.handleIncomingMessage(message({
+      chatType: 'group',
+      chatId: 'oc_group',
+      text: '/control',
+      messageId: 'om_control',
+    }))).resolves.toMatchObject({
+      status: 'control',
+      control: {
+        type: 'control-panel',
+      },
+    })
+
+    await expect(manager.handleIncomingMessage(message({
+      chatType: 'group',
+      chatId: 'oc_group',
+      text: '/project list',
+      messageId: 'om_project_list',
+    }))).resolves.toMatchObject({
+      status: 'control',
+      control: {
+        type: 'project-list',
+        projects: [expect.objectContaining({
+          id: 'proj_1',
+        })],
+      },
+    })
+  })
+
+  test('mention-only group slash abort bypasses mention gate while plain text still does not', async () => {
+    const bridge = new FakeBridge()
+    const sink = new ManualSink()
+    const manager = sessionManager({
+      bridge,
+      messageBufferMs: 0,
+      groupPolicy: 'mention-only',
+      replySinkFactory: () => sink,
+    })
+
+    await expect(manager.handleIncomingMessage(message({
+      chatType: 'group',
+      chatId: 'oc_group',
+      rootId: 'omt_group',
+      text: '@bot start task',
+      mentions: [{ openId: 'ou_bot', name: 'bot' }],
+      messageId: 'om_group_1',
+    }))).resolves.toMatchObject({
+      status: 'accepted',
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_1',
+    })
+
+    await expect(manager.handleIncomingMessage(message({
+      chatType: 'group',
+      chatId: 'oc_group',
+      rootId: 'omt_group',
+      text: '取消',
+      messageId: 'om_group_plain_abort',
+    }))).resolves.toMatchObject({
+      status: 'history-recorded',
+    })
+    expect(bridge.aborts).toEqual([])
+
+    await expect(manager.handleIncomingMessage(message({
+      chatType: 'group',
+      chatId: 'oc_group',
+      rootId: 'omt_group',
+      text: '/abort',
+      messageId: 'om_group_abort',
+    }))).resolves.toMatchObject({
+      status: 'aborted',
+      sessionId: 'ses_1',
+      turnSnapshotId: 'turn_1',
+    })
+    expect(bridge.aborts).toEqual([expect.objectContaining({
+      sessionId: 'ses_1',
+      reason: 'feishu-im-abort',
+    })])
+  })
 })
 
 function sessionManager(options: {

@@ -118,12 +118,13 @@ export class FeishuIMSessionManager {
       botOpenId: this.options.botOpenId,
       botUserId: this.options.botUserId,
     })
+    const bypassMentionGate = gate.action === 'history' && shouldBypassMentionGateForControl(message)
 
     if (gate.action === 'drop') {
       return { status: 'ignored', reason: gate.reason }
     }
 
-    if (gate.action === 'history') {
+    if (gate.action === 'history' && !bypassMentionGate) {
       this.history.record(routeKeyString, message)
       return { status: 'history-recorded', routeKey: routeKeyString }
     }
@@ -675,6 +676,25 @@ const CONTROL_COMMANDS = [
   '/project list',
   '/project <id或名称>',
 ]
+
+function shouldBypassMentionGateForControl(message: FeishuIMIncomingMessage): boolean {
+  const text = message.text?.trim()
+  if (!text?.startsWith('/')) return false
+  return isRecognizedControlCommandText(text) || isFeishuIMAbortMessage(message)
+}
+
+function isRecognizedControlCommandText(text: string): boolean {
+  return (
+    text === '/control' ||
+    text === '/help' ||
+    text === '/new' ||
+    text === '/cwd' ||
+    text.startsWith('/cwd ') ||
+    text === '/project' ||
+    text === '/project list' ||
+    text.startsWith('/project ')
+  )
+}
 
 function partsFromBatch(batch: FeishuIMBufferedBatch): FeishuIMControllerMessagePart[] {
   return [{
