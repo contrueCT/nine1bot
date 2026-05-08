@@ -200,6 +200,7 @@ export class PlatformAdapterManager {
   private readonly audit: PlatformAuditWriter
   private readonly env: Record<string, string | undefined>
   private backgroundStopPromise: Promise<void> | undefined
+  private lastBackgroundServicesStartOptions: PlatformBackgroundServicesStartOptions | undefined
   private config: PlatformManagerConfig
 
   constructor(options: PlatformAdapterManagerOptions) {
@@ -313,6 +314,9 @@ export class PlatformAdapterManager {
   }
 
   async startBackgroundServices(options: PlatformBackgroundServicesStartOptions): Promise<PlatformManagerRecord[]> {
+    this.lastBackgroundServicesStartOptions = {
+      ...options,
+    }
     await this.stopBackgroundServices()
 
     for (const contribution of this.contributions.values()) {
@@ -440,9 +444,7 @@ export class PlatformAdapterManager {
       ...this.config,
       [id]: nextEntry,
     }
-    await this.stopBackgroundServices()
-    this.configure(nextConfig)
-    this.registerRuntimeAdapters()
+    await this.reconfigureAndRestartBackgroundServices(nextConfig)
     const updated = this.records.get(id)
     if (!updated) throw new PlatformNotFoundError(id)
     return cloneRecord(updated)
@@ -549,6 +551,7 @@ export class PlatformAdapterManager {
         }
       }
       let currentRecord = record
+      let restartedBackgroundServices = false
       if (result.updatedSettings !== undefined) {
         const previousEntry = this.config[id] ?? {}
         const nextEntry = await this.prepareConfigEntry(record, previousEntry, {
@@ -558,14 +561,13 @@ export class PlatformAdapterManager {
         if (!validation.ok) {
           throw new PlatformValidationError(validation.message ?? 'Invalid platform config', validation.fieldErrors ?? {})
         }
-        this.configure({
+        restartedBackgroundServices = await this.reconfigureAndRestartBackgroundServices({
           ...this.config,
           [id]: nextEntry,
         })
-        this.registerRuntimeAdapters()
         currentRecord = this.records.get(id) ?? currentRecord
       }
-      if (result.updatedStatus) {
+      if (result.updatedStatus && !restartedBackgroundServices) {
         this.records.set(id, {
           ...currentRecord,
           lifecycleStatus: lifecycleStatusFromRuntime(result.updatedStatus.status),
@@ -884,6 +886,32 @@ export class PlatformAdapterManager {
     } catch {
       // Audit is best-effort for the platform manager.
     }
+  }
+
+  private async reconfigureAndRestartBackgroundServices(nextConfig: PlatformManagerConfig): Promise<boolean> {
+    await this.stopBackgroundServices()
+    this.configure(nextConfig)
+    this.registerRuntimeAdapters()
+    return this.restartBackgroundServicesIfNeeded()
+  }
+
+  private async restartBackgroundServicesIfNeeded(): Promise<boolean> {
+    if (!this.lastBackgroundServicesStartOptions || !this.hasConfiguredBackgroundServices()) {
+      return false
+    }
+    await this.startBackgroundServices(this.lastBackgroundServicesStartOptions)
+    return true
+  }
+
+  private hasConfiguredBackgroundServices(): boolean {
+    for (const record of this.records.values()) {
+      if (!record.installed || !record.enabled) continue
+      const contribution = this.contributions.get(record.id)
+      if (!contribution?.backgroundServices) continue
+      const services = contribution.backgroundServices(this.createContext(record))
+      if (services.length > 0) return true
+    }
+    return false
   }
 }
 

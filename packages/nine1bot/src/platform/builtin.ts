@@ -30,16 +30,6 @@ export function getBuiltinPlatformManager(options: BuiltinPlatformManagerOptions
     })
     return builtinPlatformManager
   }
-  if (options.secrets || options.env) {
-    unregisterBuiltinPlatformAdapters()
-    builtinPlatformManager = new PlatformAdapterManager({
-      contributions: builtinPlatformContributions,
-      config: options.config,
-      secrets: options.secrets,
-      env: options.env,
-    })
-    return builtinPlatformManager
-  }
   if (options.config) {
     builtinPlatformManager.configure(options.config)
   }
