@@ -174,13 +174,6 @@ export const feishuPlatformDescriptor = {
             defaultValue: 'mention-only',
           },
           {
-            key: 'imRequireMention',
-            type: 'boolean',
-            label: 'Require mention',
-            description: 'Requires a bot mention for group messages unless group policy allows all messages.',
-            defaultValue: true,
-          },
-          {
             key: 'imAllowFrom',
             type: 'string-list',
             label: 'Allow from',

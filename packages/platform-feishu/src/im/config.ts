@@ -208,7 +208,6 @@ function readPolicy(settings: Record<string, unknown>): FeishuIMPolicy {
     groupPolicy: settings.imGroupPolicy === 'allow' || settings.imGroupPolicy === 'deny'
       ? settings.imGroupPolicy
       : 'mention-only',
-    requireMention: booleanValue(settings.imRequireMention) ?? true,
     allowFrom: stringListValue(settings.imAllowFrom),
     replyMode: settings.imReplyMode === 'thread' ? 'thread' : 'message',
     replyPresentation: replyPresentationValue(settings.imReplyPresentation) ?? 'auto',

@@ -284,7 +284,6 @@ describe('Feishu platform adapter package', () => {
     expect(fields.get('imConnectionMode')).toMatchObject({ defaultValue: imDefaults.connectionMode })
     expect(fields.get('imDmPolicy')).toMatchObject({ defaultValue: imDefaults.policy.dmPolicy })
     expect(fields.get('imGroupPolicy')).toMatchObject({ defaultValue: imDefaults.policy.groupPolicy })
-    expect(fields.get('imRequireMention')).toMatchObject({ defaultValue: imDefaults.policy.requireMention })
     expect(fields.get('imAllowFrom')).toMatchObject({ defaultValue: imDefaults.policy.allowFrom })
     expect(fields.get('imReplyMode')).toMatchObject({ defaultValue: imDefaults.policy.replyMode })
     expect(fields.get('imReplyPresentation')).toMatchObject({ defaultValue: imDefaults.policy.replyPresentation })

@@ -136,7 +136,6 @@ describe('Feishu IM session manager', () => {
       bridge: mentionOnlyBridge,
       messageBufferMs: 0,
       groupPolicy: 'mention-only',
-      requireMention: true,
     })
     await expect(mentionOnly.handleIncomingMessage(message({
       chatType: 'group',
@@ -159,7 +158,6 @@ describe('Feishu IM session manager', () => {
       bridge: allowBridge,
       messageBufferMs: 0,
       groupPolicy: 'allow',
-      requireMention: false,
     })
     await expect(allow.handleIncomingMessage(message({
       chatType: 'group',
@@ -217,7 +215,6 @@ describe('Feishu IM session manager', () => {
       bridge,
       messageBufferMs: 0,
       groupPolicy: 'allow',
-      requireMention: false,
       replySinkFactory: () => new ManualSink(),
     })
 
@@ -401,7 +398,6 @@ function sessionManager(options: {
   messageBufferMs?: number
   maxBufferMs?: number
   groupPolicy?: 'mention-only' | 'allow' | 'deny'
-  requireMention?: boolean
   resolveDirectory?: (baseDirectory: string | undefined, input: string) => Promise<string>
   onFlushResult?: (result: any) => void | Promise<void>
   replySinkFactory?: FeishuIMSessionManagerOptions['replySinkFactory']
@@ -413,7 +409,6 @@ function sessionManager(options: {
     imMessageBufferMs: options.messageBufferMs ?? 0,
     imMaxBufferMs: options.maxBufferMs ?? 1000,
     imGroupPolicy: options.groupPolicy ?? 'mention-only',
-    imRequireMention: options.requireMention ?? true,
     imBusyRejectText: 'busy text',
   })
   return new FeishuIMSessionManager({

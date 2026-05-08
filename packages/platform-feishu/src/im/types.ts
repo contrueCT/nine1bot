@@ -21,7 +21,6 @@ export type FeishuIMAccount = {
 export type FeishuIMPolicy = {
   dmPolicy: 'allow' | 'deny'
   groupPolicy: 'mention-only' | 'allow' | 'deny'
-  requireMention: boolean
   allowFrom: string[]
   replyMode: 'message' | 'thread'
   replyPresentation: FeishuIMReplyPresentation

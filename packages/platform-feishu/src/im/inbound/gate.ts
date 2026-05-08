@@ -28,7 +28,7 @@ export function evaluateFeishuIMGate(
     if (config.policy.groupPolicy === 'deny') {
       return { action: 'drop', allowed: false, reason: 'group-denied' }
     }
-    if (config.policy.groupPolicy === 'allow' && config.policy.requireMention === false) {
+    if (config.policy.groupPolicy === 'allow') {
       return { action: 'dispatch', allowed: true }
     }
     if (mentionsBot(message, options)) {
