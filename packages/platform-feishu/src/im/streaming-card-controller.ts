@@ -1,6 +1,7 @@
 import type { FeishuRuntimeEventEnvelope } from './controller-bridge'
 import {
   FEISHU_STREAMING_CARD_CONTENT_ELEMENT_ID,
+  FEISHU_STREAMING_CARD_TOOL_ELEMENT_ID,
   renderFeishuStreamingCardKitFinalCard,
   renderFeishuStreamingCardKitInitialCard,
   renderFeishuStreamingTurnCard,
@@ -101,6 +102,9 @@ export class FeishuStreamingCardController {
     const tool = toolStatusFromEvent(event)
     if (!tool) return false
     this.tools.set(tool.id, tool)
+    this.patchContentFlushed = false
+    this.lastFlushAt = 0
+    this.clearTimer()
     await this.scheduleRunningFlush()
     return true
   }
@@ -231,6 +235,12 @@ export class FeishuStreamingCardController {
           content: this.visibleText() || '正在等待 Agent 输出...',
           sequence: this.nextSequence(),
         })
+        await this.options.client.streamCardContent!({
+          cardId: this.cardEntityId,
+          elementId: FEISHU_STREAMING_CARD_TOOL_ELEMENT_ID,
+          content: this.runningToolStatusText(),
+          sequence: this.nextSequence(),
+        })
         return
       }
       await this.options.client.updateCardEntity!({
@@ -338,10 +348,19 @@ export class FeishuStreamingCardController {
       error: this.errorMessage,
       resourceFailure: this.resourceFailure,
       maxChars: this.options.maxChars ?? 6_000,
-      tools: [...this.tools.values()],
+      tools: status === 'running' ? this.runningTools() : undefined,
       transport: this.transport,
       fallbackReason: this.fallbackReason,
     }
+  }
+
+  private runningTools(): FeishuStreamingToolStatus[] {
+    return [...this.tools.values()].filter((tool) => tool.status === 'running')
+  }
+
+  private runningToolStatusText(): string {
+    const tools = this.runningTools()
+    return tools.length > 0 ? renderRunningToolStatusLines(tools) : ''
   }
 
   private visibleText(): string {
@@ -442,6 +461,16 @@ function durationFromState(state: Record<string, unknown> | undefined): number |
   const start = numberValue(time?.start)
   const end = numberValue(time?.end)
   return start !== undefined && end !== undefined ? Math.max(0, end - start) : undefined
+}
+
+function renderRunningToolStatusLines(tools: FeishuStreamingToolStatus[]): string {
+  return [
+    '**工具状态**',
+    ...tools.map((tool) => {
+      const detail = tool.error ?? tool.detail
+      return `- 运行中 ${tool.name}${detail ? `：${detail}` : ''}`
+    }),
+  ].join('\n')
 }
 
 function summarizeValue(input: unknown): string | undefined {

@@ -75,6 +75,7 @@ export {
 } from './route'
 export {
   FEISHU_STREAMING_CARD_CONTENT_ELEMENT_ID,
+  FEISHU_STREAMING_CARD_TOOL_ELEMENT_ID,
   renderControlText,
   renderFeishuControlCard,
   renderFeishuInteractionAnsweredCard,

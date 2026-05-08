@@ -28,7 +28,7 @@ import {
   recordFeishuIMReplyError,
 } from './reply-telemetry'
 
-const LEGACY_IDLE_COMPLETION_GRACE_MS = 350
+const POST_TOOL_COMPLETION_GRACE_MS = 1_500
 const TURN_RESULT_POLL_INITIAL_DELAY_MS = 1_500
 const TURN_RESULT_POLL_INTERVAL_MS = 1_500
 const SUBSCRIPTION_READY_TIMEOUT_MS = 1_000
@@ -84,7 +84,8 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
   private errorMessage?: string
   private toolActivitySeen = false
   private postToolTextSeen = false
-  private legacyIdleFinishTimer?: ReturnType<typeof setTimeout>
+  private completionPending = false
+  private deferredCompletionTimer?: ReturnType<typeof setTimeout>
   private turnResultPollTimer?: ReturnType<typeof setTimeout>
   private turnResultPollInProgress = false
   private readonly partTextLengths = new Map<string, number>()
@@ -169,8 +170,8 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
         return
       }
       if (type === 'runtime.turn.completed') {
-        if (this.shouldDeferTurnCompletion(event)) {
-          this.scheduleDeferredFinal()
+        if (this.shouldDeferTurnCompletion()) {
+          await this.deferTurnCompletion()
           return
         }
         await this.finish('final')
@@ -225,13 +226,14 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
         ...this.delivery(),
         text,
       })
-      return
-    }
-    if (this.presentation() === 'streaming-card') {
+    } else if (this.presentation() === 'streaming-card') {
       await this.streaming().appendText(text)
-      return
+    } else {
+      await this.upsertTurnCard('running')
     }
-    await this.upsertTurnCard('running')
+    if (this.completionPending && this.postToolTextSeen) {
+      await this.finish('final')
+    }
   }
 
   private async handleInteractionRequested(event: FeishuRuntimeEventEnvelope): Promise<void> {
@@ -308,6 +310,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
   private async finish(status: FeishuReplySinkDoneResult['status'], message?: string): Promise<void> {
     if (this.completed) return
     this.completed = true
+    this.completionPending = false
     if (this.timeout) clearTimeout(this.timeout)
     this.timeout = undefined
     this.clearDeferredFinal()
@@ -465,25 +468,36 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     if (this.completed || this.stopped || this.turnResultPollInProgress || !this.options.controller.getLatestTurnResult) return
     this.turnResultPollInProgress = true
     try {
-      const result = await this.options.controller.getLatestTurnResult({
-        sessionId: this.options.sessionId,
-        directory: this.options.directory,
-      })
-      if (!result?.completed) {
+      if (!await this.tryFinishFromLatestTurnResult()) {
         this.scheduleNextTurnResultPoll()
-        return
       }
-      if (result.failed) {
-        await this.finish('error', result.error ?? 'Agent turn failed.')
-        return
-      }
-      if (result.text) {
-        await this.replaceVisibleText(result.text)
-      }
-      await this.finish('final')
     } finally {
       this.turnResultPollInProgress = false
     }
+  }
+
+  private async finishDeferredTurnCompletion(): Promise<void> {
+    if (this.completed || this.stopped) return
+    if (await this.tryFinishFromLatestTurnResult()) return
+    await this.finish('final')
+  }
+
+  private async tryFinishFromLatestTurnResult(): Promise<boolean> {
+    if (!this.options.controller.getLatestTurnResult) return false
+    const result = await this.options.controller.getLatestTurnResult({
+      sessionId: this.options.sessionId,
+      directory: this.options.directory,
+    })
+    if (!result?.completed) return false
+    if (result.failed) {
+      await this.finish('error', result.error ?? 'Agent turn failed.')
+      return true
+    }
+    if (result.text) {
+      await this.replaceVisibleText(result.text)
+    }
+    await this.finish('final')
+    return true
   }
 
   private async replaceVisibleText(text: string): Promise<void> {
@@ -511,21 +525,27 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     this.streamingController?.clearText()
   }
 
-  private shouldDeferTurnCompletion(event: FeishuRuntimeEventEnvelope): boolean {
-    return isLegacyIdleCompletion(event) && this.toolActivitySeen && !this.postToolTextSeen
+  private shouldDeferTurnCompletion(): boolean {
+    return this.toolActivitySeen && !this.postToolTextSeen
+  }
+
+  private async deferTurnCompletion(): Promise<void> {
+    this.completionPending = true
+    if (await this.tryFinishFromLatestTurnResult()) return
+    this.scheduleDeferredFinal()
   }
 
   private scheduleDeferredFinal(): void {
-    if (this.legacyIdleFinishTimer) return
-    this.legacyIdleFinishTimer = setTimeout(() => {
-      this.legacyIdleFinishTimer = undefined
-      this.finish('final').catch((error) => recordFeishuIMReplyError(error))
-    }, LEGACY_IDLE_COMPLETION_GRACE_MS)
+    if (this.deferredCompletionTimer) return
+    this.deferredCompletionTimer = setTimeout(() => {
+      this.deferredCompletionTimer = undefined
+      this.finishDeferredTurnCompletion().catch((error) => recordFeishuIMReplyError(error))
+    }, POST_TOOL_COMPLETION_GRACE_MS)
   }
 
   private clearDeferredFinal(): void {
-    if (this.legacyIdleFinishTimer) clearTimeout(this.legacyIdleFinishTimer)
-    this.legacyIdleFinishTimer = undefined
+    if (this.deferredCompletionTimer) clearTimeout(this.deferredCompletionTimer)
+    this.deferredCompletionTimer = undefined
   }
 
   private presentation(): FeishuIMResolvedPresentation {
@@ -633,10 +653,6 @@ function isToolEvent(type: string): boolean {
   return type === 'runtime.tool.started'
     || type === 'runtime.tool.completed'
     || type === 'runtime.tool.failed'
-}
-
-function isLegacyIdleCompletion(event: FeishuRuntimeEventEnvelope): boolean {
-  return event.type === 'session.idle'
 }
 
 function isToolPartUpdate(event: FeishuRuntimeEventEnvelope): boolean {

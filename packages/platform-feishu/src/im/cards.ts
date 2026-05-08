@@ -11,6 +11,7 @@ import type { FeishuIMControlResult } from './types'
 export type FeishuTurnCardStatus = 'running' | 'final' | 'error' | 'timeout'
 
 export const FEISHU_STREAMING_CARD_CONTENT_ELEMENT_ID = 'nine1bot_streaming_content'
+export const FEISHU_STREAMING_CARD_TOOL_ELEMENT_ID = 'nine1bot_streaming_tool_status'
 
 export type FeishuStreamingToolStatus = {
   id: string
@@ -100,7 +101,7 @@ export function renderFeishuStreamingTurnCard(input: FeishuStreamingTurnCardInpu
       content.truncated
         ? markdown('内容较长，已在飞书卡片中截断。可以在 Web 端查看完整输出。')
         : undefined,
-      input.tools?.length ? markdown(renderToolStatusLines(input.tools)) : undefined,
+      input.status === 'running' && input.tools?.length ? markdown(renderToolStatusLines(input.tools)) : undefined,
       input.error ? markdown(`**错误**：${input.error}`) : undefined,
       input.resourceFailure ? markdown(`**资源提示**：${input.resourceFailure}`) : undefined,
       actionItems.length > 0 ? actions(actionItems) : undefined,
@@ -120,6 +121,12 @@ export function renderFeishuStreamingCardKitInitialCard(input: FeishuStreamingTu
       content: '正在等待 Agent 输出...',
       text_align: 'left',
       text_size: 'normal_v2',
+    },
+    {
+      tag: 'markdown',
+      element_id: FEISHU_STREAMING_CARD_TOOL_ELEMENT_ID,
+      content: '',
+      text_size: 'notation',
     },
   ]
   if (input.status === 'running' && input.sessionId) {
@@ -171,13 +178,6 @@ export function renderFeishuStreamingCardKitFinalCard(input: FeishuStreamingTurn
       ? {
           tag: 'markdown',
           content: '内容较长，已在飞书卡片中截断。可以在 Web 端查看完整输出。',
-        }
-      : undefined,
-    input.tools?.length
-      ? {
-          tag: 'markdown',
-          content: renderToolStatusLines(input.tools),
-          text_size: 'notation',
         }
       : undefined,
     {

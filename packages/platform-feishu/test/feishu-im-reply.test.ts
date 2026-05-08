@@ -6,6 +6,7 @@ import {
   createFeishuIMCardActionHandler,
   createFeishuIMImmediateReplyHandler,
   createFeishuIMReplySinkFactory,
+  FEISHU_STREAMING_CARD_TOOL_ELEMENT_ID,
   FeishuIMSessionManager,
   FeishuReplySink,
   formatFeishuCardActionResponse,
@@ -386,6 +387,8 @@ describe('Feishu IM reply sink', () => {
         durationMs: 105,
       },
     })
+    await sleep(15)
+    expect(JSON.stringify(client.updates.at(-1)?.card)).not.toContain('工具状态')
     await bridge.emit({
       type: 'session.idle',
       properties: {
@@ -407,8 +410,76 @@ describe('Feishu IM reply sink', () => {
     await expect(sink.done).resolves.toMatchObject({ status: 'final' })
     const finalCard = JSON.stringify(client.updates.at(-1)?.card)
     expect(finalCard).toContain('当前目录 C:\\\\code\\\\nine1bot 包含')
+    expect(finalCard).not.toContain('工具状态')
     expect(finalCard).not.toContain('我需要使用 bash')
     expect(finalCard).not.toContain('用户想要查看当前目录')
+  })
+
+  test('streaming card defers direct turn completion until post-tool final text arrives', async () => {
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_1',
+      controller: bridge,
+      client,
+      replyMode: 'thread',
+      presentation: 'streaming-card',
+      timeoutMs: 10_000,
+      streamingCardUpdateMs: 5,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_1')
+    let resolved = false
+    void sink.done.then(() => {
+      resolved = true
+    })
+
+    await bridge.emit({
+      type: 'runtime.tool.started',
+      turnSnapshotId: 'turn_1',
+      data: {
+        toolCallId: 'tool_1',
+        tool: 'bash',
+        input: { command: 'pwd' },
+      },
+    })
+    await sleep(15)
+    expect(JSON.stringify(client.updates.at(-1)?.card)).toContain('工具状态')
+
+    await bridge.emit({
+      type: 'runtime.tool.completed',
+      turnSnapshotId: 'turn_1',
+      data: {
+        toolCallId: 'tool_1',
+        tool: 'bash',
+        title: 'Print working directory',
+      },
+    })
+    await bridge.emit({
+      type: 'runtime.turn.completed',
+      turnSnapshotId: 'turn_1',
+    })
+
+    await sleep(100)
+    expect(resolved).toBe(false)
+
+    await bridge.emit({
+      type: 'runtime.message.part.updated',
+      turnSnapshotId: 'turn_1',
+      data: {
+        delta: {
+          text: '当前工作目录是 C:\\code\\nine1bot。',
+        },
+      },
+    })
+
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+    const finalCard = JSON.stringify(client.updates.at(-1)?.card)
+    expect(finalCard).toContain('当前工作目录是 C:\\\\code\\\\nine1bot')
+    expect(finalCard).not.toContain('工具状态')
   })
 
   test('node message patch keeps the original card identity when Feishu returns empty data', async () => {
@@ -557,22 +628,54 @@ describe('Feishu IM reply sink', () => {
     expect(client.entityMessages).toEqual([expect.objectContaining({ cardId: 'entity_1' })])
     expect(client.cards).toHaveLength(0)
 
-    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'a' } } })
-    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'b' } } })
-    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'c' } } })
+    await bridge.emit({
+      type: 'runtime.tool.started',
+      turnSnapshotId: 'turn_1',
+      data: {
+        toolCallId: 'tool_1',
+        tool: 'bash',
+        input: { command: 'pwd', token: 'hidden-secret' },
+      },
+    })
     await sleep(35)
-    expect(client.streams).toHaveLength(1)
-    expect(client.streams[0]).toEqual(expect.objectContaining({
-      cardId: 'entity_1',
-      elementId: 'nine1bot_streaming_content',
-      content: 'abc',
-      sequence: 1,
-    }))
+    expect(client.streams).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        cardId: 'entity_1',
+        elementId: 'nine1bot_streaming_content',
+        content: '正在等待 Agent 输出...',
+      }),
+      expect.objectContaining({
+        cardId: 'entity_1',
+        elementId: FEISHU_STREAMING_CARD_TOOL_ELEMENT_ID,
+      }),
+    ]))
+    const runningToolStream = lastCardKitStream(client.streams, FEISHU_STREAMING_CARD_TOOL_ELEMENT_ID)
+    expect(runningToolStream?.content).toContain('工具状态')
+    expect(runningToolStream?.content).toContain('bash')
+    expect(runningToolStream?.content).toContain('pwd')
+    expect(runningToolStream?.content).not.toContain('hidden-secret')
 
-    await bridge.emit({ type: 'runtime.message.part.updated', turnSnapshotId: 'turn_1', data: { delta: { text: 'd' } } })
+    await bridge.emit({
+      type: 'runtime.tool.completed',
+      turnSnapshotId: 'turn_1',
+      data: {
+        toolCallId: 'tool_1',
+        tool: 'bash',
+        title: 'Print working directory',
+      },
+    })
+    await sleep(35)
+    expect(lastCardKitStream(client.streams, FEISHU_STREAMING_CARD_TOOL_ELEMENT_ID)?.content).toBe('')
+
+    bridge.latestTurnResult = {
+      completed: true,
+      text: '当前工作目录是 C:/code/nine1bot。',
+    }
     await bridge.emit({ type: 'runtime.turn.completed', turnSnapshotId: 'turn_1' })
     await expect(sink.done).resolves.toMatchObject({ status: 'final' })
-    expect(JSON.stringify(client.entityUpdates.at(-1)?.card)).toContain('abcd')
+    const finalCard = JSON.stringify(client.entityUpdates.at(-1)?.card)
+    expect(finalCard).toContain('当前工作目录是 C:/code/nine1bot。')
+    expect(finalCard).not.toContain('工具状态')
     expect(client.settings.at(-1)).toEqual(expect.objectContaining({
       cardId: 'entity_1',
       streaming: false,
@@ -713,7 +816,7 @@ describe('Feishu IM reply sink', () => {
     })).rejects.toThrow(/im\.message\.reply failed: code=19001, msg=permission denied, log_id=log_permission, troubleshooter=https:\/\/open\.feishu\.cn\/trouble/)
   })
 
-  test('streaming card renders sanitized tool-use status', async () => {
+  test('streaming card renders only the current running tool status', async () => {
     const bridge = new EventBridge()
     const client = new MemoryFeishuIMReplyClient()
     const sink = new FeishuReplySink({
@@ -748,6 +851,18 @@ describe('Feishu IM reply sink', () => {
     expect(rendered).toContain('bash')
     expect(rendered).toContain('bun test')
     expect(rendered).not.toContain('super-secret')
+
+    await bridge.emit({
+      type: 'runtime.tool.completed',
+      turnSnapshotId: 'turn_1',
+      data: {
+        toolCallId: 'tool_1',
+        tool: 'bash',
+        title: 'Run tests',
+      },
+    })
+    await sleep(15)
+    expect(JSON.stringify(client.updates.at(-1)?.card)).not.toContain('工具状态')
     sink.stop()
   })
 
@@ -1122,6 +1237,13 @@ function messageIdFromPatchCall(input: unknown): string | undefined {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : undefined
   const path = record?.path && typeof record.path === 'object' ? record.path as Record<string, unknown> : undefined
   return typeof path?.message_id === 'string' ? path.message_id : undefined
+}
+
+function lastCardKitStream(
+  streams: Array<{ cardId: string; elementId: string; content: string; sequence: number }>,
+  elementId: string,
+) {
+  return [...streams].reverse().find((stream) => stream.elementId === elementId)
 }
 
 class EventBridge implements FeishuControllerBridge {

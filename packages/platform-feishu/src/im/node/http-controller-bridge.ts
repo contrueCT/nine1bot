@@ -222,6 +222,11 @@ function textFromMessageParts(parts: unknown[]): string | undefined {
   const text = parts
     .map(asRecord)
     .filter((part) => part?.type === 'text' && part.ignored !== true && part.synthetic !== true)
+    .filter((part) => {
+      const metadata = asRecord(part?.metadata)
+      const kind = stringValue(metadata?.kind) ?? stringValue(metadata?.type)
+      return kind !== 'reasoning' && kind !== 'thinking'
+    })
     .map((part) => stringValue(part?.text))
     .filter((part): part is string => Boolean(part))
     .filter((part) => !part.trimStart().startsWith('<system-hint'))
