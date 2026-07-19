@@ -209,11 +209,25 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
   }
 
   // 使用静态导入的 OpenCode 服务器启动
-  const serverInstance = await OpencodeServer.listen({
-    port: server.port,
-    hostname: server.hostname,
-    cors: [],
-  })
+  let serverInstance: Awaited<ReturnType<typeof OpencodeServer.listen>> | undefined
+  try {
+    serverInstance = await OpencodeServer.listen({
+      port: server.port,
+      hostname: server.hostname,
+      cors: [],
+    })
+  } catch (error) {
+    if (bridgeServer) {
+      try {
+        await bridgeServer.stop()
+      } catch {
+        // Best-effort cleanup when the main server fails to start.
+      } finally {
+        clearBridgeServer()
+      }
+    }
+    throw error
+  }
 
   return {
     url: serverInstance.url.toString(),

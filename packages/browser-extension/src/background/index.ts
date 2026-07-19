@@ -37,15 +37,16 @@ function createOpenNonce(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-async function markSidePanelOpened(): Promise<void> {
-  await chrome.storage.sync.set({ [SIDE_PANEL_OPEN_NONCE_STORAGE_KEY]: createOpenNonce() })
+async function markSidePanelOpened(openNonce: string): Promise<void> {
+  await chrome.storage.sync.set({ [SIDE_PANEL_OPEN_NONCE_STORAGE_KEY]: openNonce })
 }
 
 async function openSidePanel(windowId: number): Promise<void> {
-  await activateDedicatedNine1TabGroup(windowId).catch((error) => {
+  const openNonce = createOpenNonce()
+  await activateDedicatedNine1TabGroup(windowId, { openNonce }).catch((error) => {
     console.warn('[Nine1Bot Browser Control] Failed to activate dedicated tab group:', error)
   })
-  await markSidePanelOpened().catch((error) => {
+  await markSidePanelOpened(openNonce).catch((error) => {
     console.warn('[Nine1Bot Browser Control] Failed to persist side panel open nonce:', error)
   })
   await chrome.sidePanel.open({ windowId })
@@ -77,7 +78,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true
   }
   if (message?.type === 'nine1bot-sidepanel-ensure-tab-group') {
-    activateDedicatedNine1TabGroup()
+    activateDedicatedNine1TabGroup(undefined, {
+      onlyIfMissing: Boolean(message.onlyIfMissing),
+    })
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => {
         sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) })

@@ -44,6 +44,9 @@ Call this first to discover which browsers are available and get tab IDs.`,
 
     if (status.user) {
       lines.push(`User Browser: ${status.user.connected ? "Connected" : "Not connected"}`)
+      if (status.user.tabListSource && status.user.connected) {
+        lines.push(`  Tab source: ${status.user.tabListSource}`)
+      }
       if (status.user.tabs.length > 0) {
         lines.push("  Tabs:")
         for (const tab of status.user.tabs) {

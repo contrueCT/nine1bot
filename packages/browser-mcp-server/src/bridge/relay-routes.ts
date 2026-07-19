@@ -10,6 +10,7 @@
 import { Hono } from 'hono'
 import { upgradeWebSocket } from 'hono/bun'
 import type { WSContext } from 'hono/ws'
+import type { Tab, TabGroupDiagnostics } from '../core/types'
 
 export interface TargetInfo {
   targetId: string
@@ -39,6 +40,28 @@ export interface ExtensionHealthPayload {
   lastPongAt?: number
   activeCommands?: number
   reconnectAttempt?: number
+  diagnostics?: {
+    authoritativeTabs: Array<{
+      tabId: number
+      windowId: number
+      title: string
+      url: string
+    }>
+    activeSessions: Array<{
+      tabId: number
+      sessionId: string
+    }>
+    tabGroups: TabGroupDiagnostics
+    lastResync: {
+      reason: string
+      windowId: number | null
+      attachedTabIds: number[]
+      detachedTabIds: number[]
+      updatedTabIds: number[]
+      authoritativeTabIds: number[]
+      at: number
+    } | null
+  }
 }
 
 export interface ExtensionAgentStatePayload {
@@ -54,9 +77,11 @@ export interface ExtensionRelay {
   getTools: () => string[]
   getCapabilities: () => Record<string, unknown>
   getHealth: () => ExtensionHealthPayload | null
+  getDiagnostics: () => ExtensionHealthPayload['diagnostics'] | null
   getHelloAt: () => number | null
   getHello: () => ExtensionHelloPayload | null
   getAgentStates: () => ExtensionAgentStatePayload[]
+  upsertTargetsFromTabs: (tabs: Tab[]) => ConnectedTarget[]
   sendCommand: (method: string, params?: unknown, targetId?: string) => Promise<unknown>
   stop: () => Promise<void>
 }
@@ -138,6 +163,60 @@ function findSessionIdForTarget(targetId: string): string | undefined {
     }
   }
   return undefined
+}
+
+function stableSessionIdForTarget(targetId: string): string {
+  return /^\d+$/.test(targetId) ? `tab_${targetId}` : `target_${targetId}`
+}
+
+function upsertConnectedTarget(target: ConnectedTarget, broadcast = true): ConnectedTarget {
+  const previous = connectedTargets.get(target.sessionId)
+  connectedTargets.set(target.sessionId, target)
+
+  if (!broadcast) {
+    return target
+  }
+
+  if (!previous) {
+    broadcastToCdpClients({
+      method: 'Target.attachedToTarget',
+      params: {
+        sessionId: target.sessionId,
+        targetInfo: { ...target.targetInfo, attached: true },
+        waitingForDebugger: false,
+      },
+      sessionId: target.sessionId,
+    })
+    return target
+  }
+
+  if (
+    previous.targetId !== target.targetId
+    || previous.targetInfo.title !== target.targetInfo.title
+    || previous.targetInfo.url !== target.targetInfo.url
+  ) {
+    broadcastToCdpClients({
+      method: 'Target.targetInfoChanged',
+      params: {
+        targetInfo: { ...target.targetInfo, attached: true },
+      },
+      sessionId: target.sessionId,
+    })
+  }
+
+  return target
+}
+
+function detachConnectedTarget(sessionId: string, targetId: string): void {
+  connectedTargets.delete(sessionId)
+  broadcastToCdpClients({
+    method: 'Target.detachedFromTarget',
+    params: {
+      sessionId,
+      targetId,
+    },
+    sessionId,
+  })
 }
 
 async function routeCdpCommand(cmd: { id: number; method: string; params?: unknown; sessionId?: string }): Promise<unknown> {
@@ -284,6 +363,7 @@ function handleExtensionMessage(data: string): void {
       lastPongAt: params?.lastPongAt,
       activeCommands: params?.activeCommands,
       reconnectAttempt: params?.reconnectAttempt,
+      diagnostics: params?.diagnostics ?? undefined,
     }
     return
   }
@@ -317,11 +397,11 @@ function handleExtensionMessage(data: string): void {
       const prevTargetId = prev?.targetId
       const changedTarget = Boolean(prev && prevTargetId && prevTargetId !== nextTargetId)
 
-      connectedTargets.set(attached.sessionId, {
+      upsertConnectedTarget({
         sessionId: attached.sessionId,
         targetId: nextTargetId,
         targetInfo: attached.targetInfo,
-      })
+      }, false)
 
       if (changedTarget && prevTargetId) {
         broadcastToCdpClients({
@@ -516,9 +596,46 @@ export function getExtensionRelay(): ExtensionRelay {
     getTools: () => [...extensionTools],
     getCapabilities: () => ({ ...extensionCapabilities }),
     getHealth: () => (extensionHealth ? { ...extensionHealth } : null),
+    getDiagnostics: () => (extensionHealth?.diagnostics ? structuredClone(extensionHealth.diagnostics) : null),
     getHelloAt: () => extensionHelloAt,
     getHello: () => (extensionHello ? { ...extensionHello } : null),
     getAgentStates: () => Array.from(extensionAgentStates.values()).map((state) => ({ ...state })),
+    upsertTargetsFromTabs: (tabs: Tab[]) => {
+      const desiredSessionIds = new Set<string>()
+      const desiredSessionIdByTargetId = new Map<string, string>()
+
+      for (const tab of tabs) {
+        const targetId = String(tab.id)
+        const sessionId = tab.sessionId ?? stableSessionIdForTarget(targetId)
+        desiredSessionIds.add(sessionId)
+        desiredSessionIdByTargetId.set(targetId, sessionId)
+      }
+
+      for (const [sessionId, target] of Array.from(connectedTargets.entries())) {
+        const desiredSessionId = desiredSessionIdByTargetId.get(target.targetId)
+        if (desiredSessionId === sessionId) continue
+        if (!desiredSessionIds.has(sessionId) || desiredSessionId !== sessionId) {
+          detachConnectedTarget(sessionId, target.targetId)
+        }
+      }
+
+      const nextTargets = tabs.map((tab) => {
+        const targetId = String(tab.id)
+        const sessionId = tab.sessionId ?? stableSessionIdForTarget(targetId)
+        return upsertConnectedTarget({
+          sessionId,
+          targetId,
+          targetInfo: {
+            targetId,
+            type: 'page',
+            title: tab.title,
+            url: tab.url,
+            attached: true,
+          },
+        })
+      })
+      return nextTargets
+    },
     sendCommand: async (method: string, params?: unknown, targetId?: string) => {
       if (!extensionWs || extensionWs.readyState !== 1) {
         throw new Error('Chrome extension not connected')

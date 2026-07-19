@@ -1,5 +1,5 @@
 import type { ToolDefinition, ToolResult } from './index'
-import { addTabToNine1Group, getDefaultNine1Tab, getTabsInActiveNine1Group } from '../background/tab-group-manager'
+import { addTabToNine1Group, getDefaultNine1Tab, getTabGroupDiagnostics, getTabsInActiveNine1Group } from '../background/tab-group-manager'
 
 interface TabsContextArgs {
   createIfEmpty?: boolean
@@ -82,6 +82,15 @@ export const tabsContextTool = {
 
       const activeTab = await getDefaultNine1Tab()
       const automatableTabs = managedTabs.filter((tab) => isAutomatableTabUrl(tab.url))
+      const diagnostics = await getTabGroupDiagnostics(activeTab?.windowId)
+      const resolution = diagnostics.currentWindowId !== null
+        ? diagnostics.lastResolutionByWindow[String(diagnostics.currentWindowId)] ?? null
+        : null
+      const reasonCode = automatableTabs.length > 0
+        ? 'ok'
+        : managedTabs.length > 0
+          ? 'no_automatable_tabs'
+          : resolution?.issueCode ?? 'no_active_group'
 
       return {
         content: [
@@ -93,6 +102,15 @@ export const tabsContextTool = {
                 activeTab: activeTab ? serializeTab(activeTab) : null,
                 allTabs: includeAll ? automatableTabs.map(serializeTab) : undefined,
                 totalMcpTabs: managedTabs.length,
+                totalAutomatableTabs: automatableTabs.length,
+                tabScanStatus: {
+                  source: 'authoritative_group_scan',
+                  reasonCode,
+                  recoverySource: resolution?.recoverySource ?? 'none',
+                  windowId: diagnostics.currentWindowId,
+                  matchedGroupIds: resolution?.matchedGroupIds ?? [],
+                },
+                diagnostics,
               },
               null,
               2

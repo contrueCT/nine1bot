@@ -105,6 +105,14 @@ function normalizeLocateResult(value: unknown, query: string): LocateResult {
   }
 }
 
+type ExtensionTabListSource = 'authoritative_group_scan' | 'relay_cache_fallback' | 'none'
+
+interface RefreshExtensionTabsResult {
+  tabs: Tab[]
+  source: ExtensionTabListSource
+  issues: BrowserRuntimeStatus['issues']
+}
+
 async function isLocalPortListening(host: string, port: number): Promise<boolean> {
   return await new Promise((resolve) => {
     const socket = new Socket()
@@ -217,22 +225,19 @@ export class BridgeServer {
   async getStatus(): Promise<BrowserStatus> {
     let userStatus: BrowserStatus['user'] = null
     let botStatus: BrowserStatus['bot'] = null
+    const runtimeIssues: BrowserRuntimeStatus['issues'] = []
 
     // User browser (Extension)
     if (this.isExtensionConnected) {
-      const targets = this.relay!.getTargets()
       const refreshedTabs = await this.refreshExtensionTabs()
+      runtimeIssues.push(...refreshedTabs.issues)
       userStatus = {
         connected: true,
-        tabs: refreshedTabs ?? targets.map(t => ({
-          id: t.targetId,
-          sessionId: t.sessionId,
-          title: t.targetInfo.title,
-          url: t.targetInfo.url,
-        })),
+        tabs: refreshedTabs.tabs,
+        tabListSource: refreshedTabs.source,
       }
     } else {
-      userStatus = { connected: false, tabs: [] }
+      userStatus = { connected: false, tabs: [], tabListSource: 'none' }
     }
 
     // Bot browser (Direct CDP)
@@ -256,14 +261,34 @@ export class BridgeServer {
     return {
       user: userStatus,
       bot: botStatus,
-      runtime: await this.getRuntimeStatus(),
+      runtime: await this.getRuntimeStatus(runtimeIssues),
     }
   }
 
-  private async refreshExtensionTabs(): Promise<Tab[] | null> {
-    if (!this.relay?.extensionConnected()) return null
+  private async refreshExtensionTabs(): Promise<RefreshExtensionTabsResult> {
+    if (!this.relay?.extensionConnected()) {
+      return { tabs: [], source: 'none', issues: [] }
+    }
     const supportedTools = this.relay.getTools()
-    if (supportedTools.length > 0 && !supportedTools.includes('tabs_context_mcp')) return null
+    if (supportedTools.length > 0 && !supportedTools.includes('tabs_context_mcp')) {
+      const targets = this.relay.getTargets()
+      return {
+        tabs: targets.map((target) => ({
+          id: target.targetId,
+          sessionId: target.sessionId,
+          title: target.targetInfo.title,
+          url: target.targetInfo.url,
+        })),
+        source: targets.length > 0 ? 'relay_cache_fallback' : 'none',
+        issues: targets.length > 0
+          ? [{
+            code: 'relay_cache_fallback',
+            severity: 'warning',
+            message: 'Extension tabs_context_mcp is unavailable; using relay cache fallback.',
+          }]
+          : [],
+      }
+    }
 
     try {
       const result = await this.relay.sendCommand(
@@ -276,40 +301,132 @@ export class BridgeServer {
         },
       ) as ExtensionToolResult
       const text = result.content?.find(c => c.type === 'text')?.text ?? '{}'
+      if (result.isError) {
+        return {
+          tabs: [],
+          source: 'none',
+          issues: [
+            {
+              code: 'tab_scan_failed',
+              severity: 'error',
+              message: `Extension tab scan failed: ${text}`,
+            },
+          ],
+        }
+      }
+
+      if (!text.trim().startsWith('{')) {
+        return {
+          tabs: [],
+          source: 'none',
+          issues: [
+            {
+              code: 'tab_scan_failed',
+              severity: 'error',
+              message: `Extension tab scan returned a non-JSON payload: ${text}`,
+            },
+          ],
+        }
+      }
+
       const parsed = JSON.parse(text) as {
         allTabs?: Array<{ id?: number; title?: string; url?: string; active?: boolean; windowId?: number }>
         activeTab?: { id?: number; title?: string; url?: string; windowId?: number } | null
+        tabScanStatus?: {
+          source?: string
+          reasonCode?: string
+          recoverySource?: string
+          windowId?: number | null
+          matchedGroupIds?: number[]
+        }
       }
       const allTabs = Array.isArray(parsed.allTabs) ? parsed.allTabs : []
+      const issues: BrowserRuntimeStatus['issues'] = []
       if (allTabs.length > 0) {
-        return allTabs
+        const tabs = allTabs
           .filter(tab => typeof tab.id === 'number')
           .map(tab => ({
             id: String(tab.id),
+            sessionId: `tab_${tab.id}`,
             title: tab.title ?? '',
             url: tab.url ?? '',
             active: tab.active,
             windowId: tab.windowId,
           }))
+        const beforeTargets = this.relay.getTargets()
+        this.relay.upsertTargetsFromTabs(tabs)
+        if (beforeTargets.length === 0) {
+          issues.push({
+            code: 'relay_cache_empty',
+            severity: 'warning',
+            message: 'Relay target cache was empty; rebuilt it from authoritative extension tab scan.',
+          })
+        }
+        return {
+          tabs,
+          source: 'authoritative_group_scan',
+          issues,
+        }
       }
-      if (parsed.activeTab?.id) {
-        return [{
-          id: String(parsed.activeTab.id),
-          title: parsed.activeTab.title ?? '',
-          url: parsed.activeTab.url ?? '',
-          active: true,
-          windowId: parsed.activeTab.windowId,
-        }]
+
+      const reasonCode = parsed.tabScanStatus?.reasonCode ?? 'no_active_group'
+      if (reasonCode !== 'ok') {
+        issues.push({
+          code: reasonCode,
+          severity: reasonCode === 'tab_scan_failed' ? 'error' : 'warning',
+          message: `Extension tab scan reported ${reasonCode}.`,
+        })
+      }
+
+      return {
+        tabs: [],
+        source: 'none',
+        issues,
       }
     } catch {
-      return null
+      const cachedTargets = this.relay.getTargets()
+      if (cachedTargets.length > 0) {
+        return {
+          tabs: cachedTargets.map((target) => ({
+            id: target.targetId,
+            sessionId: target.sessionId,
+            title: target.targetInfo.title,
+            url: target.targetInfo.url,
+          })),
+          source: 'relay_cache_fallback',
+          issues: [
+            {
+              code: 'tab_scan_failed',
+              severity: 'error',
+              message: 'Extension tab scan failed; using relay cache fallback.',
+            },
+            {
+              code: 'relay_cache_fallback',
+              severity: 'warning',
+              message: 'Using relay cache fallback because authoritative extension tab scan failed.',
+            },
+          ],
+        }
+      }
+
+      return {
+        tabs: [],
+        source: 'none',
+        issues: [
+          {
+            code: 'tab_scan_failed',
+            severity: 'error',
+            message: 'Extension tab scan failed and relay cache is empty.',
+          },
+        ],
+      }
     }
-    return null
   }
 
-  private async getRuntimeStatus(): Promise<BrowserRuntimeStatus> {
+  private async getRuntimeStatus(additionalIssues: BrowserRuntimeStatus['issues'] = []): Promise<BrowserRuntimeStatus> {
     const hello = this.relay?.getHello() ?? null
     const helloAt = this.relay?.getHelloAt() ?? null
+    const diagnostics = this.relay?.getDiagnostics() ?? null
     const conflicts = await this.detectLegacyPortConflicts()
     const issues: BrowserRuntimeStatus['issues'] = []
 
@@ -337,6 +454,8 @@ export class BridgeServer {
       })
     }
 
+    issues.push(...additionalIssues)
+
     return {
       mode: 'embedded',
       serverOrigin: this.options.serverOrigin,
@@ -348,6 +467,7 @@ export class BridgeServer {
         protocolVersion: hello?.protocolVersion ?? null,
         serverOrigin: hello?.serverOrigin ?? null,
         pairedInstanceId: hello?.pairedInstanceId ?? null,
+        diagnostics,
       },
       conflicts,
       issues,
@@ -413,14 +533,7 @@ export class BridgeServer {
 
     if (channel === 'extension') {
       const refreshedTabs = await this.refreshExtensionTabs()
-      if (refreshedTabs) return refreshedTabs
-      const targets = this.relay!.getTargets()
-      return targets.map(t => ({
-        id: t.targetId,
-        sessionId: t.sessionId,
-        title: t.targetInfo.title,
-        url: t.targetInfo.url,
-      }))
+      return refreshedTabs.tabs
     }
 
     const cdpUrl = await this.ensureBrowserAvailable()

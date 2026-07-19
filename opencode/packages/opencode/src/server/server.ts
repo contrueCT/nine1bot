@@ -105,6 +105,36 @@ export namespace Server {
     return headers[name] ?? headers[name.toLowerCase()] ?? headers[name.toUpperCase()]
   }
 
+  export function formatListenError(opts: { port: number; hostname: string }, cause?: unknown) {
+    const reason =
+      cause instanceof Error
+        ? cause.message
+        : typeof cause === "string"
+          ? cause
+          : ""
+
+    const portTarget =
+      opts.port === 0
+        ? `an available port on ${opts.hostname} (preferred 4096)`
+        : `${opts.hostname}:${opts.port}`
+
+    const addressInUse =
+      /EADDRINUSE|address already in use|in use/i.test(reason) ||
+      /failed to bind|failed to listen/i.test(reason)
+
+    if (!reason) {
+      return addressInUse
+        ? `Failed to start server on ${portTarget}. The port appears to already be in use.`
+        : `Failed to start server on ${portTarget}.`
+    }
+
+    if (addressInUse) {
+      return `Failed to start server on ${portTarget}. The port appears to already be in use. Original error: ${reason}`
+    }
+
+    return `Failed to start server on ${portTarget}. Original error: ${reason}`
+  }
+
   function hasForwardedHeader(headers: Record<string, string | undefined>) {
     return getHeader(headers, "forwarded") !== undefined || getHeader(headers, "x-forwarded-for") !== undefined
   }
@@ -861,12 +891,14 @@ export namespace Server {
     const tryServe = (port: number) => {
       try {
         return Bun.serve({ ...args, port })
-      } catch {
+      } catch (error) {
+        lastServeError = error
         return undefined
       }
     }
+    let lastServeError: unknown
     const server = opts.port === 0 ? (tryServe(4096) ?? tryServe(0)) : tryServe(opts.port)
-    if (!server) throw new Error(`Failed to start server on port ${opts.port}`)
+    if (!server) throw new Error(formatListenError(opts, lastServeError))
 
     _url = server.url
     Schedule.init()

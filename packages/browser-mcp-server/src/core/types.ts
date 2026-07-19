@@ -22,6 +22,35 @@ export interface Tab {
   windowId?: number
 }
 
+export interface TabGroupDiagnostics {
+  currentWindowId: number | null
+  bindings: Record<string, {
+    groupId: number
+    windowId: number
+    openNonce?: string
+    updatedAt: number
+  }>
+  lastResolutionByWindow: Record<string, {
+    windowId: number | null
+    groupId: number | null
+    binding: {
+      groupId: number
+      windowId: number
+      openNonce?: string
+      updatedAt: number
+    } | null
+    recoverySource: 'stored' | 'active-tab-match' | 'single-title-match' | 'none'
+    issueCode?: string
+    matchedGroupIds: number[]
+    resolvedAt: number
+  }>
+  lastError: {
+    code: string
+    message: string
+    at: number
+  } | null
+}
+
 export interface PageContent {
   title: string
   url: string
@@ -56,6 +85,7 @@ export interface BrowserStatus {
   user: {
     connected: boolean
     tabs: Tab[]
+    tabListSource?: 'authoritative_group_scan' | 'relay_cache_fallback' | 'none'
   } | null
   bot: {
     running: boolean
@@ -87,6 +117,28 @@ export interface BrowserRuntimeStatus {
     protocolVersion: string | null
     serverOrigin: string | null
     pairedInstanceId: string | null
+    diagnostics?: {
+      authoritativeTabs: Array<{
+        tabId: number
+        windowId: number
+        title: string
+        url: string
+      }>
+      activeSessions: Array<{
+        tabId: number
+        sessionId: string
+      }>
+      tabGroups: TabGroupDiagnostics
+      lastResync: {
+        reason: string
+        windowId: number | null
+        attachedTabIds: number[]
+        detachedTabIds: number[]
+        updatedTabIds: number[]
+        authoritativeTabIds: number[]
+        at: number
+      } | null
+    } | null
   }
   conflicts: BrowserRuntimeConflict[]
   issues: BrowserStatusIssue[]

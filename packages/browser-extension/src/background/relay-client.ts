@@ -20,8 +20,10 @@ import { isAbortError } from '../tools/execution-context'
 import { setupDiagnosticsListeners } from './diagnostics-buffer'
 import {
   addTabToNine1Group,
+  getTabGroupDiagnostics,
   getDefaultNine1Tab,
   getTabsInActiveNine1Group,
+  getTabsInAllActiveNine1Groups,
   getTabsInGroupByTab,
   isTabInActiveNine1Group,
   setNine1GroupActive,
@@ -77,6 +79,31 @@ interface RunningCommand {
   taskLabel?: string
 }
 
+interface RelayResyncState {
+  reason: string
+  windowId: number | null
+  attachedTabIds: number[]
+  detachedTabIds: number[]
+  updatedTabIds: number[]
+  authoritativeTabIds: number[]
+  at: number
+}
+
+interface ExtensionRelayDiagnosticsPayload {
+  authoritativeTabs: Array<{
+    tabId: number
+    windowId: number
+    title: string
+    url: string
+  }>
+  activeSessions: Array<{
+    tabId: number
+    sessionId: string
+  }>
+  tabGroups: Awaited<ReturnType<typeof getTabGroupDiagnostics>>
+  lastResync: RelayResyncState | null
+}
+
 // WebSocket 连接状态
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -90,19 +117,17 @@ let lastPongAt = 0
 // 当前活动的标签页 session
 const activeSessions = new Map<number, string>() // tabId -> sessionId
 const attachedTabs = new Set<number>()
+const targetMetadataByTabId = new Map<number, { title: string; url: string }>()
+const resyncTimers = new Map<number, ReturnType<typeof setTimeout>>()
+let lastResyncState: RelayResyncState | null = null
 
 // 命令状态
 const runningCommands = new Map<number, RunningCommand>()
 const tabActiveCommandCount = new Map<number, number>()
 const tabStopRequestedAt = new Map<number, number>()
 
-/**
- * 生成唯一的 session ID
- */
-function generateSessionId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16))
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
-  return `session_${Date.now()}_${hex}`
+export function getManagedSessionId(tabId: number): string {
+  return `tab_${tabId}`
 }
 
 /**
@@ -154,27 +179,26 @@ function detachManagedTarget(tabId: number, reason = 'target_detached'): void {
   })
   activeSessions.delete(tabId)
   attachedTabs.delete(tabId)
+  targetMetadataByTabId.delete(tabId)
   cancelRunningCommands({ tabId, reason })
   tabActiveCommandCount.delete(tabId)
   tabStopRequestedAt.delete(tabId)
 }
 
-function detachAllActiveSessions(): void {
-  for (const tabId of Array.from(activeSessions.keys())) {
-    detachManagedTarget(tabId, 'tab_group_changed')
-  }
-}
-
 async function attachManagedTarget(tab: chrome.tabs.Tab): Promise<string | null> {
   if (!tab.id) return null
   if (!isAutomatableTabUrl(tab.url)) return null
-  if (!await isTabInActiveNine1Group(tab.id)) return null
+  if (!await isTabInActiveNine1Group(tab.id, tab.windowId)) return null
 
   const existing = activeSessions.get(tab.id)
   if (existing) return existing
 
-  const sessionId = generateSessionId()
+  const sessionId = getManagedSessionId(tab.id)
   activeSessions.set(tab.id, sessionId)
+  targetMetadataByTabId.set(tab.id, {
+    title: tab.title || '',
+    url: tab.url || '',
+  })
 
   forwardCdpEvent('Target.attachedToTarget', {
     sessionId,
@@ -183,6 +207,126 @@ async function attachManagedTarget(tab: chrome.tabs.Tab): Promise<string | null>
   })
 
   return sessionId
+}
+
+async function getLiveTab(tabId: number): Promise<chrome.tabs.Tab | null> {
+  try {
+    return await chrome.tabs.get(tabId)
+  } catch {
+    return null
+  }
+}
+
+async function listAuthoritativeManagedTabs(windowId?: number): Promise<chrome.tabs.Tab[]> {
+  const tabs = windowId === undefined
+    ? await getTabsInAllActiveNine1Groups()
+    : await getTabsInActiveNine1Group(windowId)
+
+  return tabs.filter((tab) => typeof tab.id === 'number' && isAutomatableTabUrl(tab.url))
+}
+
+async function resyncManagedTargets(options: {
+  windowId?: number
+  reason: string
+  forceBroadcast?: boolean
+}): Promise<RelayResyncState> {
+  const desiredTabs = await listAuthoritativeManagedTabs(options.windowId)
+  const desiredByTabId = new Map(
+    desiredTabs
+      .filter((tab) => typeof tab.id === 'number')
+      .map((tab) => [tab.id as number, tab]),
+  )
+  const desiredTabIds = new Set(desiredByTabId.keys())
+  const attachedTabIds: number[] = []
+  const detachedTabIds: number[] = []
+  const updatedTabIds: number[] = []
+
+  for (const tabId of Array.from(activeSessions.keys())) {
+    if (desiredTabIds.has(tabId)) continue
+    const tab = await getLiveTab(tabId)
+    if (options.windowId !== undefined && tab?.windowId !== options.windowId && tab !== null) {
+      continue
+    }
+    detachManagedTarget(tabId, tab === null ? 'tab_missing' : 'tab_left_nine1_group')
+    detachedTabIds.push(tabId)
+  }
+
+  for (const [tabId, tab] of desiredByTabId) {
+    const sessionId = activeSessions.get(tabId)
+    if (!sessionId) {
+      const attachedSession = await attachManagedTarget(tab)
+      if (attachedSession) {
+        attachedTabIds.push(tabId)
+      }
+      continue
+    }
+
+    if (options.forceBroadcast) {
+      targetMetadataByTabId.set(tabId, {
+        title: tab.title || '',
+        url: tab.url || '',
+      })
+      forwardCdpEvent('Target.targetInfoChanged', {
+        targetInfo: targetInfoForTab(tab),
+      })
+      updatedTabIds.push(tabId)
+      continue
+    }
+
+    const previousTarget = targetMetadataByTabId.get(tabId)
+    if (!previousTarget || previousTarget.title !== (tab.title || '') || previousTarget.url !== (tab.url || '')) {
+      targetMetadataByTabId.set(tabId, {
+        title: tab.title || '',
+        url: tab.url || '',
+      })
+      forwardCdpEvent('Target.targetInfoChanged', {
+        targetInfo: targetInfoForTab(tab),
+      })
+      updatedTabIds.push(tabId)
+    }
+  }
+
+  lastResyncState = {
+    reason: options.reason,
+    windowId: options.windowId ?? null,
+    attachedTabIds,
+    detachedTabIds,
+    updatedTabIds,
+    authoritativeTabIds: Array.from(desiredTabIds),
+    at: Date.now(),
+  }
+
+  if (isRelayConnected()) {
+    void sendExtensionHealth()
+  }
+
+  return lastResyncState
+}
+
+function scheduleManagedTargetResync(options: {
+  windowId?: number
+  reason: string
+  delayMs?: number
+  forceBroadcast?: boolean
+}): void {
+  const key = options.windowId ?? -1
+  const existing = resyncTimers.get(key)
+  if (existing) {
+    clearTimeout(existing)
+  }
+
+  const timer = setTimeout(() => {
+    resyncTimers.delete(key)
+    resyncManagedTargets({
+      windowId: options.windowId,
+      reason: options.reason,
+      forceBroadcast: options.forceBroadcast,
+    }).catch((error) => {
+      console.warn('[Relay Client] Failed to resync managed targets:', error)
+    })
+  }, options.delayMs ?? 80)
+
+  resyncTimers.set(key, timer)
 }
 
 function sendExtensionHello(): void {
@@ -203,7 +347,28 @@ function sendExtensionHello(): void {
   })
 }
 
-function sendExtensionHealth(): void {
+async function collectRelayDiagnostics(): Promise<ExtensionRelayDiagnosticsPayload> {
+  const authoritativeTabs = (await getTabsInAllActiveNine1Groups())
+    .filter((tab) => typeof tab.id === 'number' && typeof tab.windowId === 'number' && isAutomatableTabUrl(tab.url))
+    .map((tab) => ({
+      tabId: tab.id as number,
+      windowId: tab.windowId as number,
+      title: tab.title || '',
+      url: tab.url || '',
+    }))
+
+  return {
+    authoritativeTabs,
+    activeSessions: Array.from(activeSessions.entries()).map(([tabId, sessionId]) => ({
+      tabId,
+      sessionId,
+    })),
+    tabGroups: await getTabGroupDiagnostics(),
+    lastResync: lastResyncState ? { ...lastResyncState } : null,
+  }
+}
+
+async function sendExtensionHealth(): Promise<void> {
   sendToRelay({
     method: 'extension.health',
     params: {
@@ -211,6 +376,21 @@ function sendExtensionHealth(): void {
       lastPongAt,
       activeCommands: runningCommands.size,
       reconnectAttempt,
+      diagnostics: await collectRelayDiagnostics().catch((error) => ({
+        authoritativeTabs: [],
+        activeSessions: Array.from(activeSessions.entries()).map(([tabId, sessionId]) => ({ tabId, sessionId })),
+        tabGroups: {
+          currentWindowId: null,
+          bindings: {},
+          lastResolutionByWindow: {},
+          lastError: {
+            code: 'diagnostics_collection_failed',
+            message: error instanceof Error ? error.message : String(error),
+            at: Date.now(),
+          },
+        },
+        lastResync: lastResyncState ? { ...lastResyncState } : null,
+      })),
     },
   })
 }
@@ -277,6 +457,13 @@ async function markCommandStart(command: RunningCommand): Promise<void> {
   bumpTabActiveCount(command.tabId, 1)
   await addTabToNine1Group(command.tabId, command.taskLabel)
   await setNine1GroupActive(command.tabId, command.taskLabel)
+  const commandTab = await getLiveTab(command.tabId)
+  if (typeof commandTab?.windowId === 'number') {
+    await resyncManagedTargets({
+      windowId: commandTab.windowId,
+      reason: 'command_start',
+    }).catch(() => undefined)
+  }
   await sendAgentStateToTabs(command.tabId, command.taskLabel)
 }
 
@@ -293,7 +480,7 @@ function startHealthReporting(): void {
   if (healthTimer) return
   healthTimer = setInterval(() => {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      sendExtensionHealth()
+      void sendExtensionHealth()
     }
   }, HEALTH_REPORT_INTERVAL)
 }
@@ -696,47 +883,56 @@ async function ensureDebuggerAttached(tabId: number): Promise<void> {
 function setupTabListeners(): void {
   // 新标签页创建
   chrome.tabs.onCreated.addListener((tab) => {
-    if (!tab.id) return
-    setTimeout(() => {
-      chrome.tabs.get(tab.id!).then((freshTab) => attachManagedTarget(freshTab)).catch(() => {})
-    }, 150)
+    if (typeof tab.windowId !== 'number') return
+    scheduleManagedTargetResync({
+      windowId: tab.windowId,
+      reason: 'tab_created',
+      delayMs: 150,
+    })
   })
 
   // 标签页更新（URL/标题变化）
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    if (typeof tab.windowId !== 'number') return
+
     if (changeInfo.groupId !== undefined) {
-      if (activeSessions.has(tabId) && !await isTabInActiveNine1Group(tabId)) {
-        detachManagedTarget(tabId, 'tab_left_nine1_group')
-        return
-      }
-      await attachManagedTarget(tab).catch(() => {})
+      scheduleManagedTargetResync({
+        windowId: tab.windowId,
+        reason: 'tab_group_changed',
+        delayMs: 60,
+      })
+      return
     }
 
     if (changeInfo.url || changeInfo.title) {
-      if (!await isTabInActiveNine1Group(tabId)) {
-        detachManagedTarget(tabId, 'tab_left_nine1_group')
-        return
-      }
-      const sessionId = activeSessions.get(tabId)
-      if (!sessionId) {
-        await attachManagedTarget(tab).catch(() => {})
-        return
-      }
-      forwardCdpEvent('Target.targetInfoChanged', {
-        targetInfo: targetInfoForTab(tab),
+      scheduleManagedTargetResync({
+        windowId: tab.windowId,
+        reason: 'tab_metadata_changed',
+        delayMs: 40,
       })
     }
   })
 
   // 标签页关闭
-  chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
     detachManagedTarget(tabId, 'tab_removed')
+    if (typeof removeInfo.windowId === 'number') {
+      scheduleManagedTargetResync({
+        windowId: removeInfo.windowId,
+        reason: 'tab_removed',
+        delayMs: 40,
+      })
+    }
   })
 
   // 标签页激活
   chrome.tabs.onActivated.addListener(async (activeInfo) => {
-    const tab = await chrome.tabs.get(activeInfo.tabId)
-    await attachManagedTarget(tab)
+    scheduleManagedTargetResync({
+      windowId: activeInfo.windowId,
+      reason: 'tab_activated',
+      delayMs: 40,
+      forceBroadcast: true,
+    })
   })
 }
 
@@ -744,13 +940,16 @@ function setupTabListeners(): void {
  * 发送当前 Nine1Bot 标签组信息
  */
 async function sendInitialTargets(): Promise<void> {
-  const tabs = await getTabsInActiveNine1Group()
-  for (const tab of tabs) {
-    await attachManagedTarget(tab)
-  }
+  await resyncManagedTargets({
+    reason: 'relay_connected',
+    forceBroadcast: true,
+  })
 }
 
-export async function activateDedicatedNine1TabGroup(windowId?: number): Promise<{ groupId: number | null; tabId?: number }> {
+export async function activateDedicatedNine1TabGroup(
+  windowId?: number,
+  options: { onlyIfMissing?: boolean; openNonce?: string } = {},
+): Promise<{ groupId: number | null; tabId?: number }> {
   const [activeTab] = await chrome.tabs.query({
     active: true,
     currentWindow: windowId === undefined,
@@ -761,9 +960,17 @@ export async function activateDedicatedNine1TabGroup(windowId?: number): Promise
     return { groupId: null }
   }
 
-  const groupId = await addTabToNine1Group(activeTab.id)
-  detachAllActiveSessions()
-  await sendInitialTargets()
+  const groupId = await addTabToNine1Group(activeTab.id, undefined, {
+    onlyIfMissing: options.onlyIfMissing,
+    openNonce: options.openNonce,
+  })
+  if (typeof activeTab.windowId === 'number') {
+    await resyncManagedTargets({
+      windowId: activeTab.windowId,
+      reason: options.onlyIfMissing ? 'sidepanel_ensure' : 'sidepanel_activate',
+      forceBroadcast: true,
+    })
+  }
   return { groupId, tabId: activeTab.id }
 }
 
@@ -847,10 +1054,10 @@ export function connectToRelay(url?: string): void {
       }
 
       sendExtensionHello()
-      sendExtensionHealth()
+      void sendExtensionHealth()
       startHealthReporting()
       startAgentHeartbeat()
-      sendInitialTargets()
+      void sendInitialTargets()
     }
 
     ws.onmessage = (event) => {
@@ -887,7 +1094,13 @@ function cleanup(): void {
     ws = null
   }
 
+  for (const timer of resyncTimers.values()) {
+    clearTimeout(timer)
+  }
+  resyncTimers.clear()
+
   activeSessions.clear()
+  targetMetadataByTabId.clear()
 
   for (const [commandId, command] of runningCommands) {
     command.cancelReason = 'relay_disconnected'
@@ -895,6 +1108,7 @@ function cleanup(): void {
     runningCommands.delete(commandId)
   }
   tabActiveCommandCount.clear()
+  tabStopRequestedAt.clear()
 }
 
 /**
@@ -959,6 +1173,15 @@ export function initRelayClient(): void {
   chrome.debugger.onDetach.addListener((source) => {
     if (source.tabId) {
       attachedTabs.delete(source.tabId)
+      getLiveTab(source.tabId).then((tab) => {
+        if (typeof tab?.windowId === 'number') {
+          scheduleManagedTargetResync({
+            windowId: tab.windowId,
+            reason: 'debugger_detached',
+            delayMs: 40,
+          })
+        }
+      }).catch(() => undefined)
     }
   })
 

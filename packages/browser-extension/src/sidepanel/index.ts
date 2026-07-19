@@ -9,7 +9,11 @@ import {
   readStoredServerOrigin,
   writeStoredServerOrigin,
 } from '../shared/server-config'
-import { ACTIVE_NINE1_TAB_GROUP_STORAGE_KEY } from '../shared/tab-group'
+import {
+  ACTIVE_NINE1_TAB_GROUPS_STORAGE_KEY,
+  ACTIVE_NINE1_TAB_GROUP_STORAGE_KEY,
+} from '../shared/tab-group'
+import { getDefaultNine1Tab, refreshBindingsFromStorage } from '../background/tab-group-manager'
 
 let currentFrameOrigin = ''
 let currentServerOrigin = ''
@@ -347,25 +351,15 @@ async function collectActiveTabPageContext(): Promise<unknown | undefined> {
 }
 
 async function getActiveNine1GroupTab(): Promise<chrome.tabs.Tab | undefined> {
-  try {
-    const stored = await chrome.storage.local.get({ [ACTIVE_NINE1_TAB_GROUP_STORAGE_KEY]: -1 })
-    const groupId = stored[ACTIVE_NINE1_TAB_GROUP_STORAGE_KEY]
-    if (typeof groupId !== 'number' || groupId < 0) return undefined
-
-    const tabs = await chrome.tabs.query({ groupId })
-    if (tabs.length === 0) return undefined
-
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true })
-    if (activeTab?.id && tabs.some((tab) => tab.id === activeTab.id)) return activeTab
-
-    return tabs.find((tab) => tab.active) ?? tabs[0]
-  } catch {
-    return undefined
-  }
+  await refreshBindingsFromStorage()
+  return (await getDefaultNine1Tab()) ?? undefined
 }
 
 async function ensureDedicatedTabGroup(): Promise<void> {
-  await chrome.runtime.sendMessage({ type: 'nine1bot-sidepanel-ensure-tab-group' }).catch(() => undefined)
+  await chrome.runtime.sendMessage({
+    type: 'nine1bot-sidepanel-ensure-tab-group',
+    onlyIfMissing: true,
+  }).catch(() => undefined)
 }
 
 function notifyFramePageChanged(): void {
@@ -394,7 +388,13 @@ function setupActivePageListener(): void {
   })
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && changes[ACTIVE_NINE1_TAB_GROUP_STORAGE_KEY]) {
+    if (
+      areaName === 'local'
+      && (
+        changes[ACTIVE_NINE1_TAB_GROUP_STORAGE_KEY]
+        || changes[ACTIVE_NINE1_TAB_GROUPS_STORAGE_KEY]
+      )
+    ) {
       scheduleFramePageChanged()
     }
   })
