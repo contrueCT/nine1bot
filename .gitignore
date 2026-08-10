@@ -12,6 +12,7 @@ nul
 docx/
 .vscode/
 .github/prompts/
+.worktrees/
 
 # Nine1Bot
 .nine1bot/
