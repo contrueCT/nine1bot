@@ -119,6 +119,11 @@ export namespace RuntimeResourceResolver {
   export function emptyResources(): ResourceSpec {
     return {
       builtinTools: {},
+      registeredTools: {
+        tools: [],
+        lifecycle: "session",
+        mergeMode: "additive-only",
+      },
       mcp: {
         servers: [],
         lifecycle: "session",
@@ -143,6 +148,11 @@ export namespace RuntimeResourceResolver {
 
     return {
       builtinTools: {},
+      registeredTools: {
+        tools: [],
+        lifecycle: "session",
+        mergeMode: "additive-only",
+      },
       mcp: {
         servers: mcpServers,
         lifecycle: "session",

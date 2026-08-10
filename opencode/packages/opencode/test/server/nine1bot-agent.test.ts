@@ -44,6 +44,22 @@ afterEach(async () => {
 })
 
 describe("nine1bot controller api", () => {
+  test("advertises registered platform tool support", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const response = await Server.App().request("/nine1bot/runtime/capabilities", {
+          headers: jsonHeaders,
+        })
+        expect(response.status).toBe(200)
+        const body = (await response.json()) as {
+          server: { registeredTools?: boolean }
+        }
+        expect(body.server.registeredTools).toBe(true)
+      },
+    })
+  })
+
   test("creates a profiled session and accepts a noReply message with a turn snapshot", async () => {
     await Instance.provide({
       directory: projectRoot,

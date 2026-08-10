@@ -137,6 +137,7 @@ export namespace ControllerAgentRunCompiler {
         resources: {
           mcp: resources.mcp.servers,
           skills: resources.skills.skills,
+          registeredTools: resources.registeredTools?.tools ?? [],
           builtinTools: Object.keys(body.tools ?? {}),
         },
         permissionSources,
@@ -292,6 +293,7 @@ export namespace ControllerAgentRunCompiler {
         resourceHealthEvents: true,
         sessionPermissionGrants: true,
         profileSnapshots: flags.profileSnapshotEnabled,
+        registeredTools: true,
       },
     }
   }

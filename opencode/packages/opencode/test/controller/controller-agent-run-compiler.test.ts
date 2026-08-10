@@ -108,6 +108,38 @@ describe("controller agent run compiler", () => {
     })
   })
 
+  test("audits registered tool ids frozen in the session profile", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const session = await Session.create({})
+        const profile = await SessionRuntimeProfile.read(session)
+        if (!profile) throw new Error("Expected session runtime profile")
+        await SessionRuntimeProfile.write(session, {
+          ...profile,
+          resources: {
+            ...profile.resources,
+            registeredTools: {
+              tools: ["demo_lookup"],
+              lifecycle: "session",
+              mergeMode: "additive-only",
+            },
+          },
+        })
+
+        const spec = await ControllerAgentRunCompiler.compileSpec({
+          session,
+          turnSnapshotId: "turn_registered_tool_audit",
+          body: messageBody(),
+        })
+
+        expect(spec.audit?.resources.registeredTools).toEqual(["demo_lookup"])
+
+        await Session.remove(session.id)
+      },
+    })
+  })
+
   test("audits but ignores per-turn controller agent overrides", async () => {
     await Instance.provide({
       directory: projectRoot,

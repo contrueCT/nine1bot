@@ -142,6 +142,76 @@ export type PlatformAdapterContext = {
   audit: PlatformAuditWriter
 }
 
+export type PlatformToolPermissionRequest = {
+  permission: string
+  patterns: string[]
+  always?: string[]
+}
+
+export type PlatformToolResolveContext = {
+  sessionId: string
+  projectId?: string
+  directory: string
+  agent: string
+  templateIds: string[]
+}
+
+export type PlatformToolCallContext = PlatformToolResolveContext & {
+  messageId: string
+  callId?: string
+  signal: AbortSignal
+  reportProgress(progress: {
+    title?: string
+    metadata?: Record<string, unknown>
+  }): Promise<void>
+}
+
+export type PlatformToolAvailability = {
+  status: 'unknown' | 'available' | 'degraded' | 'unavailable' | 'auth-required'
+  reason?: string
+  checkedAt?: number
+  error?: string
+  action?: {
+    type: 'open-settings' | 'start-auth' | 'retry'
+    label: string
+  }
+}
+
+export type PlatformToolResult =
+  | {
+      status: 'ok'
+      title: string
+      output: string
+      metadata?: Record<string, unknown>
+    }
+  | {
+      status: 'failed' | 'unavailable' | 'auth-required'
+      code: string
+      message: string
+      recoverable: boolean
+      action?: PlatformToolAvailability['action']
+    }
+
+export type PlatformToolDefinition<TInput = unknown> = {
+  id: string
+  description: string
+  catalogVisibility: 'declared-only' | 'user-selectable'
+  inputSchema: Record<string, unknown>
+  parse(input: unknown): TInput
+  permission?(input: TInput): PlatformToolPermissionRequest
+  availability?(
+    ctx: PlatformToolResolveContext,
+  ): PlatformToolAvailability | Promise<PlatformToolAvailability>
+  execution?: { timeoutMs?: number }
+  execute(input: TInput, ctx: PlatformToolCallContext): Promise<PlatformToolResult>
+}
+
+export type AnyPlatformToolDefinition = PlatformToolDefinition<any>
+
+export type PlatformRuntimeToolsProvider =
+  | AnyPlatformToolDefinition[]
+  | ((ctx: PlatformAdapterContext) => AnyPlatformToolDefinition[])
+
 export type PlatformControllerRequestInit = {
   method?: string
   headers?: Record<string, string>
@@ -219,6 +289,7 @@ export type PlatformAdapterContribution = {
   runtime?: {
     createAdapter: (ctx: PlatformAdapterContext) => PlatformRuntimeAdapter
     sources?: PlatformRuntimeSourcesProvider
+    tools?: PlatformRuntimeToolsProvider
   }
   backgroundServices?: (ctx: PlatformAdapterContext) => PlatformBackgroundService[]
   getStatus?: (ctx: PlatformAdapterContext) => Promise<PlatformRuntimeStatus>
@@ -251,6 +322,12 @@ export type PlatformTemplateInput = {
   page?: PlatformPagePayload
 }
 
+export type PlatformResourceContributionInput = {
+  templateIds: string[]
+  entry?: PlatformTemplateInput['entry']
+  agentName: string
+}
+
 export type PlatformRuntimeAdapter = {
   id: string
   matchPage?: (page: PlatformPagePayload) => boolean
@@ -258,7 +335,7 @@ export type PlatformRuntimeAdapter = {
   blocksFromPage?: (page: PlatformPagePayload, observedAt: number) => PlatformContextBlock[] | undefined
   inferTemplateIds?: (input: PlatformTemplateInput) => string[]
   templateContextBlocks?: (input: { templateIds: string[]; page?: PlatformPagePayload }) => PlatformContextBlock[]
-  resourceContributions?: (input: { templateIds: string[] }) => PlatformResourceContribution | undefined
+  resourceContributions?: (input: PlatformResourceContributionInput) => PlatformResourceContribution | undefined
   recommendedAgent?: (input: { templateIds: string[]; fallback: string }) => string | undefined
 }
 
@@ -287,6 +364,7 @@ export type PlatformResourceContribution = {
     enabledGroups?: string[]
     enabledTools?: string[]
   }
+  registeredTools?: PlatformRegisteredToolResourceSpec
   mcp: {
     servers: string[]
     tools?: Record<string, string[]>
@@ -302,10 +380,18 @@ export type PlatformResourceContribution = {
   }
 }
 
+export type PlatformRegisteredToolResourceSpec = {
+  tools: string[]
+  lifecycle: 'session'
+  mergeMode: 'additive-only'
+  availability?: Record<string, PlatformResourceAvailability>
+}
+
 export type PlatformResourceAvailability = {
   declared: boolean
   status: 'unknown' | 'available' | 'degraded' | 'unavailable' | 'auth-required'
   reason?: string
   checkedAt?: number
   error?: string
+  action?: PlatformToolAvailability['action']
 }

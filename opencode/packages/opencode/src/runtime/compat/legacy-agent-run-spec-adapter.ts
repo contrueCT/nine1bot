@@ -132,6 +132,7 @@ export namespace LegacyAgentRunSpecAdapter {
         resources: {
           mcp: resources.mcp.servers,
           skills: resources.skills.skills,
+          registeredTools: resources.registeredTools?.tools ?? [],
           builtinTools: Object.keys(body.tools ?? {}),
         },
         permissionSources: profile ? ["legacy-session", "profile-snapshot"] : ["legacy-session"],

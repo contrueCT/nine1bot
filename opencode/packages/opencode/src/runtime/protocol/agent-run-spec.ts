@@ -33,6 +33,7 @@ export type CapabilitySpec = {
     resourceHealthEvents?: boolean
     sessionPermissionGrants?: boolean
     profileSnapshots?: boolean
+    registeredTools?: boolean
   }
 }
 
@@ -133,6 +134,7 @@ export type ContextBlock = {
 
 export type ResourceSpec = {
   builtinTools: BuiltinToolSpec
+  registeredTools?: RegisteredToolResourceSpec
   mcp: McpResourceSpec
   skills: SkillResourceSpec
 }
@@ -140,6 +142,13 @@ export type ResourceSpec = {
 export type BuiltinToolSpec = {
   enabledGroups?: string[]
   enabledTools?: string[]
+}
+
+export type RegisteredToolResourceSpec = {
+  tools: string[]
+  lifecycle: "session"
+  mergeMode: "additive-only"
+  availability?: Record<string, ResourceAvailability>
 }
 
 export type McpResourceSpec = {
@@ -163,6 +172,10 @@ export type ResourceAvailability = {
   reason?: string
   checkedAt?: number
   error?: string
+  action?: {
+    type: "open-settings" | "start-auth" | "retry"
+    label: string
+  }
 }
 
 export type PermissionSpec = {
@@ -213,10 +226,11 @@ export type AuditSpec = {
   resources: {
     mcp: string[]
     skills: string[]
+    registeredTools?: string[]
     builtinTools?: string[]
   }
   permissionSources: string[]
-  resourceFailures?: Array<{ type: "mcp" | "skill"; id: string; status: string; error?: string }>
+  resourceFailures?: Array<{ type: "mcp" | "skill" | "tool"; id: string; status: string; error?: string }>
   legacy?: {
     adapter?: string
     promptFields?: string[]

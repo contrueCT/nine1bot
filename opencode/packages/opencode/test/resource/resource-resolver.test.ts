@@ -36,6 +36,14 @@ function testProfile(resources: SessionProfileSnapshot["resources"]): SessionPro
   }
 }
 
+test("normalizes a missing registered tool resource to an empty session resource", () => {
+  expect(RuntimeResourceResolver.emptyResources().registeredTools).toEqual({
+    tools: [],
+    lifecycle: "session",
+    mergeMode: "additive-only",
+  })
+})
+
 test("compileProfileResources freezes only enabled MCP server names", async () => {
   await using tmp = await tmpdir({
     git: true,

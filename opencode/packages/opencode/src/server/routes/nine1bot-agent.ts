@@ -49,6 +49,7 @@ async function capabilities(): Promise<RuntimeControllerProtocol.CapabilitiesRes
       sessionProfileSnapshots: await RuntimeFeatureFlags.profileSnapshotEnabled(),
       contextPipeline: await RuntimeFeatureFlags.contextPipelineEnabled(),
       resourceResolver: await RuntimeFeatureFlags.resourceResolverEnabled(),
+      registeredTools: true,
       sessionEvents: true,
       interactionEvents: true,
       artifactEvents: true,
