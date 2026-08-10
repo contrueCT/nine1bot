@@ -1,9 +1,23 @@
 import { describe, expect, test, beforeEach } from "bun:test"
+import { RuntimePlatformAdapterRegistry } from "../../src/runtime/platform/adapter"
 import { RuntimeSourceRegistry } from "../../src/runtime/source/registry"
 
 describe("RuntimeSourceRegistry", () => {
   beforeEach(() => {
+    RuntimePlatformAdapterRegistry.clearForTesting()
     RuntimeSourceRegistry.clearForTesting()
+  })
+
+  test("restores an adapter owner and exact registry revision after a replacement", () => {
+    const original = { id: "demo", recommendedAgent: () => "old" }
+    RuntimePlatformAdapterRegistry.register(original)
+    const snapshot = RuntimePlatformAdapterRegistry.captureOwner("demo")
+
+    RuntimePlatformAdapterRegistry.register({ id: "demo", recommendedAgent: () => "new" })
+    RuntimePlatformAdapterRegistry.restoreOwner(snapshot)
+
+    expect(RuntimePlatformAdapterRegistry.list()).toEqual([original])
+    expect(RuntimePlatformAdapterRegistry.version()).toBe(snapshot.revision)
   })
 
   test("registers agent and skill sources by owner", () => {
@@ -155,5 +169,46 @@ describe("RuntimeSourceRegistry", () => {
     })
     RuntimeSourceRegistry.clearForTesting()
     expect(RuntimeSourceRegistry.version()).toBe(initial + 5)
+  })
+
+  test("restores a source owner and exact registry revision after a replacement", () => {
+    RuntimeSourceRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      sources: {
+        agents: [{
+          id: "old-agents",
+          directory: "/tmp/old",
+          visibility: "declared-only",
+          lifecycle: "platform-enabled",
+        }],
+      },
+    })
+    const snapshot = RuntimeSourceRegistry.captureOwner("demo")
+
+    RuntimeSourceRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      sources: {
+        skills: [{
+          id: "new-skills",
+          directory: "/tmp/new",
+          visibility: "default",
+          lifecycle: "platform-enabled",
+        }],
+      },
+    })
+    RuntimeSourceRegistry.restoreOwner(snapshot)
+
+    expect(RuntimeSourceRegistry.listOwner("demo")).toEqual({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      agents: [{
+        id: "old-agents",
+        directory: "/tmp/old",
+        visibility: "declared-only",
+        lifecycle: "platform-enabled",
+        owner: { id: "demo", kind: "platform", enabled: true },
+      }],
+      skills: [],
+    })
+    expect(RuntimeSourceRegistry.version()).toBe(snapshot.revision)
   })
 })

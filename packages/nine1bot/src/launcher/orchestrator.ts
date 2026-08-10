@@ -8,6 +8,7 @@ import { createTunnel, type TunnelManager } from '../tunnel'
 import {
   startBuiltinPlatformBackgroundServices,
   stopBuiltinPlatformBackgroundServices,
+  unregisterBuiltinPlatformAdapters,
 } from '../platform/builtin'
 import type { PlatformControllerBridge } from '@nine1bot/platform-protocol'
 import { createAccessAuthRuntime } from '../access-auth/service'
@@ -129,6 +130,8 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
  * 停止 Nine1Bot
  */
 export async function shutdown(result: LaunchResult): Promise<void> {
+  unregisterBuiltinPlatformAdapters()
+
   // 停止隧道
   if (result.tunnel) {
     try {

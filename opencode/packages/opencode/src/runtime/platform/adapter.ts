@@ -54,17 +54,29 @@ export namespace RuntimePlatformAdapterRegistry {
     matchedTemplateIds: string[]
   }
 
+  export type OwnerSnapshot = {
+    revision: number
+    ownerID: string
+    adapter?: PlatformAdapter
+    disabled?: DisabledPlatform
+    adapterIndex?: number
+    disabledIndex?: number
+  }
+
   const adapters = new Map<string, PlatformAdapter>()
   const disabled = new Map<string, DisabledPlatform>()
+  let revision = 0
 
   export function register(adapter: PlatformAdapter) {
     disabled.delete(adapter.id)
     adapters.set(adapter.id, adapter)
+    revision++
   }
 
   export function unregister(id: string) {
-    adapters.delete(id)
-    disabled.delete(id)
+    const removedAdapter = adapters.delete(id)
+    const removedDisabled = disabled.delete(id)
+    if (removedAdapter || removedDisabled) revision++
   }
 
   export function markDisabled(input: DisabledPlatform) {
@@ -75,15 +87,48 @@ export namespace RuntimePlatformAdapterRegistry {
       templateIds: unique(input.templateIds ?? []),
       message: input.message ?? `Platform "${input.id}" is disabled by the current configuration.`,
     })
+    revision++
   }
 
   export function unmarkDisabled(id: string) {
-    disabled.delete(id)
+    if (disabled.delete(id)) revision++
   }
 
   export function clearForTesting() {
+    if (adapters.size === 0 && disabled.size === 0) return
     adapters.clear()
     disabled.clear()
+    revision++
+  }
+
+  export function version() {
+    return revision
+  }
+
+  export function captureOwner(ownerID: string): OwnerSnapshot {
+    const adapterEntries = Array.from(adapters.entries())
+    const disabledEntries = Array.from(disabled.entries())
+    const adapter = adapters.get(ownerID)
+    const disabledPlatform = disabled.get(ownerID)
+    return {
+      revision,
+      ownerID,
+      adapter,
+      disabled: disabledPlatform ? cloneDisabled(disabledPlatform) : undefined,
+      adapterIndex: adapter ? adapterEntries.findIndex(([id]) => id === ownerID) : undefined,
+      disabledIndex: disabledPlatform ? disabledEntries.findIndex(([id]) => id === ownerID) : undefined,
+    }
+  }
+
+  export function restoreOwner(snapshot: OwnerSnapshot) {
+    restoreMapEntry(adapters, snapshot.ownerID, snapshot.adapter, snapshot.adapterIndex)
+    restoreMapEntry(
+      disabled,
+      snapshot.ownerID,
+      snapshot.disabled ? cloneDisabled(snapshot.disabled) : undefined,
+      snapshot.disabledIndex,
+    )
+    revision = snapshot.revision
   }
 
   export function list() {
@@ -217,5 +262,19 @@ export namespace RuntimePlatformAdapterRegistry {
       seen.add(value)
       return true
     })
+  }
+
+  function cloneDisabled(input: DisabledPlatform): DisabledPlatform {
+    return {
+      ...input,
+      templateIds: [...(input.templateIds ?? [])],
+    }
+  }
+
+  function restoreMapEntry<T>(map: Map<string, T>, key: string, value: T | undefined, index?: number) {
+    const entries = Array.from(map.entries()).filter(([id]) => id !== key)
+    if (value !== undefined) entries.splice(Math.min(index ?? entries.length, entries.length), 0, [key, value])
+    map.clear()
+    for (const [id, entry] of entries) map.set(id, entry)
   }
 }

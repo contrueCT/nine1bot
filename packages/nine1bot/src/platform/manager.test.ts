@@ -4,15 +4,18 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import type {
+  AnyPlatformToolDefinition,
   PlatformAdapterContext,
   PlatformAdapterContribution,
   PlatformBackgroundService,
   PlatformRuntimeSourcesDescriptor,
   PlatformRuntimeSourcesProvider,
+  PlatformRuntimeToolsProvider,
   PlatformSecretAccess,
 } from '@nine1bot/platform-protocol'
 import { RuntimePlatformAdapterRegistry } from '../../../../opencode/packages/opencode/src/runtime/platform/adapter'
 import { RuntimeSourceRegistry } from '../../../../opencode/packages/opencode/src/runtime/source/registry'
+import { RuntimeToolRegistry } from '../../../../opencode/packages/opencode/src/runtime/tool/registry'
 import { PlatformAdapterManager } from './manager'
 import { getBuiltinPlatformManager, registerBuiltinPlatformAdapters, resetBuiltinPlatformManagerForTesting } from './builtin'
 import { registerGitLabPlatformAdapter } from './gitlab'
@@ -21,6 +24,7 @@ function resetPlatformState() {
   resetBuiltinPlatformManagerForTesting()
   RuntimePlatformAdapterRegistry.clearForTesting()
   RuntimeSourceRegistry.clearForTesting()
+  RuntimeToolRegistry.clearForTesting()
 }
 
 beforeEach(resetPlatformState)
@@ -29,9 +33,11 @@ afterEach(resetPlatformState)
 function contribution(id: string, options: {
   defaultEnabled?: boolean
   throws?: boolean
-  templates?: string[]
-  sources?: PlatformRuntimeSourcesProvider
-} = {}): PlatformAdapterContribution {
+    templates?: string[]
+    sources?: PlatformRuntimeSourcesProvider
+    tools?: PlatformRuntimeToolsProvider
+    createAdapter?: NonNullable<PlatformAdapterContribution['runtime']>['createAdapter']
+  } = {}): PlatformAdapterContribution {
   return {
     descriptor: {
       id,
@@ -45,16 +51,44 @@ function contribution(id: string, options: {
       },
     },
     runtime: {
-      createAdapter() {
+      createAdapter(context) {
         if (options.throws) {
           throw new Error(`${id} failed`)
         }
+        if (options.createAdapter) return options.createAdapter(context)
         return {
           id,
         }
       },
       sources: options.sources,
+      tools: options.tools,
     },
+  }
+}
+
+function toolDefinition(
+  id = 'demo_lookup',
+  options: Partial<AnyPlatformToolDefinition> = {},
+): AnyPlatformToolDefinition {
+  return {
+    id,
+    description: `Use ${id}`,
+    catalogVisibility: 'user-selectable',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+    },
+    parse(input) {
+      return input
+    },
+    async execute() {
+      return {
+        status: 'ok',
+        title: id,
+        output: id,
+      }
+    },
+    ...options,
   }
 }
 
@@ -224,6 +258,373 @@ describe('PlatformAdapterManager', () => {
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toEqual(['demo'])
     expect(manager.get('demo')?.registered).toBe(true)
+  })
+
+  it('registers adapter, sources, and tools in one successful snapshot', async () => {
+    await withRuntimeSourceDirectories(async ({ root }) => {
+      let providerCalls = 0
+      let availabilityChecks = 0
+      const manager = new PlatformAdapterManager({
+        contributions: [contribution('demo', {
+          defaultEnabled: true,
+          sources: runtimeSources(root),
+          tools: () => {
+            providerCalls += 1
+            return [toolDefinition('demo_lookup', {
+              availability() {
+                availabilityChecks += 1
+                return { status: 'available' }
+              },
+            })]
+          },
+        })],
+      })
+
+      manager.registerRuntimeAdapters()
+
+      expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('demo')
+      expect(RuntimeSourceRegistry.listOwner('demo').owner?.enabled).toBe(true)
+      expect(RuntimeToolRegistry.get('demo_lookup')).toMatchObject({
+        ownerID: 'demo',
+        generation: 1,
+      })
+      expect(await manager.getDetail('demo')).toMatchObject({
+        desiredConfigRevision: 1,
+        appliedConfigRevision: 1,
+        runtimeTools: [{
+          id: 'demo_lookup',
+          ownerId: 'demo',
+          status: 'registered',
+          generation: 1,
+        }],
+      })
+      expect(providerCalls).toBe(1)
+      expect(availabilityChecks).toBe(0)
+    })
+  })
+
+  it('publishes nothing when first tool preparation fails', () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        sources: runtimeSources(),
+        tools: () => [toolDefinition('wrong_lookup')],
+      })],
+    })
+
+    manager.registerRuntimeAdapters()
+
+    expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).not.toContain('demo')
+    expect(RuntimeSourceRegistry.listOwner('demo').owner).toBeUndefined()
+    expect(RuntimeToolRegistry.listOwner('demo').tools).toEqual([])
+    expect(manager.get('demo')).toMatchObject({
+      registered: false,
+      lifecycleStatus: 'error',
+      desiredConfigRevision: 1,
+      appliedConfigRevision: undefined,
+    })
+  })
+
+  it('reloads a changed config once and keeps byte-equivalent configure calls idempotent', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        tools: (context) => [toolDefinition('demo_lookup', {
+          description: `lookup ${String((context.settings as Record<string, unknown>).version ?? 'one')}`,
+        })],
+      })],
+      config: {
+        demo: {
+          enabled: true,
+          settings: { version: 'one' },
+        },
+      },
+    })
+    manager.registerRuntimeAdapters()
+    const first = RuntimeToolRegistry.get('demo_lookup')
+
+    const updated = await manager.updateConfig('demo', {
+      settings: { version: 'two' },
+    })
+    const second = RuntimeToolRegistry.get('demo_lookup')
+
+    expect(first?.generation).toBe(1)
+    expect(second?.generation).toBe(2)
+    expect(second?.definition).not.toBe(first?.definition)
+    expect(updated).toMatchObject({
+      desiredConfigRevision: 2,
+      appliedConfigRevision: 2,
+    })
+
+    const snapshot = manager.configSnapshot()
+    expect(manager.configure(snapshot)).toBe(false)
+    manager.registerRuntimeAdapters()
+    expect(RuntimeToolRegistry.get('demo_lookup')?.generation).toBe(2)
+  })
+
+  it('keeps the applied adapter, sources, and tool when a reload cannot be prepared', async () => {
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        createAdapter(context) {
+          const version = String((context.settings as Record<string, unknown>).version ?? 'one')
+          return {
+            id: 'demo',
+            recommendedAgent: () => version,
+          }
+        },
+        sources: (context) => ({
+          skills: [{
+            id: 'demo-skills',
+            directory: `/tmp/${String((context.settings as Record<string, unknown>).version ?? 'one')}`,
+            visibility: 'declared-only',
+            lifecycle: 'platform-enabled',
+          }],
+        }),
+        tools: (context) => {
+          const settings = context.settings as Record<string, unknown>
+          return [toolDefinition(settings.fail ? 'wrong_lookup' : 'demo_lookup')]
+        },
+      })],
+      config: {
+        demo: {
+          settings: { version: 'one' },
+        },
+      },
+    })
+    manager.registerRuntimeAdapters()
+    const adapter = RuntimePlatformAdapterRegistry.list().find((item) => item.id === 'demo')
+    const source = RuntimeSourceRegistry.listOwner('demo').skills[0]
+    const tool = RuntimeToolRegistry.get('demo_lookup')
+
+    const updated = await manager.updateConfig('demo', {
+      settings: { version: 'two', fail: true },
+    })
+
+    expect(RuntimePlatformAdapterRegistry.list().find((item) => item.id === 'demo')).toBe(adapter)
+    expect(RuntimeSourceRegistry.listOwner('demo').skills[0]).toEqual(source)
+    expect(RuntimeToolRegistry.get('demo_lookup')?.definition).toBe(tool?.definition)
+    expect(RuntimeToolRegistry.get('demo_lookup')?.generation).toBe(1)
+    expect(updated).toMatchObject({
+      registered: true,
+      lifecycleStatus: 'degraded',
+      desiredConfigRevision: 2,
+      appliedConfigRevision: 1,
+    })
+    expect(manager.configSnapshot().demo?.settings).toMatchObject({ version: 'two', fail: true })
+  })
+
+  it('does not let an action status mask a failed runtime settings reload', async () => {
+    const base = contribution('demo', {
+      defaultEnabled: true,
+      tools: (context) => [
+        toolDefinition((context.settings as Record<string, unknown>).fail ? 'wrong_lookup' : 'demo_lookup'),
+      ],
+    })
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...base,
+        descriptor: {
+          ...base.descriptor,
+          actions: [{ id: 'settings.apply', label: 'Apply', kind: 'button' }],
+        },
+        async handleAction() {
+          return {
+            status: 'ok',
+            updatedSettings: { fail: true },
+            updatedStatus: { status: 'available', message: 'stale action status' },
+          }
+        },
+      }],
+    })
+    manager.registerRuntimeAdapters()
+
+    await manager.executeAction('demo', 'settings.apply')
+
+    expect(manager.get('demo')).toMatchObject({
+      lifecycleStatus: 'degraded',
+      runtimeStatus: { status: 'degraded' },
+      desiredConfigRevision: 2,
+      appliedConfigRevision: 1,
+    })
+    expect(RuntimeToolRegistry.get('demo_lookup')?.generation).toBe(1)
+  })
+
+  it('rejects asynchronous tool providers before publishing any runtime state', () => {
+    const tools = (() => Promise.resolve([toolDefinition()])) as unknown as PlatformRuntimeToolsProvider
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        sources: runtimeSources(),
+        tools,
+      })],
+    })
+
+    manager.registerRuntimeAdapters()
+
+    expect(RuntimeToolRegistry.get('demo_lookup')).toBeUndefined()
+    expect(RuntimePlatformAdapterRegistry.list().some((item) => item.id === 'demo')).toBe(false)
+    expect(RuntimeSourceRegistry.listOwner('demo').owner).toBeUndefined()
+    expect(manager.get('demo')).toMatchObject({ lifecycleStatus: 'error', registered: false })
+  })
+
+  it('retains a running background service when reload preparation fails', async () => {
+    const background = backgroundContribution('demo', { defaultEnabled: true })
+    const dynamic = {
+      ...background.contribution,
+      runtime: {
+        ...background.contribution.runtime!,
+        tools: (context: PlatformAdapterContext) => [
+          toolDefinition((context.settings as Record<string, unknown>).fail ? 'wrong_lookup' : 'demo_lookup'),
+        ],
+      },
+    } satisfies PlatformAdapterContribution
+    const manager = new PlatformAdapterManager({
+      contributions: [dynamic],
+    })
+    manager.registerRuntimeAdapters()
+    await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:3000' })
+
+    const updated = await manager.updateConfig('demo', {
+      settings: { fail: true },
+    })
+
+    expect(updated.lifecycleStatus).toBe('degraded')
+    expect(background.counts.starts).toBe(1)
+    expect(background.counts.stops).toBe(0)
+  })
+
+  it('invalidates tools before awaiting background shutdown on explicit disable', async () => {
+    let releaseStop: (() => void) | undefined
+    let stopStarted: (() => void) | undefined
+    const stopping = new Promise<void>((resolve) => {
+      stopStarted = resolve
+    })
+    const contributionWithBlockingStop = {
+      ...contribution('demo', {
+        defaultEnabled: true,
+        sources: runtimeSources(),
+        tools: [toolDefinition()],
+      }),
+      backgroundServices: () => [{
+        id: 'blocking',
+        async start() {
+          return {
+            async stop() {
+              stopStarted?.()
+              await new Promise<void>((resolve) => {
+                releaseStop = resolve
+              })
+            },
+          }
+        },
+      }],
+    } satisfies PlatformAdapterContribution
+    const manager = new PlatformAdapterManager({ contributions: [contributionWithBlockingStop] })
+    manager.registerRuntimeAdapters()
+    await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:3000' })
+
+    const update = manager.updateConfig('demo', { enabled: false })
+    await stopping
+
+    const invalidatedBeforeStop = {
+      tool: RuntimeToolRegistry.get('demo_lookup') === undefined,
+      adapter: !RuntimePlatformAdapterRegistry.list().some((item) => item.id === 'demo'),
+      sources: RuntimeSourceRegistry.listOwner('demo').owner === undefined,
+    }
+
+    releaseStop?.()
+    await update
+    expect(invalidatedBeforeStop).toEqual({
+      tool: true,
+      adapter: true,
+      sources: true,
+    })
+    expect(await manager.getDetail('demo')).toMatchObject({
+      runtimeTools: [{ id: 'demo_lookup', status: 'disabled' }],
+    })
+  })
+
+  it('invalidates every runtime registry before shutdown callbacks begin', async () => {
+    let stateAtStop: { tool: boolean; adapter: boolean; sources: boolean } | undefined
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...contribution('demo', {
+          defaultEnabled: true,
+          sources: runtimeSources(),
+          tools: [toolDefinition()],
+        }),
+        backgroundServices: () => [{
+          id: 'observer',
+          async start() {
+            return {
+              async stop() {
+                stateAtStop = {
+                  tool: RuntimeToolRegistry.get('demo_lookup') === undefined,
+                  adapter: !RuntimePlatformAdapterRegistry.list().some((item) => item.id === 'demo'),
+                  sources: RuntimeSourceRegistry.listOwner('demo').owner === undefined,
+                }
+              },
+            }
+          },
+        }],
+      }],
+    })
+    manager.registerRuntimeAdapters()
+    await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:3000' })
+
+    manager.unregisterRuntimeAdapters()
+    await manager.stopBackgroundServices()
+
+    expect(stateAtStop).toEqual({ tool: true, adapter: true, sources: true })
+  })
+
+  it('lets an already-started tool promise finish after owner reload', async () => {
+    let releaseOld: (() => void) | undefined
+    let oldStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      oldStarted = resolve
+    })
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        tools: (context) => {
+          const version = String((context.settings as Record<string, unknown>).version ?? 'one')
+          return [toolDefinition('demo_lookup', {
+            async execute() {
+              if (version === 'one') {
+                oldStarted?.()
+                await new Promise<void>((resolve) => {
+                  releaseOld = resolve
+                })
+              }
+              return { status: 'ok', title: version, output: version }
+            },
+          })]
+        },
+      })],
+      config: {
+        demo: { settings: { version: 'one' } },
+      },
+    })
+    manager.registerRuntimeAdapters()
+    const old = RuntimeToolRegistry.get('demo_lookup')
+    const oldCall = old?.definition.execute({}, {
+      sessionId: 'session_test',
+      directory: process.cwd(),
+      agent: 'build',
+      templateIds: [],
+      messageId: 'message_test',
+      signal: new AbortController().signal,
+      async reportProgress() {},
+    })
+    await started
+
+    await manager.updateConfig('demo', { settings: { version: 'two' } })
+    releaseOld?.()
+
+    await expect(oldCall).resolves.toMatchObject({ status: 'ok', output: 'one' })
+    expect(RuntimeToolRegistry.get('demo_lookup')?.generation).toBe(2)
   })
 
   it('records adapter creation failures without blocking other contributions', () => {
@@ -734,7 +1135,7 @@ describe('PlatformAdapterManager', () => {
     expect(starts).toBe(0)
   })
 
-  it('stops previous background services before restart or reconfigure', async () => {
+  it('stops previous background services before restart or successful config update', async () => {
     let starts = 0
     let stops = 0
     const manager = new PlatformAdapterManager({
@@ -760,18 +1161,14 @@ describe('PlatformAdapterManager', () => {
     expect(starts).toBe(2)
     expect(stops).toBe(1)
 
-    manager.configure({
-      demo: {
-        enabled: false,
-      },
-    })
+    await manager.updateConfig('demo', { enabled: false })
 
     expect(stops).toBe(2)
     await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:4096' })
     expect(starts).toBe(2)
   })
 
-  it('waits for configure-triggered background service stops before starting new ones', async () => {
+  it('waits for the previous background service stop before starting a replacement', async () => {
     const events: string[] = []
     let releaseStop: (() => void) | undefined
     const manager = new PlatformAdapterManager({
@@ -796,7 +1193,6 @@ describe('PlatformAdapterManager', () => {
     })
 
     await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:4096' })
-    manager.configure({ demo: { enabled: true } })
     const restart = manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:4096' })
     await Promise.resolve()
 
@@ -868,6 +1264,23 @@ describe('PlatformAdapterManager', () => {
       id: 'feishu-official-skills',
       includeNamePrefix: 'lark-',
     }))
+  })
+
+  it('keeps repeated built-in registration with equivalent config revision-stable', () => {
+    const config = {
+      gitlab: { enabled: true },
+      feishu: { enabled: false },
+    }
+    registerBuiltinPlatformAdapters({ config })
+    const adapterRevision = RuntimePlatformAdapterRegistry.version()
+    const sourceRevision = RuntimeSourceRegistry.version()
+    const toolRevision = RuntimeToolRegistry.version()
+
+    registerBuiltinPlatformAdapters({ config: structuredClone(config) })
+
+    expect(RuntimePlatformAdapterRegistry.version()).toBe(adapterRevision)
+    expect(RuntimeSourceRegistry.version()).toBe(sourceRevision)
+    expect(RuntimeToolRegistry.version()).toBe(toolRevision)
   })
 
   it('skips built-in GitLab when config disables it', () => {

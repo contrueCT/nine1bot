@@ -45,6 +45,13 @@ export namespace RuntimeSourceRegistry {
     skills: SkillSource[]
   }
 
+  export type OwnerSnapshot = {
+    revision: number
+    ownerID: string
+    entry?: OwnerSources
+    index?: number
+  }
+
   const owners = new Map<string, OwnerSources>()
   let revision = 0
 
@@ -75,6 +82,31 @@ export namespace RuntimeSourceRegistry {
 
   export function version() {
     return revision
+  }
+
+  export function captureOwner(ownerID: string): OwnerSnapshot {
+    const entries = Array.from(owners.entries())
+    const entry = owners.get(ownerID)
+    return {
+      revision,
+      ownerID,
+      entry: entry ? cloneOwnerSources(entry) : undefined,
+      index: entry ? entries.findIndex(([id]) => id === ownerID) : undefined,
+    }
+  }
+
+  export function restoreOwner(snapshot: OwnerSnapshot) {
+    const entries = Array.from(owners.entries()).filter(([id]) => id !== snapshot.ownerID)
+    if (snapshot.entry) {
+      entries.splice(
+        Math.min(snapshot.index ?? entries.length, entries.length),
+        0,
+        [snapshot.ownerID, cloneOwnerSources(snapshot.entry)],
+      )
+    }
+    owners.clear()
+    for (const [id, entry] of entries) owners.set(id, entry)
+    revision = snapshot.revision
   }
 
   export function list(): OwnerSources {
@@ -127,6 +159,14 @@ export namespace RuntimeSourceRegistry {
     return {
       ...source,
       owner: { ...source.owner },
+    }
+  }
+
+  function cloneOwnerSources(input: OwnerSources): OwnerSources {
+    return {
+      owner: input.owner ? { ...input.owner } : undefined,
+      agents: input.agents.map(cloneAgentSource),
+      skills: input.skills.map(cloneSkillSource),
     }
   }
 }
