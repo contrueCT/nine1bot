@@ -7,6 +7,8 @@ import { Server } from "../../src/server/server"
 import { Session } from "../../src/session"
 import { SessionPrompt } from "../../src/session/prompt"
 import { RuntimeContextEvents } from "../../src/runtime/context/events"
+import { RuntimePlatformAdapterRegistry } from "../../src/runtime/platform/adapter"
+import { RuntimeResourceResolver } from "../../src/runtime/resource/resolver"
 import { Log } from "../../src/util/log"
 
 const projectRoot = path.join(__dirname, "../..")
@@ -38,6 +40,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  RuntimePlatformAdapterRegistry.clearForTesting()
   await Instance.disposeAll().catch(() => undefined)
   restoreEnv(envSnapshot)
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
@@ -181,6 +184,53 @@ describe("nine1bot controller api", () => {
         expect(body.profileSnapshot?.sourceTemplateIds).toContain("feishu-chat")
         expect(body.profileSnapshot?.context.blocks.some((block) => block.source === "template.feishu-chat")).toBe(true)
         expect(JSON.stringify(body.profileSnapshot)).not.toContain("profileSnapshotId")
+
+        await Session.remove(body.sessionId)
+      },
+    })
+  })
+
+  test("freezes the platform-recommended agent used for resource conditions into the session profile", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        let resourceAgentName: string | undefined
+        RuntimePlatformAdapterRegistry.register({
+          id: "demo",
+          recommendedAgent: ({ templateIds }) => templateIds.includes("demo-page") ? "plan" : undefined,
+          resourceContributions: ({ agentName }) => {
+            resourceAgentName = agentName
+            return RuntimeResourceResolver.emptyResources()
+          },
+        })
+
+        const created = await Server.App().request("/nine1bot/agent/sessions", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            debug: { profileSnapshot: true },
+            entry: {
+              source: "web",
+              templateIds: ["demo-page"],
+            },
+          }),
+        })
+        expect(created.status).toBe(200)
+        const body = (await created.json()) as {
+          sessionId: string
+          profileSnapshot?: {
+            agent: {
+              name: string
+              source: string
+            }
+          }
+        }
+
+        expect(resourceAgentName).toBe("plan")
+        expect(body.profileSnapshot?.agent).toEqual({
+          name: "plan",
+          source: "internal-runtime",
+        })
 
         await Session.remove(body.sessionId)
       },

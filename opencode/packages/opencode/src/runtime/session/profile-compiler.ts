@@ -14,6 +14,7 @@ import type {
 export namespace SessionProfileCompiler {
   export type ProfileTemplate = {
     templateIds?: string[]
+    agent?: SessionProfileSnapshot["agent"]
     context?: Pick<ContextSpec, "blocks" | "policy">
     resources?: ResourceSpec
     permissions?: {
@@ -34,7 +35,8 @@ export namespace SessionProfileCompiler {
   }
 
   export async function compile(input: Input): Promise<SessionProfileSnapshot> {
-    const agent = await resolveAgent(input.agentName)
+    const templateAgent = input.profileTemplate?.agent
+    const agent = await resolveAgent(templateAgent?.name ?? input.agentName)
     const defaultModel = agent.model ?? (await Provider.defaultModel())
     const resourceResolverEnabled = await RuntimeFeatureFlags.resourceResolverEnabled()
     const templateIds = input.templateIds ?? input.profileTemplate?.templateIds ?? [
@@ -61,7 +63,7 @@ export namespace SessionProfileCompiler {
       ],
       agent: {
         name: agent.name,
-        source: input.agentName ? "session-choice" : "default-user-template",
+        source: templateAgent?.source ?? (input.agentName ? "session-choice" : "default-user-template"),
       },
       defaultModel: {
         providerID: defaultModel.providerID,

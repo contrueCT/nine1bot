@@ -263,7 +263,6 @@ export async function createControllerSession(input?: RuntimeControllerProtocol.
     directory: input?.directory ?? Instance.directory,
     permission,
     source: "new-session",
-    agentName: sessionChoice?.agent,
     profileTemplate: template.profileTemplate,
   })
   const session = await Session.createNext({

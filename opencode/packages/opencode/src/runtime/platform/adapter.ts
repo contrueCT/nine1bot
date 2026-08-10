@@ -22,6 +22,12 @@ export namespace RuntimePlatformAdapterRegistry {
     page?: PagePayload
   }
 
+  export type PlatformResourceContributionInput = {
+    templateIds: string[]
+    entry?: TemplateInput["entry"]
+    agentName: string
+  }
+
   export type PlatformAdapter = {
     id: string
     matchPage?: (page: PagePayload) => boolean
@@ -29,7 +35,7 @@ export namespace RuntimePlatformAdapterRegistry {
     blocksFromPage?: (page: PagePayload, observedAt: number) => ContextBlock[] | undefined
     inferTemplateIds?: (input: TemplateInput) => string[]
     templateContextBlocks?: (input: { templateIds: string[]; page?: PagePayload }) => ContextBlock[]
-    resourceContributions?: (input: { templateIds: string[] }) => ResourceSpec | undefined
+    resourceContributions?: (input: PlatformResourceContributionInput) => ResourceSpec | undefined
     recommendedAgent?: (input: { templateIds: string[]; fallback: string }) => string | undefined
   }
 
@@ -122,11 +128,14 @@ export namespace RuntimePlatformAdapterRegistry {
     return Array.from(adapters.values()).flatMap((adapter) => adapter.templateContextBlocks?.({ ...input, templateIds }) ?? [])
   }
 
-  export function resourceContributions(input: { templateIds: string[] }): ResourceSpec[] {
+  export function resourceContributions(input: PlatformResourceContributionInput): Array<{
+    ownerID: string
+    resources: ResourceSpec
+  }> {
     const templateIds = activeTemplateIds(input.templateIds)
     return Array.from(adapters.values()).flatMap((adapter) => {
       const resources = adapter.resourceContributions?.({ ...input, templateIds })
-      return resources ? [resources] : []
+      return resources ? [{ ownerID: adapter.id, resources }] : []
     })
   }
 

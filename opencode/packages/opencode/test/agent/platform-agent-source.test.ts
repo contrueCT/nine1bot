@@ -5,6 +5,7 @@ import { Bus } from "../../src/bus"
 import { ControllerAgentRunCompiler } from "../../src/runtime/controller/agent-run-compiler"
 import { RuntimePlatformAdapterRegistry } from "../../src/runtime/platform/adapter"
 import { ControllerTemplateResolver } from "../../src/runtime/controller/template-resolver"
+import { RuntimeResourceResolver } from "../../src/runtime/resource/resolver"
 import { RuntimeSourceRegistry } from "../../src/runtime/source/registry"
 import { SessionProfileCompiler } from "../../src/runtime/session/profile-compiler"
 import { Session } from "../../src/session"
@@ -318,9 +319,14 @@ test("template resolver validates platform recommended agents", async () => {
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
+      let resourceAgentName: string | undefined
       RuntimePlatformAdapterRegistry.register({
         id: "gitlab",
         recommendedAgent: () => "gitlab.review",
+        resourceContributions: ({ agentName }) => {
+          resourceAgentName = agentName
+          return RuntimeResourceResolver.emptyResources()
+        },
       })
       registerAgentSource({
         id: "gitlab-agents",
@@ -342,6 +348,15 @@ test("template resolver validates platform recommended agents", async () => {
         accepted: true,
         platform: "gitlab",
       }))
+      const acceptedProfile = await SessionProfileCompiler.compile({
+        source: "new-session",
+        profileTemplate: accepted.profileTemplate,
+      })
+      expect(resourceAgentName).toBe(acceptedProfile.agent.name)
+      expect(acceptedProfile.agent).toEqual({
+        name: "gitlab.review",
+        source: "internal-runtime",
+      })
 
       RuntimeSourceRegistry.unregisterOwner("gitlab")
 

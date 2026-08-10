@@ -6,12 +6,15 @@ import { RuntimeContextPipeline } from "@/runtime/context/pipeline"
 import type {
   ContextBlock,
   OrchestrationSpec,
+  ResourceAvailability,
   ResourceSpec,
   SessionProfileSnapshot,
 } from "@/runtime/protocol/agent-run-spec"
 import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 import { RuntimeControllerProtocol } from "@/runtime/controller/protocol"
 import { RuntimePlatformAdapterRegistry } from "@/runtime/platform/adapter"
+import { RuntimeToolRegistrationError, RuntimeToolRegistry } from "@/runtime/tool/registry"
+import { sanitizePlatformToolDiagnostic } from "@/runtime/tool/sanitize"
 
 export namespace ControllerTemplateResolver {
   export type Input = {
@@ -23,6 +26,7 @@ export namespace ControllerTemplateResolver {
 
   export type ProfileTemplate = {
     templateIds: string[]
+    agent: SessionProfileSnapshot["agent"]
     context: SessionProfileSnapshot["context"]
     resources: ResourceSpec
     orchestration: OrchestrationSpec
@@ -50,6 +54,7 @@ export namespace ControllerTemplateResolver {
     resources: {
       builtinGroups: string[]
       builtinTools: string[]
+      registeredTools: string[]
       mcp: string[]
       skills: string[]
     }
@@ -72,6 +77,7 @@ export namespace ControllerTemplateResolver {
     resourcesPreview: {
       builtinTools: string[]
       builtinGroups: string[]
+      registeredTools: string[]
       mcp: string[]
       skills: string[]
     }
@@ -108,12 +114,22 @@ export namespace ControllerTemplateResolver {
     const templateIds = RuntimePlatformAdapterRegistry.activeTemplateIds(rawTemplateIds)
     const agent = await resolveAgent(input.sessionChoice?.agent)
     const agentRecommendation = await recommendedAgent(templateIds, agent.name)
-    const defaultModel = agent.model ?? (await Provider.defaultModel())
+    const effectiveAgent: SessionProfileSnapshot["agent"] = {
+      name: agentRecommendation.value,
+      source: agentRecommendation.audit?.accepted
+        ? "internal-runtime"
+        : input.sessionChoice?.agent
+          ? "session-choice"
+          : "default-user-template",
+    }
+    const effectiveAgentInfo = effectiveAgent.name === agent.name ? agent : await resolveAgent(effectiveAgent.name)
+    const defaultModel = effectiveAgentInfo.model ?? (await Provider.defaultModel())
+    const selectedResources = resourcesFromSelection(input.sessionChoice?.resources)
     const resources = (await RuntimeFeatureFlags.resourceResolverEnabled())
       ? mergeResources(
           await RuntimeResourceResolver.compileProfileResources(),
-          resourcesForTemplates(templateIds),
-          resourcesFromSelection(input.sessionChoice?.resources),
+          resourcesForTemplates(templateIds, input.entry, effectiveAgent.name),
+          selectedResources,
         )
       : RuntimeResourceResolver.emptyResources()
     const contextBlocks = blocksForTemplates(templateIds, input)
@@ -135,6 +151,7 @@ export namespace ControllerTemplateResolver {
       resources: {
         builtinGroups: resources.builtinTools.enabledGroups ?? [],
         builtinTools: resources.builtinTools.enabledTools ?? [],
+        registeredTools: resources.registeredTools?.tools ?? [],
         mcp: resources.mcp.servers,
         skills: resources.skills.skills,
       },
@@ -162,12 +179,14 @@ export namespace ControllerTemplateResolver {
       resourcesPreview: {
         builtinGroups: resources.builtinTools.enabledGroups ?? [],
         builtinTools: resources.builtinTools.enabledTools ?? [],
+        registeredTools: resources.registeredTools?.tools ?? [],
         mcp: resources.mcp.servers,
         skills: resources.skills.skills,
       },
       orchestration,
       profileTemplate: {
         templateIds,
+        agent: effectiveAgent,
         context: {
           blocks: contextBlocks,
         },
@@ -281,7 +300,11 @@ export namespace ControllerTemplateResolver {
     return dedupeBlocks(blocks)
   }
 
-  function resourcesForTemplates(templateIds: string[]) {
+  function resourcesForTemplates(
+    templateIds: string[],
+    entry: RuntimeControllerProtocol.Entry,
+    agentName: string,
+  ) {
     const resources = RuntimeResourceResolver.emptyResources()
     for (const templateId of templateIds) {
       if (templateId === "web-chat") {
@@ -294,12 +317,33 @@ export namespace ControllerTemplateResolver {
         resources.builtinTools.enabledGroups = union(resources.builtinTools.enabledGroups, ["browser-context"])
       }
     }
-    for (const contribution of RuntimePlatformAdapterRegistry.resourceContributions({ templateIds })) {
-      resources.builtinTools.enabledGroups = union(resources.builtinTools.enabledGroups, contribution.builtinTools.enabledGroups)
-      resources.builtinTools.enabledTools = union(resources.builtinTools.enabledTools, contribution.builtinTools.enabledTools)
-      resources.mcp.servers = union(resources.mcp.servers, contribution.mcp.servers)
-      resources.mcp.tools = mergeMcpTools(resources.mcp.tools, contribution.mcp.tools)
-      resources.skills.skills = union(resources.skills.skills, contribution.skills.skills)
+    for (const contribution of RuntimePlatformAdapterRegistry.resourceContributions({
+      templateIds,
+      entry,
+      agentName,
+    })) {
+      const declaredTools = unique(contribution.resources.registeredTools?.tools ?? [])
+      RuntimeToolRegistry.assertOwned(contribution.ownerID, declaredTools)
+      resources.builtinTools.enabledGroups = union(
+        resources.builtinTools.enabledGroups,
+        contribution.resources.builtinTools.enabledGroups,
+      )
+      resources.builtinTools.enabledTools = union(
+        resources.builtinTools.enabledTools,
+        contribution.resources.builtinTools.enabledTools,
+      )
+      resources.registeredTools = mergeRegisteredTools(resources.registeredTools, {
+        tools: declaredTools,
+        lifecycle: "session",
+        mergeMode: "additive-only",
+        availability: normalizeDeclaredAvailability(
+          declaredTools,
+          contribution.resources.registeredTools?.availability,
+        ),
+      })
+      resources.mcp.servers = union(resources.mcp.servers, contribution.resources.mcp.servers)
+      resources.mcp.tools = mergeMcpTools(resources.mcp.tools, contribution.resources.mcp.tools)
+      resources.skills.skills = union(resources.skills.skills, contribution.resources.skills.skills)
     }
     return resources
   }
@@ -308,6 +352,9 @@ export namespace ControllerTemplateResolver {
     const resources = RuntimeResourceResolver.emptyResources()
     resources.builtinTools.enabledGroups = unique(selection?.builtinTools?.enabledGroups ?? [])
     resources.builtinTools.enabledTools = unique(selection?.builtinTools?.enabledTools ?? [])
+    const selectedTools = unique(selection?.registeredTools?.tools ?? [])
+    RuntimeToolRegistry.assertUserSelectable(selectedTools)
+    resources.registeredTools!.tools = selectedTools
     resources.mcp.servers = unique(selection?.mcp?.servers ?? [])
     resources.mcp.tools = selection?.mcp?.tools
     resources.skills.skills = unique(selection?.skills?.skills ?? [])
@@ -319,6 +366,7 @@ export namespace ControllerTemplateResolver {
     for (const item of items) {
       result.builtinTools.enabledGroups = union(result.builtinTools.enabledGroups, item.builtinTools.enabledGroups)
       result.builtinTools.enabledTools = union(result.builtinTools.enabledTools, item.builtinTools.enabledTools)
+      result.registeredTools = mergeRegisteredTools(result.registeredTools, item.registeredTools)
       result.mcp.servers = union(result.mcp.servers, item.mcp.servers)
       result.mcp.tools = mergeMcpTools(result.mcp.tools, item.mcp.tools)
       result.skills.skills = union(result.skills.skills, item.skills.skills)
@@ -335,6 +383,88 @@ export namespace ControllerTemplateResolver {
       result[server] = union(result[server], tools)
     }
     return Object.keys(result).length > 0 ? result : undefined
+  }
+
+  function mergeRegisteredTools(
+    current: ResourceSpec["registeredTools"],
+    next: ResourceSpec["registeredTools"],
+  ): NonNullable<ResourceSpec["registeredTools"]> {
+    const availability = {
+      ...(current?.availability ?? {}),
+      ...(next?.availability ?? {}),
+    }
+    return {
+      tools: union(current?.tools, next?.tools),
+      lifecycle: "session",
+      mergeMode: "additive-only",
+      ...(Object.keys(availability).length > 0 ? { availability } : {}),
+    }
+  }
+
+  function normalizeDeclaredAvailability(
+    declaredTools: string[],
+    input: Record<string, ResourceAvailability> | undefined,
+  ) {
+    if (input === undefined) return undefined
+    if (!isRecord(input)) throw invalidAvailability()
+
+    const declared = new Set(declaredTools)
+    const result: Record<string, ResourceAvailability> = {}
+    for (const [toolID, value] of Object.entries(input)) {
+      if (!declared.has(toolID)) continue
+      if (!isRecord(value) || typeof value.declared !== "boolean" || !isAvailabilityStatus(value.status)) {
+        throw invalidAvailability()
+      }
+      if (value.reason !== undefined && typeof value.reason !== "string") throw invalidAvailability()
+      if (value.error !== undefined && typeof value.error !== "string") throw invalidAvailability()
+      if (value.checkedAt !== undefined && (!Number.isFinite(value.checkedAt) || value.checkedAt < 0)) {
+        throw invalidAvailability()
+      }
+      if (value.action !== undefined && !isAvailabilityAction(value.action)) throw invalidAvailability()
+
+      result[toolID] = {
+        declared: value.declared,
+        status: value.status,
+        ...(value.reason !== undefined ? { reason: sanitizePlatformToolDiagnostic(value.reason) } : {}),
+        ...(value.checkedAt !== undefined ? { checkedAt: value.checkedAt } : {}),
+        ...(value.error !== undefined ? { error: sanitizePlatformToolDiagnostic(value.error) } : {}),
+        ...(value.action
+          ? {
+              action: {
+                type: value.action.type,
+                label: sanitizePlatformToolDiagnostic(value.action.label),
+              },
+            }
+          : {}),
+      }
+    }
+    return Object.keys(result).length > 0 ? result : undefined
+  }
+
+  function isAvailabilityStatus(value: unknown): value is ResourceAvailability["status"] {
+    return (
+      value === "unknown" ||
+      value === "available" ||
+      value === "degraded" ||
+      value === "unavailable" ||
+      value === "auth-required"
+    )
+  }
+
+  function isAvailabilityAction(value: unknown): value is NonNullable<ResourceAvailability["action"]> {
+    if (!isRecord(value) || typeof value.label !== "string" || !value.label.trim()) return false
+    return value.type === "open-settings" || value.type === "start-auth" || value.type === "retry"
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+  }
+
+  function invalidAvailability() {
+    return new RuntimeToolRegistrationError(
+      "invalid-availability",
+      "Registered tool declaration availability is invalid.",
+    )
   }
 
   function normalizePage(page?: RuntimeContextEvents.RequestPagePayload) {

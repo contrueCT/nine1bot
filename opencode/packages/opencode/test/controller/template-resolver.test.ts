@@ -4,11 +4,17 @@ import { ControllerTemplateResolver } from "../../src/runtime/controller/templat
 import { RuntimePlatformAdapterRegistry } from "../../src/runtime/platform/adapter"
 import { RuntimeResourceResolver } from "../../src/runtime/resource/resolver"
 import { SessionProfileCompiler } from "../../src/runtime/session/profile-compiler"
+import {
+  RuntimeToolRegistrationError,
+  RuntimeToolRegistry,
+  RuntimeToolSelectionError,
+} from "../../src/runtime/tool/registry"
 import { tmpdir } from "../fixture/fixture"
 
 describe("controller template resolver", () => {
   afterEach(() => {
     RuntimePlatformAdapterRegistry.clearForTesting()
+    RuntimeToolRegistry.clearForTesting()
   })
 
   test("creates distinct scene templates for web, Feishu, and registered browser platform sessions", async () => {
@@ -216,4 +222,194 @@ describe("controller template resolver", () => {
       },
     })
   })
+
+  test("merges owner-checked platform declarations and user-selectable choices", async () => {
+    const fixtureSecret = "demo-runtime-secret-value"
+    registerDemoTools(fixtureSecret)
+
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        RuntimePlatformAdapterRegistry.register({
+          id: "demo",
+          resourceContributions: ({ templateIds, agentName }) =>
+            templateIds.includes("demo-page") && agentName === "build"
+              ? {
+                  ...RuntimeResourceResolver.emptyResources(),
+                  registeredTools: {
+                    tools: ["demo_declared", "demo_declared"],
+                    lifecycle: "session",
+                    mergeMode: "additive-only",
+                    availability: {
+                      demo_declared: {
+                        declared: true,
+                        status: "degraded",
+                        reason: "token=demo-runtime-secret-value",
+                        action: {
+                          type: "open-settings",
+                          label: "Open settings with Authorization: Bearer demo-runtime-secret-value",
+                        },
+                      },
+                      demo_not_declared: {
+                        declared: true,
+                        status: "available",
+                      },
+                    },
+                  },
+                }
+              : undefined,
+        })
+
+        const resolved = await ControllerTemplateResolver.resolve({
+          entry: { source: "web", templateIds: ["demo-page"] },
+          sessionChoice: {
+            resources: { registeredTools: { tools: ["demo_selectable", "demo_selectable"] } },
+          },
+        })
+        const profile = await SessionProfileCompiler.compile({
+          source: "new-session",
+          profileTemplate: resolved.profileTemplate,
+        })
+
+        expect(resolved.profileTemplate.resources.registeredTools?.tools).toEqual([
+          "demo_declared",
+          "demo_selectable",
+        ])
+        expect(resolved.resourcesPreview.registeredTools).toEqual([
+          "demo_declared",
+          "demo_selectable",
+        ])
+        expect(resolved.audit.resources.registeredTools).toEqual([
+          "demo_declared",
+          "demo_selectable",
+        ])
+        expect(profile.resources.registeredTools).toEqual({
+          tools: ["demo_declared", "demo_selectable"],
+          lifecycle: "session",
+          mergeMode: "additive-only",
+          availability: {
+            demo_declared: {
+              declared: true,
+              status: "degraded",
+              reason: "token=[REDACTED]",
+              action: {
+                type: "open-settings",
+                label: "Open settings with Authorization: [REDACTED]",
+              },
+            },
+          },
+        })
+
+        const serialized = JSON.stringify(profile)
+        expect(serialized).not.toContain("inputSchema")
+        expect(serialized).not.toContain("generation")
+        expect(serialized).not.toContain("execute")
+        expect(serialized).not.toContain(fixtureSecret)
+        expect(serialized).not.toContain("demo_not_declared")
+      },
+    })
+  })
+
+  test("rejects platform declarations owned by another adapter", async () => {
+    registerDemoTools("owner-secret")
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "other", kind: "platform", enabled: true },
+      tools: [definition("other_tool", "declared-only", "other-secret")],
+    })
+
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        RuntimePlatformAdapterRegistry.register({
+          id: "demo",
+          resourceContributions: () => ({
+            ...RuntimeResourceResolver.emptyResources(),
+            registeredTools: {
+              tools: ["other_tool"],
+              lifecycle: "session",
+              mergeMode: "additive-only",
+            },
+          }),
+        })
+
+        try {
+          await ControllerTemplateResolver.resolve({
+            entry: { source: "web", templateIds: ["demo-page"] },
+          })
+          throw new Error("expected cross-owner declaration to fail")
+        } catch (error) {
+          expect(error).toBeInstanceOf(RuntimeToolRegistrationError)
+          expect((error as RuntimeToolRegistrationError).code).toBe("tool-ownership")
+        }
+      },
+    })
+  })
+
+  test("rejects direct selection of a declared-only registered tool", async () => {
+    registerDemoTools("selection-secret")
+
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        runtime: {
+          resourceResolver: {
+            enabled: false,
+          },
+        },
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        try {
+          await ControllerTemplateResolver.resolve({
+            sessionChoice: {
+              resources: { registeredTools: { tools: ["demo_declared"] } },
+            },
+          })
+          throw new Error("expected declared-only selection to fail")
+        } catch (error) {
+          expect(error).toBeInstanceOf(RuntimeToolSelectionError)
+          expect((error as RuntimeToolSelectionError).invalid).toEqual([
+            { id: "demo_declared", reason: "declared-only" },
+          ])
+          expect(String(error)).not.toContain("selection-secret")
+        }
+      },
+    })
+  })
 })
+
+function registerDemoTools(secret: string) {
+  RuntimeToolRegistry.registerOwner({
+    owner: { id: "demo", kind: "platform", enabled: true },
+    tools: [
+      definition("demo_declared", "declared-only", secret),
+      definition("demo_selectable", "user-selectable", secret),
+    ],
+  })
+}
+
+function definition(
+  id: string,
+  catalogVisibility: RuntimeToolRegistry.Definition["catalogVisibility"],
+  secret: string,
+): RuntimeToolRegistry.Definition {
+  return {
+    id,
+    description: `Fixture tool ${id}.`,
+    catalogVisibility,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+    },
+    parse: (input) => input,
+    execute: async () => ({
+      status: "ok",
+      title: id,
+      output: secret,
+    }),
+  }
+}
