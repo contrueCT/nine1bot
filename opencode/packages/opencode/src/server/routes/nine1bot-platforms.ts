@@ -1,5 +1,12 @@
 import { Hono } from "hono"
 import z from "zod"
+import { Agent } from "@/agent/agent"
+import { MCP } from "@/mcp"
+import { PermissionNext } from "@/permission/next"
+import { Instance } from "@/project/instance"
+import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
+import { RuntimeToolCatalog } from "@/runtime/tool/catalog"
+import { ToolRegistry } from "@/tool/registry"
 import {
   getBuiltinPlatformManager,
   registerBuiltinPlatformAdapters,
@@ -28,6 +35,11 @@ const PlatformActionBodySchema = z.object({
   input: z.unknown().optional(),
   confirm: z.boolean().optional(),
 }).strict().default({})
+
+const ToolCatalogQuerySchema = z.object({
+  agent: z.string().min(1).optional(),
+  templateIds: z.string().optional(),
+}).strict()
 
 function platformSecrets() {
   return new FilePlatformSecretStore(process.env.NINE1BOT_PLATFORM_SECRETS_PATH)
@@ -76,6 +88,20 @@ async function parseJson(c: { req: { json: () => Promise<unknown> } }) {
   }
 }
 
+function parseTemplateIds(value?: string) {
+  if (!value) return []
+  return [...new Set(
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  )]
+}
+
+function isExposureDenied(toolID: string, ruleset: PermissionNext.Ruleset) {
+  return PermissionNext.disabled([toolID], ruleset).has(toolID)
+}
+
 export const Nine1BotPlatformRoutes = () =>
   new Hono()
     .get("/", async (c) => {
@@ -83,6 +109,74 @@ export const Nine1BotPlatformRoutes = () =>
         const manager = await syncManagerFromConfig()
         return c.json({
           platforms: manager.listSummaries(),
+        })
+      } catch (error) {
+        return c.json(errorBody(error), errorStatus(error))
+      }
+    })
+    .get("/tools", async (c) => {
+      try {
+        await syncManagerFromConfig()
+        const parsed = ToolCatalogQuerySchema.safeParse({
+          agent: c.req.query("agent") || undefined,
+          templateIds: c.req.query("templateIds"),
+        })
+        if (!parsed.success) {
+          return c.json({
+            error: "Invalid platform tool catalog query",
+            fieldErrors: Object.fromEntries(
+              parsed.error.issues.map((issue) => [issue.path.join(".") || "query", issue.message]),
+            ),
+          }, 400)
+        }
+
+        const requestedAgent = parsed.data.agent
+        const agentName = requestedAgent ?? (await Agent.defaultAgent())
+        const agent = await Agent.mustGet(
+          agentName,
+          requestedAgent
+            ? { includeDeclaredOnly: true, includeRecommendable: true }
+            : undefined,
+        )
+        const templateIds = parseTemplateIds(parsed.data.templateIds)
+        const [nativeToolIDs, baseResources] = await Promise.all([
+          ToolRegistry.ids(),
+          RuntimeResourceResolver.resolve({
+            sessionID: "platform-tool-catalog",
+            projectID: Instance.project.id,
+            directory: Instance.directory,
+            agent: agent.name,
+            templateIds,
+            emitFailures: false,
+            emitResolved: false,
+          }),
+        ])
+        const mcpToolIDs = Object.keys(await MCP.tools({
+          servers: baseResources.mcp.availableServers,
+        }))
+        const summaries = await RuntimeToolCatalog.listSelectable({
+          context: {
+            sessionId: "platform-tool-catalog",
+            projectId: Instance.project.id,
+            directory: Instance.directory,
+            agent: agent.name,
+            templateIds,
+          },
+          occupiedToolIDs: new Set([...nativeToolIDs, ...mcpToolIDs]),
+          isExposureDenied: (toolID) => isExposureDenied(toolID, agent.permission),
+        })
+
+        return c.json({
+          tools: summaries.map((tool) => ({
+            id: tool.id,
+            ownerId: tool.ownerId,
+            description: tool.description,
+            catalogVisibility: tool.catalogVisibility,
+            status: tool.status,
+            generation: tool.generation,
+            unavailableReason: tool.unavailableReason,
+            action: tool.action,
+          })),
         })
       } catch (error) {
         return c.json(errorBody(error), errorStatus(error))

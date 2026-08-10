@@ -5,13 +5,19 @@ import path from "path"
 import { Instance } from "../../src/project/instance"
 import { Server } from "../../src/server/server"
 import { RuntimePlatformAdapterRegistry } from "../../src/runtime/platform/adapter"
+import { RuntimeToolRegistry } from "../../src/runtime/tool/registry"
 import { Log } from "../../src/util/log"
 import {
+  builtinPlatformContributions,
   getBuiltinPlatformManager,
   registerBuiltinPlatformAdapters,
   resetBuiltinPlatformManagerForTesting,
 } from "../../../../../packages/nine1bot/src/platform/builtin"
 import { FilePlatformSecretStore } from "../../../../../packages/nine1bot/src/platform/secrets"
+import type {
+  AnyPlatformToolDefinition,
+  PlatformAdapterContribution,
+} from "../../../../../packages/platform-protocol/src"
 
 const projectRoot = path.join(__dirname, "../..")
 const jsonHeaders = {
@@ -20,6 +26,7 @@ const jsonHeaders = {
 }
 
 const tempDirs: string[] = []
+const builtinContributionCount = builtinPlatformContributions.length
 let envSnapshot: NodeJS.ProcessEnv
 
 Log.init({ print: false })
@@ -27,17 +34,33 @@ Log.init({ print: false })
 beforeEach(async () => {
   envSnapshot = { ...process.env }
   resetPlatformState()
+  const configDir = await mkdtemp(path.join(tmpdir(), "nine1bot-platform-opencode-"))
+  tempDirs.push(configDir)
+  const opencodeConfigPath = path.join(configDir, "opencode.json")
+  await writeFile(opencodeConfigPath, JSON.stringify({
+    model: "test-provider/test-model",
+    permission: {
+      demo_hidden: "deny",
+    },
+  }), "utf-8")
+  process.env.OPENCODE_CONFIG = opencodeConfigPath
+  process.env.OPENCODE_DISABLE_GLOBAL_CONFIG = "true"
+  process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "true"
+  process.env.OPENCODE_DISABLE_PLUGIN_DEPENDENCY_INSTALL = "true"
 })
 
 afterEach(async () => {
   restoreEnv(envSnapshot)
   resetPlatformState()
+  ;(builtinPlatformContributions as PlatformAdapterContribution[]).splice(builtinContributionCount)
+  await Instance.disposeAll().catch(() => undefined)
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
 function resetPlatformState() {
   resetBuiltinPlatformManagerForTesting()
   RuntimePlatformAdapterRegistry.clearForTesting()
+  RuntimeToolRegistry.clearForTesting()
 }
 
 function restoreEnv(snapshot: NodeJS.ProcessEnv) {
@@ -72,6 +95,62 @@ async function request(pathname: string, init?: RequestInit) {
   })
 }
 
+function toolDefinition(
+  id: string,
+  options: Partial<AnyPlatformToolDefinition> = {},
+): AnyPlatformToolDefinition {
+  return {
+    id,
+    description: `Use ${id}`,
+    catalogVisibility: "user-selectable",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+    },
+    parse(input) {
+      return input
+    },
+    async execute() {
+      return {
+        status: "ok",
+        title: id,
+        output: id,
+      }
+    },
+    ...options,
+  }
+}
+
+function testPlatformContribution(): PlatformAdapterContribution {
+  return {
+    descriptor: {
+      id: "test-platform",
+      name: "Test Platform",
+      packageName: "@nine1bot/platform-test",
+      version: "0.0.0-test",
+      defaultEnabled: true,
+      capabilities: {
+        templates: ["test-platform-page"],
+        resources: true,
+      },
+      actions: [{
+        id: "fixture.missing",
+        label: "Missing fixture action",
+        kind: "button",
+      }],
+    },
+    runtime: {
+      createAdapter: () => ({ id: "test-platform" }),
+      tools(context) {
+        if ((context.settings as Record<string, unknown>).fail === true) {
+          throw new Error("test platform tool provider failed")
+        }
+        return [toolDefinition("test_platform_lookup")]
+      },
+    },
+  }
+}
+
 describe("nine1bot platform api", () => {
   test("lists platforms and returns GitLab detail", async () => {
     await setupPlatformConfig({})
@@ -99,10 +178,120 @@ describe("nine1bot platform api", () => {
       descriptor: { id: string }
       actions: Array<{ id: string }>
       runtimeStatus: { status: string }
+      runtimeTools?: unknown[]
+      desiredConfigRevision: number
+      appliedConfigRevision?: number
     }
     expect(detailBody.descriptor.id).toBe("gitlab")
     expect(detailBody.actions.map((action) => action.id)).toContain("connection.test")
     expect(detailBody.runtimeStatus.status).toBe("available")
+    expect(detailBody.runtimeTools).toBeUndefined()
+    expect(detailBody.desiredConfigRevision).toBe(1)
+    expect(detailBody.appliedConfigRevision).toBe(1)
+  })
+
+  test("returns a project-aware secret-safe selectable tool catalog", async () => {
+    const fixtureSecret = "fixture-tool-token-value"
+    await setupPlatformConfig({})
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      tools: [
+        toolDefinition("demo_ready", {
+          execute: async () => ({ status: "ok", title: "ready", output: fixtureSecret }),
+        }),
+        toolDefinition("demo_declared", { catalogVisibility: "declared-only" }),
+        toolDefinition("demo_auth", {
+          availability: () => ({
+            status: "auth-required",
+            reason: `token=${fixtureSecret}`,
+            action: {
+              type: "open-settings",
+              label: `Authorization: Bearer ${fixtureSecret}`,
+            },
+          }),
+        }),
+        toolDefinition("demo_hidden"),
+      ],
+    })
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "display", kind: "platform", enabled: true },
+      tools: [toolDefinition("display_file")],
+    })
+
+    const response = await request(
+      "/nine1bot/platforms/tools?agent=build&templateIds=browser-generic,browser-generic",
+      { method: "GET", headers: jsonHeaders },
+    )
+    expect(response.status).toBe(200)
+    const body = await response.json() as {
+      tools: Array<{
+        id: string
+        ownerId: string
+        status: string
+        unavailableReason?: string
+        action?: { type: string; label: string }
+      }>
+    }
+
+    expect(body.tools.map((tool) => tool.id)).toEqual([
+      "demo_auth",
+      "demo_ready",
+      "display_file",
+    ])
+    expect(body.tools.find((tool) => tool.id === "demo_ready")?.status).toBe("registered")
+    expect(body.tools.find((tool) => tool.id === "demo_auth")).toMatchObject({
+      ownerId: "demo",
+      status: "auth-required",
+      action: { type: "open-settings" },
+    })
+    expect(body.tools.find((tool) => tool.id === "display_file")?.status).toBe("conflict")
+
+    const serialized = JSON.stringify(body)
+    for (const key of ["inputSchema", "parse", "execute", "settings", "cookie", "Authorization"]) {
+      expect(serialized).not.toContain(`\"${key}\"`)
+    }
+    expect(serialized).not.toContain(fixtureSecret)
+    expect(serialized).not.toContain("demo_declared")
+    expect(serialized).not.toContain("demo_hidden")
+  }, 30_000)
+
+  test("keeps the last catalog generation live when a persisted reload degrades", async () => {
+    ;(builtinPlatformContributions as PlatformAdapterContribution[]).push(testPlatformContribution())
+    const { configPath } = await setupPlatformConfig({
+      platforms: {
+        "test-platform": {
+          settings: { fail: false },
+        },
+      },
+    })
+
+    const initial = await request("/nine1bot/platforms/test-platform", {
+      method: "GET",
+      headers: jsonHeaders,
+    })
+    expect(initial.status).toBe(200)
+    await expect(initial.json()).resolves.toMatchObject({
+      runtimeTools: [{ id: "test_platform_lookup", generation: 1 }],
+      desiredConfigRevision: 1,
+      appliedConfigRevision: 1,
+    })
+
+    const updated = await request("/nine1bot/platforms/test-platform", {
+      method: "PATCH",
+      headers: jsonHeaders,
+      body: JSON.stringify({ settings: { fail: true } }),
+    })
+    expect(updated.status).toBe(200)
+    await expect(updated.json()).resolves.toMatchObject({
+      lifecycleStatus: "degraded",
+      runtimeTools: [{ id: "test_platform_lookup", generation: 1 }],
+      desiredConfigRevision: 2,
+      appliedConfigRevision: 1,
+    })
+
+    const stored = JSON.parse(await readFile(configPath, "utf-8"))
+    expect(stored.platforms["test-platform"].settings.fail).toBe(true)
+    expect(RuntimeToolRegistry.get("test_platform_lookup")?.generation).toBe(1)
   })
 
   test("patches platform enabled state and updates runtime registry", async () => {
@@ -154,9 +343,10 @@ describe("nine1bot platform api", () => {
   })
 
   test("executes declared action as structured failed result when handler is missing", async () => {
+    ;(builtinPlatformContributions as PlatformAdapterContribution[]).push(testPlatformContribution())
     await setupPlatformConfig({})
 
-    const response = await request("/nine1bot/platforms/gitlab/actions/connection.test", {
+    const response = await request("/nine1bot/platforms/test-platform/actions/fixture.missing", {
       method: "POST",
       headers: jsonHeaders,
       body: JSON.stringify({}),
@@ -165,7 +355,7 @@ describe("nine1bot platform api", () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({
       status: "failed",
-      message: "Action is not implemented: connection.test",
+      message: "Action is not implemented: fixture.missing",
     })
   })
 

@@ -9,6 +9,7 @@ import { SessionPrompt } from "../../src/session/prompt"
 import { RuntimeContextEvents } from "../../src/runtime/context/events"
 import { RuntimePlatformAdapterRegistry } from "../../src/runtime/platform/adapter"
 import { RuntimeResourceResolver } from "../../src/runtime/resource/resolver"
+import { RuntimeToolRegistry } from "../../src/runtime/tool/registry"
 import { Log } from "../../src/util/log"
 
 const projectRoot = path.join(__dirname, "../..")
@@ -41,6 +42,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   RuntimePlatformAdapterRegistry.clearForTesting()
+  RuntimeToolRegistry.clearForTesting()
   await Instance.disposeAll().catch(() => undefined)
   restoreEnv(envSnapshot)
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
@@ -402,6 +404,77 @@ describe("nine1bot controller api", () => {
     }
   })
 
+  test("reports declared and conflict-finalized registered tools in session debug", async () => {
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      tools: [registeredToolDefinition("demo_lookup")],
+    })
+    RuntimePlatformAdapterRegistry.register({
+      id: "demo",
+      resourceContributions: ({ templateIds }) => templateIds.includes("demo-page")
+        ? {
+            ...RuntimeResourceResolver.emptyResources(),
+            registeredTools: {
+              tools: ["demo_lookup"],
+              lifecycle: "session",
+              mergeMode: "additive-only",
+            },
+          }
+        : undefined,
+    })
+
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const app = Server.App()
+        const created = await app.request("/nine1bot/agent/sessions", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            entry: {
+              source: "web",
+              templateIds: ["demo-page"],
+            },
+            debug: { profileSnapshot: true },
+          }),
+        })
+        expect(created.status).toBe(200)
+        const createdBody = await created.json() as { sessionId: string }
+
+        try {
+          const response = await app.request(
+            `/nine1bot/agent/sessions/${createdBody.sessionId}/debug`,
+            { method: "GET", headers: jsonHeaders },
+          )
+          expect(response.status).toBe(200)
+          const body = await response.json() as {
+            registeredTools?: {
+              declared: string[]
+              resolved: Array<{
+                id: string
+                ownerId: string
+                generation: number
+                status: string
+                reason?: string
+              }>
+            }
+          }
+          expect(body.registeredTools?.declared).toEqual(["demo_lookup"])
+          expect(body.registeredTools?.resolved).toEqual([{
+            id: "demo_lookup",
+            ownerId: "demo",
+            generation: 1,
+            status: "available",
+          }])
+          expect(JSON.stringify(body.registeredTools)).not.toContain("inputSchema")
+          expect(JSON.stringify(body.registeredTools)).not.toContain("execute")
+        } finally {
+          await Session.remove(createdBody.sessionId)
+        }
+      },
+    })
+  }, 30_000)
+
   test("busy controller message returns 409 before writing user message or page context", async () => {
     await Instance.provide({
       directory: projectRoot,
@@ -461,5 +534,27 @@ function restoreEnv(snapshot: NodeJS.ProcessEnv) {
   for (const [key, value] of Object.entries(snapshot)) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
+  }
+}
+
+function registeredToolDefinition(id: string): RuntimeToolRegistry.Definition {
+  return {
+    id,
+    description: `Use ${id}`,
+    catalogVisibility: "declared-only",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+    },
+    parse(input) {
+      return input
+    },
+    async execute() {
+      return {
+        status: "ok",
+        title: id,
+        output: id,
+      }
+    },
   }
 }

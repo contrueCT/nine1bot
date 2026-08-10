@@ -3,7 +3,9 @@ import { streamSSE } from "hono/streaming"
 import { describeRoute, resolver, validator } from "hono-openapi"
 import { HTTPException } from "hono/http-exception"
 import z from "zod"
+import { Agent } from "@/agent/agent"
 import { Bus } from "@/bus"
+import { MCP } from "@/mcp"
 import { Instance } from "@/project/instance"
 import { PermissionNext } from "@/permission/next"
 import { Question } from "@/question"
@@ -20,6 +22,7 @@ import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 import { ControllerTemplateResolver } from "@/runtime/controller/template-resolver"
 import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
+import { ToolRegistry } from "@/tool/registry"
 import { Log } from "@/util/log"
 import { lazy } from "@/util/lazy"
 import { NamedError } from "@opencode-ai/util/error"
@@ -505,14 +508,35 @@ async function debugSession(sessionID: string) {
     RuntimeContextEvents.list({ sessionID, projectID: session.projectID }),
     Session.messages({ sessionID, limit: 20 }),
   ])
-  const resourceResolution = profileSnapshot
-    ? await RuntimeResourceResolver.resolve({
-        sessionID,
-        profile: profileSnapshot,
-        emitFailures: false,
-        emitResolved: false,
-      })
-    : undefined
+  let resourceResolution: RuntimeResourceResolver.Resolved | undefined
+  if (profileSnapshot) {
+    const profileAgent = await Agent.get(profileSnapshot.agent.name, {
+      includeDeclaredOnly: true,
+      includeRecommendable: true,
+    })
+    const ruleset = profileAgent
+      ? PermissionNext.merge(profileAgent.permission, session.permission ?? [])
+      : undefined
+    const preliminary = await RuntimeResourceResolver.resolve({
+      sessionID,
+      profile: profileSnapshot,
+      projectID: session.projectID,
+      directory: session.directory,
+      agent: profileSnapshot.agent.name,
+      templateIds: profileSnapshot.sourceTemplateIds,
+      isToolExposureDenied: (toolID) => !ruleset || PermissionNext.disabled([toolID], ruleset).has(toolID),
+      emitFailures: false,
+      emitResolved: false,
+    })
+    const [nativeToolIDs, mcpTools] = await Promise.all([
+      ToolRegistry.ids(),
+      MCP.tools({ servers: preliminary.mcp.availableServers }),
+    ])
+    resourceResolution = RuntimeResourceResolver.applyToolConflicts(
+      preliminary,
+      new Set([...nativeToolIDs, ...Object.keys(mcpTools)]),
+    )
+  }
   return {
     version: RuntimeControllerProtocol.VERSION,
     sessionId: sessionID,
@@ -525,6 +549,16 @@ async function debugSession(sessionID: string) {
     },
     profileSnapshot,
     resourceAudit: resourceResolution?.audit,
+    registeredTools: {
+      declared: resourceResolution?.audit.declared.registeredTools ?? [],
+      resolved: resourceResolution?.registeredTools.availableTools.map((tool) => ({
+        id: tool.id,
+        ownerId: tool.ownerID,
+        generation: tool.generation,
+        status: tool.availability.status,
+        reason: tool.availability.reason,
+      })) ?? [],
+    },
     contextEvents,
     recentMessages: messages.map((message) => ({
       id: message.info.id,
