@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { RuntimeToolCatalog } from "../../src/runtime/tool/catalog"
+import {
+  PLATFORM_TOOL_AVAILABILITY_BUDGET_MS,
+  RuntimeToolCatalog,
+} from "../../src/runtime/tool/catalog"
 import { RuntimeToolRegistry } from "../../src/runtime/tool/registry"
 
 describe("RuntimeToolCatalog", () => {
   afterEach(() => {
     RuntimeToolRegistry.clearForTesting()
+  })
+
+  test("uses a 500ms default availability budget for catalog and invocation checks", () => {
+    expect(PLATFORM_TOOL_AVAILABILITY_BUDGET_MS).toBe(500)
   })
 
   test("resolves available, degraded, unknown, auth-required, and conflicting tools with one budget", async () => {

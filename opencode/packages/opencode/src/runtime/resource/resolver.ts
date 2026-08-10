@@ -356,8 +356,8 @@ export namespace RuntimeResourceResolver {
         .filter((failure) => failure.resourceType === "tool")
         .map((failure) => failure.resourceID),
     )
-    for (const reference of input.resolved.registeredTools.availableTools) {
-      if (!failedToolIDs.has(reference.id)) clearToolFailure(input.sessionID, reference.id)
+    for (const toolID of input.resolved.registeredTools.declaredTools) {
+      if (!failedToolIDs.has(toolID)) clearToolFailure(input.sessionID, toolID)
     }
 
     for (const failure of input.resolved.failures) {

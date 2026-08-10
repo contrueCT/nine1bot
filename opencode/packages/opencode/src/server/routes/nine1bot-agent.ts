@@ -22,7 +22,7 @@ import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 import { ControllerTemplateResolver } from "@/runtime/controller/template-resolver"
 import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
-import { RuntimeToolSelectionError } from "@/runtime/tool/registry"
+import { RuntimeToolRegistry, RuntimeToolSelectionError } from "@/runtime/tool/registry"
 import { ToolRegistry } from "@/tool/registry"
 import { Log } from "@/util/log"
 import { lazy } from "@/util/lazy"
@@ -242,10 +242,17 @@ function mergeBrowserExtensionResources(
     }
   }
   if (config.registeredTools?.length) {
+    const registeredTools = config.registeredTools.filter((toolID) => {
+      const reference = RuntimeToolRegistry.get(toolID)
+      return Boolean(
+        reference?.owner.enabled &&
+        reference.definition.catalogVisibility === "user-selectable",
+      )
+    })
     merged.registeredTools = {
       tools: unique([
         ...(merged.registeredTools?.tools ?? []),
-        ...config.registeredTools,
+        ...registeredTools,
       ]),
     }
   }

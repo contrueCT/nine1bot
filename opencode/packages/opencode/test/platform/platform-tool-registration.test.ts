@@ -6,6 +6,7 @@ import type {
   PlatformAdapterContext,
 } from "../../../../../packages/platform-protocol/src"
 import { PlatformAdapterManager } from "../../../../../packages/nine1bot/src/platform/manager"
+import { Agent } from "../../src/agent/agent"
 import type { Provider } from "../../src/provider/provider"
 import { Instance } from "../../src/project/instance"
 import { ControllerTemplateResolver } from "../../src/runtime/controller/template-resolver"
@@ -19,6 +20,8 @@ import {
   RuntimeToolRegistrationError,
   RuntimeToolRegistry,
 } from "../../src/runtime/tool/registry"
+import { Session } from "../../src/session"
+import { SessionPrompt } from "../../src/session/prompt"
 import { tmpdir } from "../fixture/fixture"
 
 const ownerID = "test-platform"
@@ -178,6 +181,64 @@ describe("platform tool registration lifecycle", () => {
 
     manager.unregisterRuntimeAdapters()
   }, 30_000)
+
+  test("assembles registered tools through the real session prompt and preserves native conflicts", async () => {
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      tools: [lookupDefinition({ secret: "fixture", version: "prompt" }, "demo_lookup")],
+    })
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "display", kind: "platform", enabled: true },
+      tools: [lookupDefinition({ secret: "fixture", version: "collision" }, "display_file")],
+    })
+
+    await using project = await tmpdir({
+      git: true,
+      config: { model: "test-provider/test-model" },
+    })
+    await Instance.provide({
+      directory: project.path,
+      fn: async () => {
+        const session = await Session.create({
+          permission: [{ permission: "demo_lookup", pattern: "*", action: "allow" }],
+        })
+        const agent = await Agent.mustGet("build")
+        const demo = resolvedReference("demo_lookup")
+        const collision = resolvedReference("display_file")
+        const resources = resolvedResources([demo, collision])
+
+        const resolved = await SessionPrompt._testing.resolveTools({
+          agent,
+          session,
+          model: testModel(),
+          processor: {
+            message: { id: "message_prompt_integration" },
+            partFromToolCall: () => undefined,
+          } as never,
+          bypassAgentCheck: false,
+          messages: [],
+          resources,
+          templateIds: ["test-platform-page"],
+          abort: new AbortController().signal,
+        })
+
+        expect(resolved.tools.demo_lookup).toBeDefined()
+        expect(await resolved.tools.demo_lookup!.execute!(
+          { query: "wired" },
+          toolOptions("call-prompt-integration"),
+        )).toMatchObject({
+          title: "Test lookup",
+          output: "lookup:prompt:wired",
+        })
+        expect(resolved.tools.display_file).toBeDefined()
+        expect(resolved.resources?.registeredTools.availableTools.map((tool) => tool.id)).toEqual(["demo_lookup"])
+        expect(resolved.resources?.failures).toContainEqual(expect.objectContaining({
+          resourceID: "display_file",
+          code: "tool-conflict",
+        }))
+      },
+    })
+  }, 30_000)
 })
 
 function testContribution(secret: string): PlatformAdapterContribution {
@@ -303,6 +364,9 @@ async function executeReference(
         async isExposureDenied() {
           return false
         },
+        async isPermissionDenied() {
+          return false
+        },
       }
     },
   })
@@ -314,6 +378,53 @@ function testModel() {
     providerID: "google",
     api: { id: "gemini-3-pro" },
   } as Provider.Model
+}
+
+function resolvedReference(id: string): RuntimeToolCatalog.ResolvedReference {
+  const registered = RuntimeToolRegistry.get(id)
+  if (!registered) throw new Error(`Missing registered tool fixture: ${id}`)
+  return {
+    id: registered.id,
+    ownerID: registered.ownerID,
+    generation: registered.generation,
+    definition: registered.definition,
+    availability: { status: "available" },
+  }
+}
+
+function resolvedResources(
+  references: RuntimeToolCatalog.ResolvedReference[],
+): RuntimeResourceResolver.Resolved {
+  const ids = references.map((reference) => reference.id)
+  const availability = Object.fromEntries(ids.map((id) => [id, {
+    declared: true,
+    status: "available" as const,
+    checkedAt: Date.now(),
+  }]))
+  return {
+    builtinTools: {},
+    registeredTools: {
+      declaredTools: ids,
+      availableTools: references,
+      availability,
+    },
+    mcp: {
+      declaredServers: [],
+      availableServers: [],
+      availability: {},
+    },
+    skills: {
+      declaredSkills: [],
+      availableSkills: [],
+      availability: {},
+    },
+    failures: [],
+    audit: {
+      declared: { mcp: [], skills: [], registeredTools: ids },
+      resolved: { mcp: [], skills: [], registeredTools: ids },
+      unavailable: [],
+    },
+  }
 }
 
 function toolOptions(toolCallId: string): ToolCallOptions {

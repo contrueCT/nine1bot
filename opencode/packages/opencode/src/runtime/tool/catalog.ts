@@ -3,7 +3,7 @@ import type { PlatformToolRuntimeCode } from "./errors"
 import { RuntimeToolRegistry } from "./registry"
 import { sanitizePlatformToolDiagnostic } from "./sanitize"
 
-const DEFAULT_AVAILABILITY_BUDGET_MS = 500
+export const PLATFORM_TOOL_AVAILABILITY_BUDGET_MS = 500
 const AVAILABILITY_TIMEOUT = Symbol("platform-tool-availability-timeout")
 const TOOL_ID = /^[a-z][a-z0-9_]*$/
 const SAFE_INVALID_ID = "[invalid-tool-id]"
@@ -397,8 +397,8 @@ export namespace RuntimeToolCatalog {
   }
 
   function normalizeBudget(value?: number) {
-    if (value === undefined) return DEFAULT_AVAILABILITY_BUDGET_MS
-    if (!Number.isFinite(value)) return DEFAULT_AVAILABILITY_BUDGET_MS
+    if (value === undefined) return PLATFORM_TOOL_AVAILABILITY_BUDGET_MS
+    if (!Number.isFinite(value)) return PLATFORM_TOOL_AVAILABILITY_BUDGET_MS
     return Math.max(1, Math.trunc(value))
   }
 

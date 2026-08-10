@@ -49,6 +49,9 @@ jobs:
       - name: Test maintained workspace
         run: bun run ci:test
 
+      - name: Test maintained OpenCode runtime
+        run: bun run ci:test:opencode-runtime
+
   build:
     strategy:
       fail-fast: false

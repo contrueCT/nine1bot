@@ -129,6 +129,9 @@ describe("PlatformToolAssembly", () => {
           async isExposureDenied() {
             return false
           },
+          async isPermissionDenied() {
+            return false
+          },
         }
       },
     })

@@ -7,6 +7,7 @@ import { Config } from "../../src/config/config"
 import { Instance } from "../../src/project/instance"
 import { Provider } from "../../src/provider/provider"
 import { Server } from "../../src/server/server"
+import { RuntimeToolRegistry } from "../../src/runtime/tool/registry"
 import { Log } from "../../src/util/log"
 
 Log.init({ print: false })
@@ -23,9 +24,10 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  RuntimeToolRegistry.clearForTesting()
   restoreEnv(envSnapshot)
   await Instance.disposeAll().catch(() => undefined)
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+  await Promise.all(tempDirs.splice(0).map(removeTempDirectory))
 })
 
 describe("config routes reload behavior", () => {
@@ -123,6 +125,36 @@ describe("config routes reload behavior", () => {
     } finally {
       disposed.stop()
     }
+  })
+
+  test("rejects missing or declared-only browser registered tool defaults", async () => {
+    const setup = await setupProject()
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      tools: [
+        registeredToolDefinition("demo_lookup", "user-selectable"),
+        registeredToolDefinition("demo_declared", "declared-only"),
+      ],
+    })
+
+    const valid = await request(setup.projectDir, "/config/nine1bot/browser-extension", {
+      method: "PATCH",
+      headers: jsonHeaders,
+      body: JSON.stringify({ registeredTools: ["demo_lookup"] }),
+    })
+    expect(valid.status).toBe(200)
+
+    for (const toolID of ["demo_declared", "demo_missing"]) {
+      const invalid = await request(setup.projectDir, "/config/nine1bot/browser-extension", {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ registeredTools: [toolID] }),
+      })
+      expect(invalid.status).toBe(400)
+    }
+
+    const stored = JSON.parse(await readFile(setup.nine1botConfigPath, "utf-8"))
+    expect(stored.browser.sidepanel.registeredTools).toEqual(["demo_lookup"])
   })
 
   test("custom provider upsert and delete refresh providers without disposing the current instance", async () => {
@@ -244,6 +276,20 @@ describe("config routes reload behavior", () => {
   })
 })
 
+function registeredToolDefinition(
+  id: string,
+  catalogVisibility: "declared-only" | "user-selectable",
+): RuntimeToolRegistry.Definition {
+  return {
+    id,
+    description: `Use ${id}`,
+    catalogVisibility,
+    inputSchema: { type: "object" },
+    parse: (input) => input,
+    execute: async () => ({ status: "ok", title: id, output: id }),
+  }
+}
+
 async function setupProject() {
   const projectDir = await mkdtemp(path.join(tmpdir(), "opencode-config-routes-"))
   tempDirs.push(projectDir)
@@ -313,5 +359,21 @@ function restoreEnv(snapshot: NodeJS.ProcessEnv) {
   for (const [key, value] of Object.entries(snapshot)) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
+  }
+}
+
+async function removeTempDirectory(directory: string) {
+  try {
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    })
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    // Bun can leave refreshed config files delete-pending until process exit on Windows.
+    if (process.platform === "win32" && code === "EBUSY") return
+    throw error
   }
 }

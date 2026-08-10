@@ -389,6 +389,8 @@ Registry 以 owner ID 为批量更新单位，并提供以下行为：
 
 `createAdapter`、source provider 和 tool provider 在准备阶段不能启动后台任务或产生不可回滚的外部副作用。Background service 继续由 PlatformManager 在提交成功后按现有生命周期启动。
 
+更新已有 secret 时写入新的不可变本地 secret ref，不能原地覆盖或提前删除旧 ref。这样准备失败时旧 runtime 仍读取旧凭据，配置持久化失败时也能用旧配置引用恢复旧 background service；未被当前持久化配置引用的历史 ref 可以由独立清理流程回收。
+
 首次启用的准备阶段失败时，不发布该平台的 adapter、source 或工具，平台状态为 `error`。已有平台重载失败时继续运行最后一次成功快照，平台状态为 `degraded`，并分别记录 desired config revision 和 applied config revision。缺少用户认证属于 runtime availability，不属于定义注册失败。
 
 显式停用采用失效优先顺序：先把 owner 标记为不可用并递增 generation，再移除 adapter、source 和工具。已经开始执行的调用不会因配置重载被强制终止，但仍响应 session `AbortSignal`；等待权限但尚未执行的调用会在 generation 复查时失败。
@@ -462,7 +464,7 @@ sequenceDiagram
 
 参数级权限在 `parse()` 成功后计算。例如读取指定文档的工具可以把文档 ID 映射为 pattern；用户拒绝该 pattern 时不执行远程请求。`permission()` 抛出异常、返回空 patterns 或返回非法值时按拒绝处理。
 
-每个平台注册工具始终使用 `tool.id` 作为 exposure permission key，因此按工具 ID 配置 hard deny 可以在发送模型前过滤，并作为运行时紧急开关。未提供 `permission()` 时，调用权限也使用 `tool.id` 和 `*`；自定义 `permission()` 只替换调用阶段的 permission key 和 patterns。授权等待结束后必须复查 exposure deny 和 generation，避免用户确认的是旧定义，实际执行的却是新配置。
+每个平台注册工具始终使用 `tool.id` 作为 exposure permission key，因此按工具 ID 配置 hard deny 可以在发送模型前过滤，并作为运行时紧急开关。未提供 `permission()` 时，调用权限也使用 `tool.id` 和 `*`；自定义 `permission()` 只替换调用阶段的 permission key 和 patterns。授权等待结束后必须用当前规则复查已解析 permission patterns、exposure deny 和 generation，避免用户确认的是旧策略或旧定义，实际执行的却是新配置。
 
 平台工具的 before hook 可以沿用现有参数改写能力，但 parser 和权限计算必须使用 hook 完成后的最终参数；否则 plugin 改写资源 ID 后可能沿用改写前的授权结果。平台工具实现只接收已经完成 parser 和权限校验的输入。
 
@@ -475,6 +477,8 @@ sequenceDiagram
 ### 7.3 超时、取消和并发
 
 工具没有声明 `execution.timeoutMs` 时默认限制为 60 秒；声明值必须是正整数，且不能超过 5 分钟。有效超时取工具限制、5 分钟 runtime 硬上限以及当前 turn 剩余 deadline 中的最小值。执行计时在权限通过并完成 generation 复查后开始，不把用户等待授权的时间算入 60 秒，但显式 turn deadline 始终可以终止等待。执行器创建派生的 `AbortSignal` 并把它传给平台实现；平台必须继续把信号传入 HTTP 和 SDK 调用。
+
+平台工具的 before/after plugin hook 同样必须响应 session 取消和 turn deadline；即使 hook 忽略信号或返回永不 settle 的 Promise，统一执行链也会停止等待。没有更短 turn deadline 时，单个 hook 的等待上限为 60 秒。
 
 第一版在主进程内运行受信任代码，JavaScript 无法强制终止忽略取消信号的 Promise，也无法撤销已经产生的外部副作用。因此平台工具必须异步、可重入并遵守取消信号，不能执行无界同步计算。共享 service 负责平台 API 自身的限流和并发控制；第一版不增加通用平台工具队列。
 

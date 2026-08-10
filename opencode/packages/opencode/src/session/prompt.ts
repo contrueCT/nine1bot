@@ -390,6 +390,7 @@ export namespace SessionPrompt {
   export const _testing = {
     reserve: RunLease.reserve,
     release: RunLease.release,
+    resolveTools,
   }
 
   async function acceptPrompt(input: PromptInput, timing?: RuntimeTiming.Trace) {
@@ -1534,6 +1535,16 @@ export namespace SessionPrompt {
             sessionID: input.session.id,
             callID: options.toolCallId,
           }
+          const currentRuleset = async () => {
+            const [currentAgent, currentSession] = await Promise.all([
+              Agent.mustGet(input.agent.name, {
+                includeDeclaredOnly: true,
+                includeRecommendable: true,
+              }),
+              Session.get(input.session.id),
+            ])
+            return PermissionNext.merge(currentAgent.permission, currentSession.permission ?? [])
+          }
           return {
             reference,
             rawInput,
@@ -1557,7 +1568,7 @@ export namespace SessionPrompt {
             async afterHook(result) {
               await Plugin.trigger("tool.execute.after", hookContext, result)
             },
-            askPermission: (request, signal) => PermissionNext.ask({
+            askPermission: async (request, signal) => PermissionNext.ask({
               ...request,
               sessionID: input.session.id,
               metadata: {},
@@ -1566,20 +1577,19 @@ export namespace SessionPrompt {
                 messageID: input.processor.message.id,
                 callID: options.toolCallId,
               },
-              ruleset: PermissionNext.merge(input.agent.permission, input.session.permission ?? []),
+              ruleset: await currentRuleset(),
               signal,
             }),
             isExposureDenied: async (toolID) => {
-              const [currentAgent, currentSession] = await Promise.all([
-                Agent.mustGet(input.agent.name, {
-                  includeDeclaredOnly: true,
-                  includeRecommendable: true,
-                }),
-                Session.get(input.session.id),
-              ])
               return isToolExposureDenied(
                 toolID,
-                PermissionNext.merge(currentAgent.permission, currentSession.permission ?? []),
+                await currentRuleset(),
+              )
+            },
+            isPermissionDenied: async (request) => {
+              const ruleset = await currentRuleset()
+              return request.patterns.some(
+                (pattern) => PermissionNext.evaluate(request.permission, pattern, ruleset).action === "deny",
               )
             },
             publishFailure: async (failure) => {

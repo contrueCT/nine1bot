@@ -12,6 +12,7 @@ import type {
   PlatformRuntimeSourcesProvider,
   PlatformRuntimeToolsProvider,
   PlatformSecretAccess,
+  PlatformSecretRef,
 } from '@nine1bot/platform-protocol'
 import { RuntimePlatformAdapterRegistry } from '../../../../opencode/packages/opencode/src/runtime/platform/adapter'
 import { RuntimeSourceRegistry } from '../../../../opencode/packages/opencode/src/runtime/source/registry'
@@ -494,6 +495,45 @@ describe('PlatformAdapterManager', () => {
     expect(background.counts.stops).toBe(0)
   })
 
+  it('stops a disabled owner even when another owner has a degraded runtime snapshot', async () => {
+    const alpha = backgroundContribution('alpha', { defaultEnabled: true })
+    const beta = backgroundContribution('beta', { defaultEnabled: true })
+    const manager = new PlatformAdapterManager({
+      contributions: [
+        {
+          ...alpha.contribution,
+          runtime: {
+            ...alpha.contribution.runtime!,
+            tools: (context: PlatformAdapterContext) => [
+              toolDefinition(
+                (context.settings as Record<string, unknown>).fail
+                  ? 'wrong_lookup'
+                  : 'alpha_lookup',
+              ),
+            ],
+          },
+        },
+        beta.contribution,
+      ],
+    })
+    manager.registerRuntimeAdapters()
+    await manager.startBackgroundServices({ localUrl: 'http://127.0.0.1:3000' })
+
+    await manager.updateConfig('alpha', { settings: { fail: true } })
+    expect(manager.get('alpha')).toMatchObject({ lifecycleStatus: 'degraded' })
+
+    await manager.updateConfig('beta', { enabled: false })
+
+    expect(alpha.counts.starts).toBe(1)
+    expect(alpha.counts.stops).toBe(0)
+    expect(beta.counts.starts).toBe(1)
+    expect(beta.counts.stops).toBe(1)
+    expect(manager.get('beta')).toMatchObject({
+      enabled: false,
+      lifecycleStatus: 'disabled',
+    })
+  })
+
   it('invalidates tools before awaiting background shutdown on explicit disable', async () => {
     let releaseStop: (() => void) | undefined
     let stopStarted: (() => void) | undefined
@@ -651,6 +691,34 @@ describe('PlatformAdapterManager', () => {
       registered: true,
       lifecycleStatus: 'healthy',
     })
+  })
+
+  it('redacts tool provider failures before exposing manager diagnostics', async () => {
+    const secret = 'manager-provider-secret'
+    const audit: unknown[] = []
+    const manager = new PlatformAdapterManager({
+      contributions: [contribution('demo', {
+        defaultEnabled: true,
+        tools: () => {
+          throw new Error(`Authorization: Bearer ${secret}`)
+        },
+      })],
+      audit: {
+        write(entry) {
+          audit.push(entry)
+        },
+      },
+    })
+
+    manager.registerRuntimeAdapters()
+
+    const serialized = JSON.stringify({
+      record: manager.get('demo'),
+      detail: await manager.getDetail('demo'),
+      audit,
+    })
+    expect(serialized).not.toContain(secret)
+    expect(serialized).toContain('[REDACTED]')
   })
 
   it('passes configured settings, features, and secrets into adapter context', async () => {
@@ -1580,6 +1648,88 @@ describe('PlatformAdapterManager', () => {
         },
       },
     })
+  })
+
+  it('keeps the applied runtime on its previous secret when a reload degrades', async () => {
+    const secrets = memorySecrets()
+    const previousRef = {
+      provider: 'nine1bot-local',
+      key: 'platform:demo:default:token',
+    } satisfies PlatformSecretRef
+    const base = contribution('demo', { defaultEnabled: true })
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...base,
+        descriptor: {
+          ...base.descriptor,
+          config: {
+            sections: [{
+              id: 'auth',
+              title: 'Auth',
+              fields: [
+                { key: 'token', label: 'Token', type: 'password', secret: true },
+                { key: 'fail', label: 'Fail', type: 'boolean' },
+              ],
+            }],
+          },
+        },
+        runtime: {
+          ...base.runtime!,
+          tools(context) {
+            const settings = context.settings as Record<string, unknown>
+            if (settings.fail === true) throw new Error('fixture reload failed')
+            const tokenRef = settings.token as PlatformSecretRef
+            return [toolDefinition('demo_lookup', {
+              async execute() {
+                return {
+                  status: 'ok',
+                  title: 'Token snapshot',
+                  output: await context.secrets.get(tokenRef) ?? 'missing',
+                }
+              },
+            })]
+          },
+        },
+      }],
+      config: {
+        demo: {
+          settings: { token: previousRef },
+        },
+      },
+      secrets: secrets.access,
+    })
+    await secrets.access.set(previousRef, 'old-secret')
+    manager.registerRuntimeAdapters()
+
+    await manager.updateConfig('demo', {
+      settings: {
+        token: 'new-secret',
+        fail: true,
+      },
+    })
+
+    const desiredRef = manager.configSnapshot().demo?.settings?.token as PlatformSecretRef
+    expect(desiredRef).not.toEqual(previousRef)
+    await expect(secrets.access.get(previousRef)).resolves.toBe('old-secret')
+    await expect(secrets.access.get(desiredRef)).resolves.toBe('new-secret')
+    expect(manager.get('demo')).toMatchObject({
+      lifecycleStatus: 'degraded',
+      desiredConfigRevision: 2,
+      appliedConfigRevision: 1,
+    })
+
+    const retained = RuntimeToolRegistry.get('demo_lookup')
+    expect(retained).toBeDefined()
+    await expect(retained!.definition.execute({}, {
+      sessionId: 'session_test',
+      directory: process.cwd(),
+      agent: 'build',
+      templateIds: [],
+      messageId: 'message_test',
+      callId: 'call_test',
+      signal: new AbortController().signal,
+      async reportProgress() {},
+    })).resolves.toMatchObject({ output: 'old-secret' })
   })
 
   it('treats null setting patch values as field clears', async () => {

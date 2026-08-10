@@ -14,7 +14,7 @@ import {
   type Skill,
 } from '../api/client'
 import { getTrustedExtensionParentContext, isTrustedExtensionParentEvent } from '../utils/extension-parent'
-import { platformToolRows } from '../utils/platform-tool-catalog'
+import { platformToolRows, stalePlatformToolIDs } from '../utils/platform-tool-catalog'
 import { platformSettingsUrl } from '../utils/settings-deeplink'
 
 const emit = defineEmits<{
@@ -42,6 +42,8 @@ const providers = ref<Provider[]>([])
 const mcpServers = ref<McpServer[]>([])
 const skills = ref<Skill[]>([])
 const platformTools = ref<PlatformToolSummary[]>([])
+const platformToolCatalogLoaded = ref(false)
+const platformToolCatalogError = ref('')
 const config = ref<BrowserExtensionConfig>({})
 
 const selectedModel = ref('')
@@ -76,10 +78,11 @@ const enabledMcpServers = computed(() =>
   mcpServers.value.filter((server) => server.status !== 'disabled'),
 )
 const registeredToolRows = computed(() => platformToolRows(platformTools.value))
-const staleRegisteredToolIDs = computed(() => {
-  const known = new Set(registeredToolRows.value.map((tool) => tool.id))
-  return selectedRegisteredTools.value.filter((toolID) => !known.has(toolID)).sort()
-})
+const staleRegisteredToolIDs = computed(() => stalePlatformToolIDs(
+  selectedRegisteredTools.value,
+  registeredToolRows.value,
+  platformToolCatalogLoaded.value,
+))
 
 function getStatusText(status: string): string {
   switch (status) {
@@ -216,6 +219,8 @@ function handleParentMessage(event: MessageEvent) {
 
 async function loadSettings() {
   loading.value = true
+  platformToolCatalogLoaded.value = false
+  platformToolCatalogError.value = ''
   setStatus('')
   try {
     const [browserConfig, providerResult, servers, skillList, toolList, relay] = await Promise.all([
@@ -223,14 +228,22 @@ async function loadSettings() {
       providerApi.list(),
       mcpApi.list().catch(() => [] as McpServer[]),
       skillApi.list().catch(() => [] as Skill[]),
-      platformApi.tools({ templateIds: ['browser-generic'] }).catch(() => [] as PlatformToolSummary[]),
+      platformApi.tools({ templateIds: ['browser-generic'] })
+        .then((tools) => ({ tools }))
+        .catch(() => ({ error: '平台注册工具目录加载失败，已保存的选择会原样保留。' })),
       requestRelay('nine1bot.getBrowserRelaySettings').catch(() => undefined),
     ])
     applyConfig(browserConfig)
     providers.value = providerResult.providers
     mcpServers.value = servers
     skills.value = skillList
-    platformTools.value = toolList
+    if ('tools' in toolList) {
+      platformTools.value = toolList.tools
+      platformToolCatalogLoaded.value = true
+    } else {
+      platformTools.value = []
+      platformToolCatalogError.value = toolList.error
+    }
     applyRelaySettings(relay?.settings)
   } catch (error) {
     setStatus(error instanceof Error ? error.message : '加载插件设置失败。', 'error')
@@ -424,7 +437,10 @@ onUnmounted(() => {
           <section v-if="activeTab === 'tools'" class="settings-section">
             <h3>平台注册工具</h3>
             <p>选择以后新建的浏览器插件会话默认声明哪些平台专属工具。现有会话不会被修改。</p>
-            <div v-if="registeredToolRows.length === 0 && staleRegisteredToolIDs.length === 0" class="empty-state">
+            <div v-if="platformToolCatalogError" class="empty-state">
+              {{ platformToolCatalogError }}
+            </div>
+            <div v-else-if="registeredToolRows.length === 0 && staleRegisteredToolIDs.length === 0" class="empty-state">
               当前项目没有可由用户选择的平台工具。
             </div>
             <div v-else class="resource-list">

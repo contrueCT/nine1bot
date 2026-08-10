@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { platformToolRows } from '../src/utils/platform-tool-catalog'
+import { platformToolRows, stalePlatformToolIDs } from '../src/utils/platform-tool-catalog'
 import type { PlatformToolSummary } from '../src/api/client'
 
 describe('platform tool catalog rows', () => {
@@ -33,6 +33,13 @@ describe('platform tool catalog rows', () => {
       selectable: true,
       canOpenSettings: true,
     })
+  })
+
+  test('does not classify saved tools as stale when the catalog failed to load', () => {
+    const rows = platformToolRows([summary('demo_ready', 'user-selectable', 'registered')])
+
+    expect(stalePlatformToolIDs(['demo_ready', 'demo_missing'], rows, false)).toEqual([])
+    expect(stalePlatformToolIDs(['demo_ready', 'demo_missing'], rows, true)).toEqual(['demo_missing'])
   })
 })
 

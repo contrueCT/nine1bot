@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { PermissionNext } from "../../src/permission/next"
+import { Instance } from "../../src/project/instance"
 import type { RuntimeToolCatalog } from "../../src/runtime/tool/catalog"
 import { PlatformToolExecutor } from "../../src/runtime/tool/executor"
 import { RuntimeToolRegistry } from "../../src/runtime/tool/registry"
+import { tmpdir } from "../fixture/fixture"
 
 describe("PlatformToolExecutor", () => {
   afterEach(() => {
@@ -132,6 +134,35 @@ describe("PlatformToolExecutor", () => {
     expect(failureCode(result)).toBe("stale-generation")
     expect(oldExecutions).toBe(0)
     expect(newExecutions).toBe(0)
+  })
+
+  test("rechecks the resolved permission against current resource-level denies", async () => {
+    let denied = false
+    let executions = 0
+    const reference = registeredReference({
+      permission: () => ({
+        permission: "demo_read",
+        patterns: ["secret-document"],
+      }),
+      execute: async () => {
+        executions += 1
+        return { status: "ok", title: "unexpected", output: "unexpected" }
+      },
+    })
+
+    const result = await PlatformToolExecutor.execute(baseInput(reference, {
+      askPermission: async () => {
+        denied = true
+      },
+      isPermissionDenied: async (request) => (
+        denied &&
+        request.permission === "demo_read" &&
+        request.patterns.includes("secret-document")
+      ),
+    }))
+
+    expect(failureCode(result)).toBe("permission-denied")
+    expect(executions).toBe(0)
   })
 
   test("checks exposure before hooks and again after pending permission", async () => {
@@ -358,6 +389,91 @@ describe("PlatformToolExecutor", () => {
     expect(failureCode(await pending)).toBe("cancelled")
   })
 
+  test("stops waiting for a hanging before hook when the session is cancelled", async () => {
+    const controller = new AbortController()
+    let hookStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      hookStarted = resolve
+    })
+    const pending = PlatformToolExecutor.execute(baseInput(registeredReference(), {
+      call: callContext(controller.signal),
+      beforeHook: async () => {
+        hookStarted?.()
+        return new Promise(() => {})
+      },
+    }))
+    await started
+    controller.abort()
+
+    const result = await Promise.race([pending, Bun.sleep(1_000).then(() => undefined)])
+    expect(result).toBeDefined()
+    expect(failureCode(result!)).toBe("cancelled")
+  })
+
+  test("stops waiting for a hanging after hook at the turn deadline", async () => {
+    const pending = PlatformToolExecutor.execute(baseInput(registeredReference(), {
+      turnDeadlineAt: Date.now() + 30,
+      afterHook: async () => new Promise(() => {}),
+    }))
+
+    const result = await Promise.race([pending, Bun.sleep(1_000).then(() => undefined)])
+    expect(result).toBeDefined()
+    expect(failureCode(result!)).toBe("execution-timeout")
+  })
+
+  test("cancels real pending permission requests on session abort and turn deadline", async () => {
+    await using project = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: project.path,
+      fn: async () => {
+        for (const mode of ["cancel", "deadline"] as const) {
+          RuntimeToolRegistry.clearForTesting()
+          const controller = new AbortController()
+          let executions = 0
+          const reference = registeredReference({
+            permission: () => ({
+              permission: "sandbox",
+              patterns: ["*"],
+              always: ["*"],
+            }),
+            execute: async () => {
+              executions += 1
+              return { status: "ok", title: "unexpected", output: "unexpected" }
+            },
+          })
+          const pending = PlatformToolExecutor.execute(baseInput(reference, {
+            call: {
+              ...callContext(controller.signal),
+              directory: project.path,
+            },
+            turnDeadlineAt: mode === "deadline" ? Date.now() + 30 : undefined,
+            askPermission: (request, signal) => PermissionNext.ask({
+              ...request,
+              sessionID: "session_test",
+              metadata: {},
+              always: request.always ?? request.patterns,
+              tool: {
+                messageID: "message_test",
+                callID: "call_test",
+              },
+              ruleset: [],
+              signal,
+            }),
+          }))
+
+          await waitForPendingPermission()
+          if (mode === "cancel") controller.abort()
+          const result = await pending
+
+          expect(failureCode(result)).toBe(mode === "cancel" ? "cancelled" : "execution-timeout")
+          expect(executions).toBe(0)
+          expect(await PermissionNext.list()).toEqual([])
+        }
+      },
+    })
+  })
+
   test("rejects thrown, malformed, and invalid-code platform results generically", async () => {
     const secret = "execute-fixture-secret"
     const implementations: Array<RuntimeToolRegistry.Definition["execute"]> = [
@@ -375,6 +491,12 @@ describe("PlatformToolExecutor", () => {
         status: "failed",
         code: "wrong-prefix",
         message: `token=${secret}`,
+        recoverable: false,
+      }),
+      async () => ({
+        status: "failed",
+        code: `demo-Authorization: Bearer ${secret}`,
+        message: "malformed business code",
         recoverable: false,
       }),
     ]
@@ -479,10 +601,9 @@ function baseInput(
     reference,
     rawInput: {},
     call: callContext(),
-    beforeHook: async () => undefined,
-    afterHook: async () => undefined,
     askPermission: async () => undefined,
     isExposureDenied: async () => false,
+    isPermissionDenied: async () => false,
     publishFailure: async () => undefined,
     clearFailure: () => undefined,
     writeAudit: async () => undefined,
@@ -553,6 +674,15 @@ function immediateTimeout(milliseconds: number, observed: number[]): PlatformToo
     }),
     dispose: () => undefined,
   }
+}
+
+async function waitForPendingPermission() {
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    if ((await PermissionNext.list()).length > 0) return
+    await Bun.sleep(5)
+  }
+  throw new Error("Timed out waiting for a pending permission request.")
 }
 
 type RuntimeResourceResolverFailure = Parameters<NonNullable<PlatformToolExecutor.Input["publishFailure"]>>[0]

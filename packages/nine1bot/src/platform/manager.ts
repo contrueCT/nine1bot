@@ -19,12 +19,14 @@ import type {
   PlatformSecretRef,
   PlatformValidationResult,
 } from '@nine1bot/platform-protocol'
+import { randomUUID } from 'node:crypto'
+import { accessSync, constants, statSync } from 'node:fs'
 import { normalize as normalizePath, posix as posixPath, win32 as win32Path } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { accessSync, constants, statSync } from 'node:fs'
 import { RuntimePlatformAdapterRegistry } from '../../../../opencode/packages/opencode/src/runtime/platform/adapter'
 import { RuntimeSourceRegistry } from '../../../../opencode/packages/opencode/src/runtime/source/registry'
 import { RuntimeToolRegistry } from '../../../../opencode/packages/opencode/src/runtime/tool/registry'
+import { sanitizePlatformToolDiagnostic } from '../../../../opencode/packages/opencode/src/runtime/tool/sanitize'
 import { createPlatformPackageResources } from './package-resources'
 
 export type PlatformLifecycleStatus =
@@ -283,6 +285,11 @@ export class PlatformAdapterManager {
     return cloneJson(this.config)
   }
 
+  async applyConfig(config: PlatformManagerConfig): Promise<PlatformManagerRecord[]> {
+    await this.reconfigureAndRestartBackgroundServices(config)
+    return this.list()
+  }
+
   list(): PlatformManagerRecord[] {
     return Array.from(this.records.values()).map((record) => cloneRecord(record))
   }
@@ -349,7 +356,7 @@ export class PlatformAdapterManager {
           errorAt: undefined,
         })
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = sanitizePlatformToolDiagnostic(error instanceof Error ? error.message : String(error))
         const previous = this.appliedRuntime.get(record.id)
         const retained = previous?.enabled === true
         this.records.set(record.id, {
@@ -382,7 +389,20 @@ export class PlatformAdapterManager {
     }
     await this.stopBackgroundServices()
 
+    await this.startBackgroundServicesForOwners(
+      new Set(this.contributions.keys()),
+      this.lastBackgroundServicesStartOptions,
+    )
+
+    return this.list()
+  }
+
+  private async startBackgroundServicesForOwners(
+    ownerIDs: ReadonlySet<string>,
+    options: PlatformBackgroundServicesStartOptions,
+  ): Promise<void> {
     for (const contribution of this.contributions.values()) {
+      if (!ownerIDs.has(contribution.descriptor.id)) continue
       const record = this.records.get(contribution.descriptor.id)
       if (!record?.installed || !record.enabled) continue
 
@@ -429,13 +449,19 @@ export class PlatformAdapterManager {
         }
       }
     }
-
-    return this.list()
   }
 
   async stopBackgroundServices(): Promise<void> {
-    const active = Array.from(this.backgroundServices.values())
-    this.backgroundServices.clear()
+    await this.stopBackgroundServicesForOwners(new Set(this.contributions.keys()))
+  }
+
+  private async stopBackgroundServicesForOwners(ownerIDs: ReadonlySet<string>): Promise<void> {
+    const active: ActivePlatformBackgroundService[] = []
+    for (const [key, service] of this.backgroundServices) {
+      if (!ownerIDs.has(service.platformId)) continue
+      active.push(service)
+      this.backgroundServices.delete(key)
+    }
     const stopActive = async () => {
       await Promise.all(active.map(async (service) => {
         try {
@@ -992,11 +1018,10 @@ export class PlatformAdapterManager {
         const value = incomingSettings[field.key]
         const previousValue = previousSettings[field.key]
         const ref = isPlatformSecretRef(previousValue)
-          ? previousValue
+          ? rotatedSecretRef(record.id, field.key)
           : defaultSecretRef(record.id, field.key)
 
         if (value === null) {
-          await this.secrets.delete(ref).catch(() => {})
           delete nextSettings[field.key]
         } else if (typeof value === 'string') {
           if (value.length > 0) {
@@ -1120,30 +1145,43 @@ export class PlatformAdapterManager {
   }
 
   private async reconfigureAndRestartBackgroundServices(nextConfig: PlatformManagerConfig): Promise<boolean> {
-    const hadUnappliedRuntime = Array.from(this.records.values()).some((record) => (
-      record.installed && record.appliedConfigRevision !== record.desiredConfigRevision
-    ))
+    const ownersToApply = new Set(
+      Array.from(this.records.values())
+        .filter((record) => record.installed && record.appliedConfigRevision !== record.desiredConfigRevision)
+        .map((record) => record.id),
+    )
+    for (const id of configChangedOwnerIDs(this.config, nextConfig)) ownersToApply.add(id)
     const changed = this.configure(nextConfig)
     this.registerRuntimeAdapters()
-    const failedToApply = Array.from(this.records.values()).some((record) => (
-      record.installed && record.appliedConfigRevision !== record.desiredConfigRevision
-    ))
-    if (failedToApply) return false
-    if (!changed && !hadUnappliedRuntime) return false
-    await this.stopBackgroundServices()
-    return this.restartBackgroundServicesIfNeeded()
+    if (!changed && ownersToApply.size === 0) return false
+
+    const appliedOwnerIDs = new Set(
+      Array.from(ownersToApply)
+        .filter((id) => {
+          const record = this.records.get(id)
+          return Boolean(
+            record?.installed &&
+            record.appliedConfigRevision === record.desiredConfigRevision,
+          )
+        }),
+    )
+    if (appliedOwnerIDs.size === 0) return false
+
+    await this.stopBackgroundServicesForOwners(appliedOwnerIDs)
+    return this.restartBackgroundServicesIfNeeded(appliedOwnerIDs)
   }
 
-  private async restartBackgroundServicesIfNeeded(): Promise<boolean> {
-    if (!this.lastBackgroundServicesStartOptions || !this.hasConfiguredBackgroundServices()) {
+  private async restartBackgroundServicesIfNeeded(ownerIDs: ReadonlySet<string>): Promise<boolean> {
+    if (!this.lastBackgroundServicesStartOptions || !this.hasConfiguredBackgroundServices(ownerIDs)) {
       return false
     }
-    await this.startBackgroundServices(this.lastBackgroundServicesStartOptions)
+    await this.startBackgroundServicesForOwners(ownerIDs, this.lastBackgroundServicesStartOptions)
     return true
   }
 
-  private hasConfiguredBackgroundServices(): boolean {
+  private hasConfiguredBackgroundServices(ownerIDs: ReadonlySet<string>): boolean {
     for (const record of this.records.values()) {
+      if (!ownerIDs.has(record.id)) continue
       if (!record.installed || !record.enabled) continue
       const contribution = this.contributions.get(record.id)
       if (!contribution?.backgroundServices) continue
@@ -1169,6 +1207,11 @@ function normalizeConfig(config: PlatformManagerConfig): PlatformManagerConfig {
 
 function sameConfigEntry(left: PlatformConfigEntry | undefined, right: PlatformConfigEntry | undefined) {
   return JSON.stringify(normalizeConfigEntry(left)) === JSON.stringify(normalizeConfigEntry(right))
+}
+
+function configChangedOwnerIDs(current: PlatformManagerConfig, next: PlatformManagerConfig) {
+  const ids = new Set([...Object.keys(current), ...Object.keys(next)])
+  return Array.from(ids).filter((id) => !sameConfigEntry(current[id], next[id]))
 }
 
 function normalizeConfigEntry(entry: PlatformConfigEntry | undefined): PlatformConfigEntry {
@@ -1370,6 +1413,13 @@ function defaultSecretRef(platformId: string, fieldKey: string): PlatformSecretR
   return {
     provider: 'nine1bot-local',
     key: `platform:${platformId}:default:${fieldKey}`,
+  }
+}
+
+function rotatedSecretRef(platformId: string, fieldKey: string): PlatformSecretRef {
+  return {
+    provider: 'nine1bot-local',
+    key: `platform:${platformId}:version:${randomUUID()}:${fieldKey}`,
   }
 }
 

@@ -416,6 +416,55 @@ describe("nine1bot controller api", () => {
     }
   })
 
+  test("ignores stale persisted browser tool defaults while keeping direct selection strict", async () => {
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      tools: [registeredToolDefinition("demo_lookup", "user-selectable")],
+    })
+    const configDir = await mkdtemp(path.join(tmpdir(), "nine1bot-browser-stale-tool-"))
+    tempDirs.push(configDir)
+    const configPath = path.join(configDir, "nine1bot.config.jsonc")
+    await writeFile(configPath, JSON.stringify({
+      browser: {
+        sidepanel: {
+          registeredTools: ["demo_lookup"],
+        },
+      },
+    }), "utf-8")
+    process.env.NINE1BOT_CONFIG_PATH = configPath
+    RuntimeToolRegistry.unregisterOwner("demo")
+
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const response = await Server.App().request("/nine1bot/agent/sessions", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            entry: {
+              source: "browser-extension",
+              mode: "browser-sidepanel",
+            },
+            debug: { profileSnapshot: true },
+          }),
+        })
+
+        expect(response.status).toBe(200)
+        const body = await response.json() as {
+          sessionId: string
+          profileSnapshot?: {
+            resources?: { registeredTools?: { tools?: string[] } }
+          }
+        }
+        try {
+          expect(body.profileSnapshot?.resources?.registeredTools?.tools ?? []).not.toContain("demo_lookup")
+        } finally {
+          await Session.remove(body.sessionId).catch(() => undefined)
+        }
+      },
+    })
+  })
+
   test("returns a safe 400 response for direct selection of a declared-only tool", async () => {
     RuntimeToolRegistry.registerOwner({
       owner: { id: "demo", kind: "platform", enabled: true },

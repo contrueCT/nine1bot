@@ -17,6 +17,7 @@ import { FilePlatformSecretStore } from "../../../../../packages/nine1bot/src/pl
 import type {
   AnyPlatformToolDefinition,
   PlatformAdapterContribution,
+  PlatformSecretRef,
 } from "../../../../../packages/platform-protocol/src"
 
 const projectRoot = path.join(__dirname, "../..")
@@ -147,6 +148,70 @@ function testPlatformContribution(): PlatformAdapterContribution {
         }
         return [toolDefinition("test_platform_lookup")]
       },
+    },
+  }
+}
+
+function testBackgroundPlatformContribution(tracker: {
+  starts: string[]
+  stops: string[]
+  credentials: string[]
+  active?: string
+}): PlatformAdapterContribution {
+  const platformID = "test-background"
+  return {
+    descriptor: {
+      id: platformID,
+      name: "Test Background Platform",
+      packageName: "@nine1bot/platform-test-background",
+      version: "0.0.0-test",
+      defaultEnabled: true,
+      capabilities: {},
+      config: {
+        sections: [{
+          id: "auth",
+          title: "Auth",
+          fields: [{
+            key: "token",
+            label: "Token",
+            type: "password",
+            secret: true,
+          }],
+        }],
+      },
+    },
+    runtime: {
+      createAdapter: () => ({ id: platformID }),
+      tools(context) {
+        const version = String((context.settings as Record<string, unknown>).version ?? "missing")
+        return [toolDefinition("test_background_lookup", {
+          async execute() {
+            return {
+              status: "ok",
+              title: "Background lookup",
+              output: version,
+            }
+          },
+        })]
+      },
+    },
+    backgroundServices(context) {
+      const version = String((context.settings as Record<string, unknown>).version ?? "missing")
+      const tokenRef = (context.settings as Record<string, unknown>).token as PlatformSecretRef | undefined
+      return [{
+        id: "test-background-service",
+        async start() {
+          tracker.starts.push(version)
+          tracker.credentials.push(`${version}:${tokenRef ? await context.secrets.get(tokenRef) : "missing"}`)
+          tracker.active = version
+          return {
+            async stop() {
+              tracker.stops.push(version)
+              if (tracker.active === version) tracker.active = undefined
+            },
+          }
+        },
+      }]
     },
   }
 }
@@ -378,6 +443,68 @@ describe("nine1bot platform api", () => {
       expect(getBuiltinPlatformManager().configSnapshot().feishu).toBeUndefined()
       const stored = JSON.parse(await readFile(configPath, "utf-8"))
       expect(stored.platforms).toBeUndefined()
+    } finally {
+      await chmod(configPath, 0o666).catch(() => undefined)
+    }
+  })
+
+  test("restores the running background service when patch persistence fails", async () => {
+    const tracker = {
+      starts: [] as string[],
+      stops: [] as string[],
+      credentials: [] as string[],
+      active: undefined as string | undefined,
+    }
+    const previousTokenRef = {
+      provider: "nine1bot-local",
+      key: "platform:test-background:default:token",
+    } satisfies PlatformSecretRef
+    ;(builtinPlatformContributions as PlatformAdapterContribution[]).push(
+      testBackgroundPlatformContribution(tracker),
+    )
+    const { configPath, secretPath } = await setupPlatformConfig({
+      platforms: {
+        feishu: { enabled: false },
+        "test-background": {
+          settings: {
+            version: "persisted",
+            token: previousTokenRef,
+          },
+        },
+      },
+    })
+    const secrets = new FilePlatformSecretStore(secretPath)
+    await secrets.set(previousTokenRef, "old-token")
+    const manager = getBuiltinPlatformManager()
+    await manager.startBackgroundServices({ localUrl: "http://127.0.0.1:4096" })
+    expect(tracker).toMatchObject({
+      starts: ["persisted"],
+      stops: [],
+      credentials: ["persisted:old-token"],
+      active: "persisted",
+    })
+    await chmod(configPath, 0o444)
+
+    try {
+      const response = await request("/nine1bot/platforms/test-background", {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ settings: { version: "unpersisted", token: "new-token" } }),
+      })
+
+      expect(response.status).toBe(500)
+      expect(manager.configSnapshot()["test-background"]?.settings).toEqual({
+        version: "persisted",
+        token: previousTokenRef,
+      })
+      expect(tracker).toMatchObject({
+        starts: ["persisted", "unpersisted", "persisted"],
+        stops: ["persisted", "unpersisted"],
+        credentials: ["persisted:old-token", "unpersisted:new-token", "persisted:old-token"],
+        active: "persisted",
+      })
+      await expect(secrets.get(previousTokenRef)).resolves.toBe("old-token")
+      expect(RuntimeToolRegistry.get("test_background_lookup")?.generation).toBe(3)
     } finally {
       await chmod(configPath, 0o666).catch(() => undefined)
     }

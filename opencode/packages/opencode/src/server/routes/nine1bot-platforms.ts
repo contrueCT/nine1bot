@@ -9,7 +9,6 @@ import { RuntimeToolCatalog } from "@/runtime/tool/catalog"
 import { ToolRegistry } from "@/tool/registry"
 import {
   getBuiltinPlatformManager,
-  registerBuiltinPlatformAdapters,
 } from "../../../../../../packages/nine1bot/src/platform/builtin"
 import { FilePlatformSecretStore } from "../../../../../../packages/nine1bot/src/platform/secrets"
 import {
@@ -47,11 +46,11 @@ function platformSecrets() {
 
 async function syncManagerFromConfig() {
   const config = await readPlatformManagerConfig()
-  registerBuiltinPlatformAdapters({
-    config,
+  const manager = getBuiltinPlatformManager({
     secrets: platformSecrets(),
   })
-  return getBuiltinPlatformManager()
+  await manager.applyConfig(config)
+  return manager
 }
 
 function errorBody(error: unknown) {
@@ -218,10 +217,7 @@ export const Nine1BotPlatformRoutes = () =>
       } catch (error) {
         if (previousConfig) {
           try {
-            registerBuiltinPlatformAdapters({
-              config: previousConfig,
-              secrets: platformSecrets(),
-            })
+            await getBuiltinPlatformManager().applyConfig(previousConfig)
           } catch {}
         }
         return c.json(errorBody(error), errorStatus(error))
@@ -263,10 +259,7 @@ export const Nine1BotPlatformRoutes = () =>
       } catch (error) {
         if (previousConfig) {
           try {
-            registerBuiltinPlatformAdapters({
-              config: previousConfig,
-              secrets: platformSecrets(),
-            })
+            await getBuiltinPlatformManager().applyConfig(previousConfig)
           } catch {}
         }
         return c.json(errorBody(error), errorStatus(error))

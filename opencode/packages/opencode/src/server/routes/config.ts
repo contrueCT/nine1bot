@@ -9,6 +9,7 @@ import { mapValues } from "remeda"
 import { errors } from "../error"
 import { Log } from "../../util/log"
 import { lazy } from "../../util/lazy"
+import { RuntimeToolRegistry, RuntimeToolSelectionError } from "../../runtime/tool/registry"
 import {
   BrowserExtensionConfigPatch,
   patchBrowserExtensionConfig,
@@ -229,11 +230,25 @@ export const ConfigRoutes = lazy(() =>
       validator("json", BrowserExtensionConfigPatch),
       async (c) => {
         try {
-          const config = await patchBrowserExtensionConfig(c.req.valid("json"))
+          const patch = c.req.valid("json")
+          const registeredTools = patch.registeredTools === null || patch.registeredTools === undefined
+            ? patch.registeredTools
+            : [...new Set(patch.registeredTools.map((toolID) => toolID.trim()).filter(Boolean))]
+          if (registeredTools) RuntimeToolRegistry.assertUserSelectable(registeredTools)
+          const config = await patchBrowserExtensionConfig({
+            ...patch,
+            ...(registeredTools !== undefined ? { registeredTools } : {}),
+          })
           Config.refresh()
           Provider.refresh()
           return c.json(config)
         } catch (e: any) {
+          if (e instanceof RuntimeToolSelectionError) {
+            return c.json({
+              error: "Some registered tools cannot be saved as browser defaults.",
+              invalid: e.invalid,
+            }, 400)
+          }
           return c.json({ error: e.message }, e.message === "No config path" ? 404 : 500)
         }
       },

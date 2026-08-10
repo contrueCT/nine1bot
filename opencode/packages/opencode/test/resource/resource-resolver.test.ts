@@ -213,6 +213,65 @@ test("deduplicates identical tool failures and resets after a successful state c
   })
 })
 
+test("resets tool failure dedupe after a hard-deny visibility state change", async () => {
+  await using tmp = await tmpdir({ git: true })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      RuntimeToolRegistry.registerOwner({
+        owner: { id: "demo", kind: "platform", enabled: true },
+        tools: [{
+          ...toolDefinition("demo_lookup"),
+          availability: () => ({
+            status: "auth-required",
+            reason: "authentication-required",
+          }),
+        }],
+      })
+      const profile = testProfile({
+        builtinTools: {},
+        registeredTools: {
+          tools: ["demo_lookup"],
+          lifecycle: "session",
+          mergeMode: "additive-only",
+        },
+        mcp: { servers: [], lifecycle: "session", mergeMode: "additive-only" },
+        skills: { skills: [], lifecycle: "session", mergeMode: "additive-only" },
+      })
+      const events: Array<Record<string, unknown>> = []
+      const unsubscribe = Bus.subscribe(RuntimeResourceResolver.Failed, (event) => {
+        if (event.properties.resourceType === "tool") events.push(event.properties)
+      })
+
+      try {
+        await RuntimeResourceResolver.resolve({
+          sessionID: "session_tool_hard_deny",
+          profile,
+          emitResolved: false,
+        })
+        await RuntimeResourceResolver.resolve({
+          sessionID: "session_tool_hard_deny",
+          profile,
+          emitResolved: false,
+          isToolExposureDenied: async () => true,
+        })
+        await RuntimeResourceResolver.resolve({
+          sessionID: "session_tool_hard_deny",
+          profile,
+          emitResolved: false,
+        })
+
+        expect(events).toHaveLength(2)
+        expect(events.map((event) => event.code)).toEqual(["auth-required", "auth-required"])
+      } finally {
+        unsubscribe()
+        RuntimeToolRegistry.clearForTesting()
+      }
+    },
+  })
+})
+
 test("redacts platform diagnostics before publishing registered tool failures", async () => {
   const secret = "resource-event-secret"
   await using tmp = await tmpdir({ git: true })

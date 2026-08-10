@@ -44,6 +44,7 @@ describe('CI workflow contract', () => {
     expect(qualityJob).toContain('bun install --cwd packages/browser-extension --frozen-lockfile')
     expect(qualityJob).toContain('bun run ci:typecheck')
     expect(qualityJob).toContain('bun run ci:test')
+    expect(qualityJob).toContain('bun run ci:test:opencode-runtime')
     expect(qualityJob).not.toContain('Typecheck completed with warnings')
 
     expect(scripts['ci:typecheck']).toContain('packages/platform-protocol')
@@ -61,5 +62,12 @@ describe('CI workflow contract', () => {
     expect(scripts['ci:test']).toContain('packages/browser-mcp-server/test')
     expect(scripts['ci:test']).toContain('web/test')
     expect(scripts['ci:test']).toContain('scripts')
+
+    expect(scripts['ci:test:opencode-runtime']).toContain('--cwd opencode/packages/opencode')
+    expect(scripts['ci:test:opencode-runtime']).toContain('test/platform')
+    expect(scripts['ci:test:opencode-runtime']).toContain('test/resource/resource-resolver.test.ts')
+    expect(scripts['ci:test:opencode-runtime']).toContain('test/tool/platform-tool-executor.test.ts')
+    expect(scripts['ci:test:opencode-runtime']).toContain('test/server/config-routes.test.ts')
+    expect(scripts['ci:test:opencode-runtime']).toContain('test/server/nine1bot-platforms.test.ts')
   })
 })

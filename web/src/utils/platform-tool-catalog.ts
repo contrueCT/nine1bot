@@ -18,3 +18,13 @@ export function platformToolRows(tools: PlatformToolSummary[]): PlatformToolRow[
     }))
     .sort((left, right) => left.id.localeCompare(right.id))
 }
+
+export function stalePlatformToolIDs(
+  selectedToolIDs: string[],
+  rows: PlatformToolRow[],
+  catalogLoaded: boolean,
+): string[] {
+  if (!catalogLoaded) return []
+  const known = new Set(rows.map((tool) => tool.id))
+  return selectedToolIDs.filter((toolID) => !known.has(toolID)).sort()
+}

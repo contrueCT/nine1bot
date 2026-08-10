@@ -2,7 +2,10 @@ import { Log } from "@/util/log"
 import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 import { Truncate } from "@/tool/truncation"
 import { isPlatformToolRuntimeCode, type PlatformToolRuntimeCode } from "./errors"
-import type { RuntimeToolCatalog } from "./catalog"
+import {
+  PLATFORM_TOOL_AVAILABILITY_BUDGET_MS,
+  type RuntimeToolCatalog,
+} from "./catalog"
 import { RuntimeToolRegistry } from "./registry"
 import {
   sanitizePlatformToolDiagnostic,
@@ -12,7 +15,8 @@ import {
 
 const DEFAULT_EXECUTION_TIMEOUT_MS = 60_000
 const MAX_EXECUTION_TIMEOUT_MS = 5 * 60_000
-const INVOCATION_AVAILABILITY_BUDGET_MS = 500
+const BUSINESS_FAILURE_CODE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/
+const MAX_BUSINESS_FAILURE_CODE_LENGTH = 128
 
 export namespace PlatformToolExecutor {
   const log = Log.create({ service: "runtime.platform-tool-executor" })
@@ -55,6 +59,7 @@ export namespace PlatformToolExecutor {
       signal: AbortSignal,
     ): Promise<void>
     isExposureDenied(toolID: string): boolean | Promise<boolean>
+    isPermissionDenied(request: RuntimeToolRegistry.PermissionRequest): boolean | Promise<boolean>
     turnDeadlineAt?: number
     availabilityBudgetMs?: number
     now?: () => number
@@ -155,7 +160,7 @@ export namespace PlatformToolExecutor {
     if (!isCurrent(input.reference)) {
       return finishFailure({
         code: "stale-generation",
-        message: "The platform tool definition changed before execution. Retry on the current turn.",
+        message: "The platform tool definition changed before execution. Retry on the next turn.",
         recoverable: true,
         status: "unavailable",
         publish: false,
@@ -181,14 +186,36 @@ export namespace PlatformToolExecutor {
     }
 
     const hookPayload: BeforeHookPayload = { args: input.rawInput }
-    try {
-      await input.beforeHook?.(hookPayload)
-    } catch {
-      return finishFailure({
-        code: "execution-failed",
-        message: "The platform tool could not prepare the call.",
-        recoverable: false,
-      })
+    if (input.beforeHook) {
+      const preparation = await runWithDeadline(
+        input,
+        now,
+        DEFAULT_EXECUTION_TIMEOUT_MS,
+        () => input.beforeHook!(hookPayload),
+      )
+      if (preparation.kind === "cancelled") {
+        permissionOutcome = "cancelled"
+        return finishFailure({
+          code: "cancelled",
+          message: "The platform tool call was cancelled while preparing the call.",
+          recoverable: true,
+          publish: false,
+        })
+      }
+      if (preparation.kind === "timeout") {
+        return finishFailure({
+          code: "execution-timeout",
+          message: "The platform tool call timed out while preparing the call.",
+          recoverable: true,
+        })
+      }
+      if (preparation.kind === "threw") {
+        return finishFailure({
+          code: "execution-failed",
+          message: "The platform tool could not prepare the call.",
+          recoverable: false,
+        })
+      }
     }
 
     let parsed: unknown
@@ -258,6 +285,15 @@ export namespace PlatformToolExecutor {
       throw permissionWait.error
     }
 
+    if (await permissionDenied(input, permission)) {
+      permissionOutcome = "denied"
+      return finishFailure({
+        code: "permission-denied",
+        message: "The platform tool call is disabled by the current resource permission policy.",
+        recoverable: false,
+        publish: false,
+      })
+    }
     if (await exposureDenied(input)) {
       permissionOutcome = "denied"
       return finishFailure({
@@ -270,7 +306,7 @@ export namespace PlatformToolExecutor {
     if (!isCurrent(input.reference)) {
       return finishFailure({
         code: "stale-generation",
-        message: "The platform tool definition changed while permission was pending. Retry on the current turn.",
+        message: "The platform tool definition changed while permission was pending. Retry on the next turn.",
         recoverable: true,
         status: "unavailable",
         publish: false,
@@ -311,14 +347,36 @@ export namespace PlatformToolExecutor {
       })
     }
 
-    try {
-      await input.afterHook?.(normalized.result)
-    } catch {
-      return finishFailure({
-        code: "execution-failed",
-        message: "The platform tool result could not be finalized.",
-        recoverable: false,
-      })
+    if (input.afterHook) {
+      const finalization = await runWithDeadline(
+        input,
+        now,
+        DEFAULT_EXECUTION_TIMEOUT_MS,
+        () => input.afterHook!(normalized.result),
+      )
+      if (finalization.kind === "cancelled") {
+        permissionOutcome = "cancelled"
+        return finishFailure({
+          code: "cancelled",
+          message: "The platform tool call was cancelled while finalizing the result.",
+          recoverable: true,
+          publish: false,
+        })
+      }
+      if (finalization.kind === "timeout") {
+        return finishFailure({
+          code: "execution-timeout",
+          message: "The platform tool call timed out while finalizing the result.",
+          recoverable: true,
+        })
+      }
+      if (finalization.kind === "threw") {
+        return finishFailure({
+          code: "execution-failed",
+          message: "The platform tool result could not be finalized.",
+          recoverable: false,
+        })
+      }
     }
 
     const final = await finalizeResult(normalized.result, normalized.canonical).catch(() => undefined)
@@ -375,12 +433,26 @@ export namespace PlatformToolExecutor {
     }
   }
 
+  async function permissionDenied(
+    input: Input,
+    request: RuntimeToolRegistry.PermissionRequest,
+  ) {
+    try {
+      return (await input.isPermissionDenied(request)) === true
+    } catch {
+      return true
+    }
+  }
+
   async function invocationAvailability(input: Input): Promise<AvailabilityResult> {
     const callback = input.reference.definition.availability
     if (!callback) return { kind: "allowed" }
     if (input.call.signal.aborted) return { kind: "cancelled" }
 
-    const budgetMs = normalizePositiveDuration(input.availabilityBudgetMs, INVOCATION_AVAILABILITY_BUDGET_MS)
+    const budgetMs = normalizePositiveDuration(
+      input.availabilityBudgetMs,
+      PLATFORM_TOOL_AVAILABILITY_BUDGET_MS,
+    )
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => resolve("timeout"), budgetMs)
@@ -526,31 +598,49 @@ export namespace PlatformToolExecutor {
   }
 
   async function executeWithDeadline(input: Input, parsed: unknown, now: () => number) {
-    if (input.call.signal.aborted) return { kind: "cancelled" as const }
     const toolLimit = input.reference.definition.execution?.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS
+    return runWithDeadline(input, now, toolLimit, async (signal) => {
+      const call: RuntimeToolRegistry.CallContext = {
+        ...input.call,
+        signal,
+        reportProgress: async (progress) => {
+          await input.call.reportProgress({
+            ...(progress.title !== undefined
+              ? { title: sanitizePlatformToolDiagnostic(progress.title) }
+              : {}),
+            ...(progress.metadata !== undefined
+              ? { metadata: sanitizePlatformToolRecord(progress.metadata) }
+              : {}),
+          })
+        },
+      }
+      return input.reference.definition.execute(parsed, call)
+    })
+  }
+
+  async function runWithDeadline<T>(
+    input: Input,
+    now: () => number,
+    timeoutLimitMs: number,
+    task: (signal: AbortSignal) => Promise<T>,
+  ): Promise<
+    | { kind: "result"; result: T }
+    | { kind: "threw" }
+    | { kind: "timeout" }
+    | { kind: "cancelled" }
+  > {
+    if (input.call.signal.aborted) return { kind: "cancelled" }
     const turnRemaining = input.turnDeadlineAt === undefined
       ? Number.POSITIVE_INFINITY
-      : Math.max(1, input.turnDeadlineAt - now())
-    const effectiveTimeoutMs = Math.min(toolLimit, MAX_EXECUTION_TIMEOUT_MS, turnRemaining)
-    const timeout = (input.createTimeout ?? defaultTimeout)(effectiveTimeoutMs)
+      : input.turnDeadlineAt - now()
+    if (turnRemaining <= 0) return { kind: "timeout" }
+
+    const effectiveTimeoutMs = Math.min(timeoutLimitMs, MAX_EXECUTION_TIMEOUT_MS, turnRemaining)
+    const timeout = (input.createTimeout ?? defaultTimeout)(Math.max(1, effectiveTimeoutMs))
     const combined = combineSignals([input.call.signal, timeout.signal])
     const cancellation = watchAbort(input.call.signal)
-    const call: RuntimeToolRegistry.CallContext = {
-      ...input.call,
-      signal: combined.signal,
-      reportProgress: async (progress) => {
-        await input.call.reportProgress({
-          ...(progress.title !== undefined
-            ? { title: sanitizePlatformToolDiagnostic(progress.title) }
-            : {}),
-          ...(progress.metadata !== undefined
-            ? { metadata: sanitizePlatformToolRecord(progress.metadata) }
-            : {}),
-        })
-      },
-    }
-    const execution = Promise.resolve()
-      .then(() => input.reference.definition.execute(parsed, call))
+    const pending = Promise.resolve()
+      .then(() => task(combined.signal))
       .then(
         (result) => ({ kind: "result" as const, result }),
         () => ({ kind: "threw" as const }),
@@ -558,11 +648,11 @@ export namespace PlatformToolExecutor {
 
     try {
       const outcome = await Promise.race([
-        execution,
+        pending,
         timeout.elapsed.then(() => ({ kind: "timeout" as const })),
         cancellation.promise.then(() => ({ kind: "cancelled" as const })),
       ])
-      if (input.call.signal.aborted) return { kind: "cancelled" as const }
+      if (input.call.signal.aborted) return { kind: "cancelled" }
       return outcome
     } finally {
       cancellation.dispose()
@@ -601,7 +691,14 @@ export namespace PlatformToolExecutor {
       return undefined
     }
     const businessPrefix = `${reference.ownerID.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}-`
-    if (isPlatformToolRuntimeCode(input.code) || !input.code.startsWith(businessPrefix)) return undefined
+    if (
+      input.code.length > MAX_BUSINESS_FAILURE_CODE_LENGTH ||
+      !BUSINESS_FAILURE_CODE.test(input.code) ||
+      isPlatformToolRuntimeCode(input.code) ||
+      !input.code.startsWith(businessPrefix)
+    ) {
+      return undefined
+    }
     const action = normalizeAction(input.action)
     if (input.action !== undefined && !action) return undefined
     const canonical: CanonicalResult = {
