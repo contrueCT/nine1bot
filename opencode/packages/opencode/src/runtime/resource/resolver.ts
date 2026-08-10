@@ -18,6 +18,7 @@ export namespace RuntimeResourceResolver {
   const log = Log.create({ service: "runtime.resource-resolver" })
   const RESOURCE_TEMPLATE_ID = "resource-resolver"
   const emittedToolFailures = Instance.state(() => new Map<string, string>())
+  const lastPublishedResolution = Instance.state(() => new Map<string, string>())
 
   export const Failed = BusEvent.define(
     "runtime.resource.failed",
@@ -213,31 +214,6 @@ export namespace RuntimeResourceResolver {
     ])
     const failures = [...mcp.failures, ...skills.failures, ...registeredTools.failures]
 
-    const failedToolIDs = new Set(registeredTools.failures.map((failure) => failure.resourceID))
-    for (const tool of registeredTools.available) {
-      if (!failedToolIDs.has(tool.id)) clearToolFailure(input.sessionID, tool.id)
-    }
-
-    if (input.emitFailures !== false) {
-      for (const failure of failures) {
-        if (failure.resourceType === "tool") {
-          await publishToolFailure({
-            sessionID: input.sessionID,
-            turnSnapshotId: input.turnSnapshotId,
-            failure,
-          })
-          continue
-        }
-        await Bus.publish(Failed, {
-          ...failure,
-          sessionID: input.sessionID,
-          turnSnapshotId: input.turnSnapshotId,
-        }).catch((error) => {
-          log.warn("failed to publish resource failure event", { error })
-        })
-      }
-    }
-
     const result: Resolved = {
       builtinTools: resources.builtinTools,
       registeredTools: {
@@ -276,20 +252,165 @@ export namespace RuntimeResourceResolver {
       },
     }
 
-    if (input.emitResolved !== false) {
-      await Bus.publish(ResolvedEvent, {
+    const emitFailures = input.emitFailures !== false
+    const emitResolved = input.emitResolved !== false
+    if (emitFailures && emitResolved) {
+      await publishResolution({
         sessionID: input.sessionID,
         turnSnapshotId: input.turnSnapshotId,
-        declared: result.audit.declared,
-        resolved: result.audit.resolved,
-        unavailable: result.audit.unavailable,
-        failures: result.failures.length,
-      }).catch((error) => {
-        log.warn("failed to publish resources resolved event", { error })
+        resolved: result,
       })
+    } else {
+      if (emitFailures) {
+        await publishFailures({
+          sessionID: input.sessionID,
+          turnSnapshotId: input.turnSnapshotId,
+          resolved: result,
+        })
+      }
+      if (emitResolved) {
+        await publishResolvedEvent({
+          sessionID: input.sessionID,
+          turnSnapshotId: input.turnSnapshotId,
+          resolved: result,
+        })
+      }
     }
 
     return result
+  }
+
+  export function applyToolConflicts(
+    resolved: Resolved,
+    occupiedToolIDs: ReadonlySet<string>,
+  ): Resolved {
+    const conflicts = resolved.registeredTools.availableTools
+      .filter((reference) => occupiedToolIDs.has(reference.id))
+      .map(toolConflictFailure)
+    if (conflicts.length === 0) return resolved
+
+    const conflictIDs = new Set(conflicts.map((failure) => failure.resourceID))
+    const availableTools = resolved.registeredTools.availableTools.filter((reference) => !conflictIDs.has(reference.id))
+    const availability = { ...resolved.registeredTools.availability }
+    for (const failure of conflicts) {
+      availability[failure.resourceID] = {
+        declared: true,
+        status: "unavailable",
+        reason: "tool-conflict",
+        checkedAt: Date.now(),
+      }
+    }
+    const failures = [...resolved.failures, ...conflicts]
+      .sort((left, right) => `${left.resourceType}:${left.resourceID}`.localeCompare(`${right.resourceType}:${right.resourceID}`))
+    const unavailable = failures.map((failure) => ({
+      type: failure.resourceType,
+      id: failure.resourceID,
+      reason: failure.reason,
+      error: failure.message,
+    }))
+
+    return {
+      ...resolved,
+      registeredTools: {
+        ...resolved.registeredTools,
+        availableTools,
+        availability,
+      },
+      failures,
+      audit: {
+        declared: {
+          ...resolved.audit.declared,
+          registeredTools: [...resolved.audit.declared.registeredTools],
+        },
+        resolved: {
+          ...resolved.audit.resolved,
+          registeredTools: availableTools.map((reference) => reference.id),
+        },
+        unavailable,
+      },
+    }
+  }
+
+  export async function publishResolution(input: {
+    sessionID: string
+    turnSnapshotId?: string
+    resolved: Resolved
+  }) {
+    if (input.turnSnapshotId) {
+      const published = lastPublishedResolution()
+      if (published.get(input.sessionID) === input.turnSnapshotId) return false
+      published.set(input.sessionID, input.turnSnapshotId)
+    }
+    await publishFailures(input)
+    await publishResolvedEvent(input)
+    return true
+  }
+
+  async function publishFailures(input: {
+    sessionID: string
+    turnSnapshotId?: string
+    resolved: Resolved
+  }) {
+    const failedToolIDs = new Set(
+      input.resolved.failures
+        .filter((failure) => failure.resourceType === "tool")
+        .map((failure) => failure.resourceID),
+    )
+    for (const reference of input.resolved.registeredTools.availableTools) {
+      if (!failedToolIDs.has(reference.id)) clearToolFailure(input.sessionID, reference.id)
+    }
+
+    for (const failure of input.resolved.failures) {
+      if (failure.resourceType === "tool") {
+        await publishToolFailure({
+          sessionID: input.sessionID,
+          turnSnapshotId: input.turnSnapshotId,
+          failure,
+        })
+        continue
+      }
+      await Bus.publish(Failed, {
+        ...failure,
+        sessionID: input.sessionID,
+        turnSnapshotId: input.turnSnapshotId,
+      }).catch((error) => {
+        log.warn("failed to publish resource failure event", { error })
+      })
+    }
+  }
+
+  async function publishResolvedEvent(input: {
+    sessionID: string
+    turnSnapshotId?: string
+    resolved: Resolved
+  }) {
+    await Bus.publish(ResolvedEvent, {
+      sessionID: input.sessionID,
+      turnSnapshotId: input.turnSnapshotId,
+      declared: input.resolved.audit.declared,
+      resolved: input.resolved.audit.resolved,
+      unavailable: input.resolved.audit.unavailable,
+      failures: input.resolved.failures.length,
+    }).catch((error) => {
+      log.warn("failed to publish resources resolved event", { error })
+    })
+  }
+
+  function toolConflictFailure(
+    reference: RuntimeToolCatalog.ResolvedReference,
+  ): ResourceFailure {
+    return {
+      resourceType: "tool",
+      resourceID: reference.id,
+      ownerID: reference.ownerID,
+      generation: reference.generation,
+      code: "tool-conflict",
+      status: "unavailable",
+      stage: "resolve",
+      reason: "tool-conflict",
+      message: `Registered tool "${reference.id}" conflicts with an existing runtime tool.`,
+      recoverable: false,
+    }
   }
 
   export async function publishToolFailure(input: {

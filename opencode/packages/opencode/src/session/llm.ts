@@ -275,10 +275,22 @@ export namespace LLM {
   }
 
   async function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "user">) {
-    const disabled = PermissionNext.disabled(Object.keys(input.tools), input.agent.permission)
-    for (const tool of Object.keys(input.tools)) {
-      if (input.user.tools?.[tool] === false || disabled.has(tool)) {
-        delete input.tools[tool]
+    return filterToolsForModel({
+      tools: input.tools,
+      userTools: input.user.tools,
+      ruleset: input.agent.permission,
+    })
+  }
+
+  export function filterToolsForModel(input: {
+    tools: Record<string, Tool>
+    userTools?: Record<string, boolean>
+    ruleset: PermissionNext.Ruleset
+  }) {
+    const disabled = PermissionNext.disabled(Object.keys(input.tools), input.ruleset)
+    for (const toolID of Object.keys(input.tools)) {
+      if (input.userTools?.[toolID] === false || disabled.has(toolID)) {
+        delete input.tools[toolID]
       }
     }
     return input.tools

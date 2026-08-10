@@ -81,6 +81,7 @@ export namespace PlatformToolExecutor {
         recoverable: boolean
         status?: "failed" | "unavailable" | "auth-required"
         action?: RuntimeToolRegistry.Availability["action"]
+        stage?: RuntimeResourceResolver.ResourceFailure["stage"]
       }
 
   export async function execute(input: Input): Promise<Result> {
@@ -157,6 +158,7 @@ export namespace PlatformToolExecutor {
         message: "The platform tool definition changed before execution. Retry on the current turn.",
         recoverable: true,
         status: "unavailable",
+        publish: false,
       })
     }
     if (input.call.signal.aborted) {
@@ -197,6 +199,7 @@ export namespace PlatformToolExecutor {
         code: "invalid-input",
         message: "The platform tool input is invalid. Correct the arguments and retry.",
         recoverable: true,
+        publish: false,
       })
     }
 
@@ -217,6 +220,7 @@ export namespace PlatformToolExecutor {
         recoverable: availability.recoverable,
         status: availability.status,
         action: availability.action,
+        stage: availability.stage,
       })
     }
 
@@ -269,6 +273,7 @@ export namespace PlatformToolExecutor {
         message: "The platform tool definition changed while permission was pending. Retry on the current turn.",
         recoverable: true,
         status: "unavailable",
+        publish: false,
       })
     }
 
@@ -399,6 +404,7 @@ export namespace PlatformToolExecutor {
           code: "availability-check-failed",
           message: "The platform tool availability check failed.",
           recoverable: true,
+          stage: "resolve",
         }
       }
 
@@ -414,6 +420,7 @@ export namespace PlatformToolExecutor {
           code: "availability-check-failed",
           message: "The platform tool availability check returned an invalid result.",
           recoverable: true,
+          stage: "resolve",
         }
       }
       if (
@@ -433,6 +440,7 @@ export namespace PlatformToolExecutor {
           recoverable: true,
           status: "auth-required",
           action: availability.action,
+          stage: "auth",
         }
       }
       return {
@@ -444,6 +452,7 @@ export namespace PlatformToolExecutor {
         recoverable: true,
         status: "unavailable",
         action: availability.action,
+        stage: "resolve",
       }
     } finally {
       if (timer) clearTimeout(timer)

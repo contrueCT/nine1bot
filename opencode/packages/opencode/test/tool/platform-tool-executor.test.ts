@@ -220,6 +220,9 @@ describe("PlatformToolExecutor", () => {
     expect(failureCode(permission)).toBe("permission-resolution-failed")
     expect(executions).toBe(0)
     expect(JSON.stringify({ parsed, permission, audits, published })).not.toContain(secret)
+    expect(published).toEqual([
+      expect.objectContaining({ code: "permission-resolution-failed", stage: "execute" }),
+    ])
 
     RuntimeToolRegistry.clearForTesting()
     const emptyPermission = await PlatformToolExecutor.execute(baseInput(registeredReference({
@@ -260,16 +263,19 @@ describe("PlatformToolExecutor", () => {
     const cases: Array<{
       availability: RuntimeToolRegistry.Definition["availability"]
       expected: string
+      expectedStage: "resolve" | "auth"
     }> = [
       {
         availability: () => {
           throw new Error("availability secret")
         },
         expected: "availability-check-failed",
+        expectedStage: "resolve",
       },
       {
         availability: () => new Promise(() => {}),
         expected: "availability-check-failed",
+        expectedStage: "resolve",
       },
       {
         availability: () => ({
@@ -278,12 +284,14 @@ describe("PlatformToolExecutor", () => {
           action: { type: "start-auth", label: "Authenticate demo" },
         }),
         expected: "auth-required",
+        expectedStage: "auth",
       },
     ]
 
     for (const item of cases) {
       RuntimeToolRegistry.clearForTesting()
       let executions = 0
+      const published: RuntimeResourceResolverFailure[] = []
       const reference = registeredReference({
         availability: item.availability,
         execute: async () => {
@@ -293,9 +301,15 @@ describe("PlatformToolExecutor", () => {
       })
       const result = await PlatformToolExecutor.execute(baseInput(reference, {
         availabilityBudgetMs: 10,
+        publishFailure: async (failure) => {
+          published.push(failure)
+        },
       }))
       expect(failureCode(result)).toBe(item.expected)
       expect(executions).toBe(0)
+      expect(published).toEqual([
+        expect.objectContaining({ code: item.expected, stage: item.expectedStage }),
+      ])
     }
   })
 

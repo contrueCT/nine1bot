@@ -267,6 +267,89 @@ test("redacts platform diagnostics before publishing registered tool failures", 
   })
 })
 
+test("defers conflict finalization and publishes one finalized resolution per turn", async () => {
+  await using tmp = await tmpdir({ git: true })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      RuntimeToolRegistry.registerOwner({
+        owner: { id: "demo", kind: "platform", enabled: true },
+        tools: [toolDefinition("demo_unique"), toolDefinition("demo_conflict")],
+      })
+      const profile = testProfile({
+        builtinTools: {},
+        registeredTools: {
+          tools: ["demo_unique", "demo_conflict"],
+          lifecycle: "session",
+          mergeMode: "additive-only",
+        },
+        mcp: { servers: [], lifecycle: "session", mergeMode: "additive-only" },
+        skills: { skills: [], lifecycle: "session", mergeMode: "additive-only" },
+      })
+      const failures: Array<Record<string, unknown>> = []
+      const resolutions: Array<Record<string, unknown>> = []
+      const unsubscribeFailure = Bus.subscribe(RuntimeResourceResolver.Failed, (event) => {
+        failures.push(event.properties)
+      })
+      const unsubscribeResolved = Bus.subscribe(RuntimeResourceResolver.ResolvedEvent, (event) => {
+        resolutions.push(event.properties)
+      })
+
+      try {
+        const preliminary = await RuntimeResourceResolver.resolve({
+          sessionID: "session_conflict",
+          turnSnapshotId: "turn_conflict",
+          profile,
+          emitFailures: false,
+          emitResolved: false,
+        })
+        expect(failures).toEqual([])
+        expect(resolutions).toEqual([])
+
+        const finalized = RuntimeResourceResolver.applyToolConflicts(
+          preliminary,
+          new Set(["demo_conflict"]),
+        )
+        expect(finalized.registeredTools.availableTools.map((tool) => tool.id)).toEqual(["demo_unique"])
+        expect(finalized.audit.resolved.registeredTools).toEqual(["demo_unique"])
+        expect(finalized.failures).toContainEqual(expect.objectContaining({
+          resourceID: "demo_conflict",
+          ownerID: "demo",
+          generation: 1,
+          code: "tool-conflict",
+        }))
+
+        await RuntimeResourceResolver.publishResolution({
+          sessionID: "session_conflict",
+          turnSnapshotId: "turn_conflict",
+          resolved: finalized,
+        })
+        await RuntimeResourceResolver.publishResolution({
+          sessionID: "session_conflict",
+          turnSnapshotId: "turn_conflict",
+          resolved: finalized,
+        })
+
+        expect(failures).toEqual([
+          expect.objectContaining({ resourceID: "demo_conflict", code: "tool-conflict" }),
+        ])
+        expect(resolutions).toEqual([
+          expect.objectContaining({
+            turnSnapshotId: "turn_conflict",
+            resolved: expect.objectContaining({ registeredTools: ["demo_unique"] }),
+            failures: 1,
+          }),
+        ])
+      } finally {
+        unsubscribeFailure()
+        unsubscribeResolved()
+        RuntimeToolRegistry.clearForTesting()
+      }
+    },
+  })
+})
+
 function toolDefinition(id: string): RuntimeToolRegistry.Definition {
   return {
     id,
