@@ -555,15 +555,64 @@ test("ask - returns pending promise when action is ask", async () => {
     fn: async () => {
       const promise = PermissionNext.ask({
         sessionID: "session_test",
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "external_directory",
+        patterns: ["/tmp/project"],
         metadata: {},
         always: [],
-        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        ruleset: [{ permission: "external_directory", pattern: "*", action: "ask" }],
       })
       // Promise should be pending, not resolved
       expect(promise).toBeInstanceOf(Promise)
       // Don't await - just verify it returns a promise
+    },
+  })
+})
+
+test("ask - aborts and removes a non-autonomous pending request", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    config: {
+      autonomous: {
+        enabled: false,
+        maxRetries: 3,
+        askAfterRetries: true,
+        allowDoomLoop: true,
+      },
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const controller = new AbortController()
+      const askPromise = PermissionNext.ask({
+        id: "permission_abort_test",
+        sessionID: "session_test",
+        permission: "external_directory",
+        patterns: ["C:\\outside"],
+        metadata: {},
+        always: ["C:\\outside"],
+        ruleset: [{ permission: "external_directory", pattern: "*", action: "ask" }],
+        signal: controller.signal,
+      })
+      await waitForPendingPermission("permission_abort_test")
+
+      controller.abort()
+      const outcome = await Promise.race([
+        askPromise.then(
+          () => ({ status: "resolved" as const }),
+          (error) => ({ status: "rejected" as const, name: error instanceof Error ? error.name : "unknown" }),
+        ),
+        Bun.sleep(100).then(() => ({ status: "timeout" as const })),
+      ])
+      const pendingAfterAbort = await PermissionNext.list()
+
+      if (pendingAfterAbort.some((item) => item.id === "permission_abort_test")) {
+        await PermissionNext.reply({ requestID: "permission_abort_test", reply: "reject" })
+        await askPromise.catch(() => undefined)
+      }
+
+      expect(outcome).toEqual({ status: "rejected", name: "AbortError" })
+      expect(pendingAfterAbort.map((item) => item.id)).not.toContain("permission_abort_test")
     },
   })
 })
@@ -578,12 +627,13 @@ test("reply - once resolves the pending ask", async () => {
       const askPromise = PermissionNext.ask({
         id: "permission_test1",
         sessionID: "session_test",
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "external_directory",
+        patterns: ["/tmp/project"],
         metadata: {},
         always: [],
         ruleset: [],
       })
+      await waitForPendingPermission("permission_test1")
 
       await PermissionNext.reply({
         requestID: "permission_test1",
@@ -603,12 +653,13 @@ test("reply - reject throws RejectedError", async () => {
       const askPromise = PermissionNext.ask({
         id: "permission_test2",
         sessionID: "session_test",
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "external_directory",
+        patterns: ["/tmp/project"],
         metadata: {},
         always: [],
         ruleset: [],
       })
+      await waitForPendingPermission("permission_test2")
 
       await PermissionNext.reply({
         requestID: "permission_test2",
@@ -683,8 +734,8 @@ test("reply - reject cancels all pending for same session", async () => {
       const askPromise1 = PermissionNext.ask({
         id: "permission_test4a",
         sessionID: "session_same",
-        permission: "bash",
-        patterns: ["ls"],
+        permission: "external_directory",
+        patterns: ["/tmp/project"],
         metadata: {},
         always: [],
         ruleset: [],
@@ -693,12 +744,16 @@ test("reply - reject cancels all pending for same session", async () => {
       const askPromise2 = PermissionNext.ask({
         id: "permission_test4b",
         sessionID: "session_same",
-        permission: "edit",
-        patterns: ["foo.ts"],
+        permission: "sandbox",
+        patterns: ["project"],
         metadata: {},
         always: [],
         ruleset: [],
       })
+      await Promise.all([
+        waitForPendingPermission("permission_test4a"),
+        waitForPendingPermission("permission_test4b"),
+      ])
 
       // Catch rejections before they become unhandled
       const result1 = askPromise1.catch((e) => e)

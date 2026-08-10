@@ -129,12 +129,13 @@ export namespace PermissionNext {
   export const ask = fn(
     Request.partial({ id: true }).extend({
       ruleset: Ruleset,
+      signal: z.custom<AbortSignal>((value) => value instanceof AbortSignal).optional(),
     }),
     async (input) => {
       const s = await state()
       const config = await Config.get()
       const isAutonomous = config.autonomous?.enabled !== false
-      const { ruleset, ...request } = input
+      const { ruleset, signal, ...request } = input
       const profileRuleset = (await RuntimeFeatureFlags.profileSnapshotEnabled())
         ? ((await SessionRuntimeProfile.grantRuleset(request.sessionID)) as Ruleset)
         : []
@@ -164,27 +165,44 @@ export namespace PermissionNext {
               id,
               ...request,
             }
+            let settled = false
+            const onAbort = () => settleReject(abortError(signal))
+            const cleanup = () => {
+              clearTimeout(timeout)
+              signal?.removeEventListener("abort", onAbort)
+            }
+            const settleResolve = () => {
+              if (settled) return
+              settled = true
+              cleanup()
+              resolve()
+            }
+            const settleReject = (error: unknown) => {
+              if (settled) return
+              settled = true
+              if (s.pending[id]?.info === info) delete s.pending[id]
+              cleanup()
+              reject(error)
+            }
 
             // 5分钟超时，防止权限请求永远等待
             const PERMISSION_TIMEOUT = 5 * 60 * 1000
             const timeout = setTimeout(() => {
-              delete s.pending[id]
               log.warn("permission request timeout", { id, permission: request.permission })
-              reject(new Error(`Permission request timeout after 5 minutes: ${request.permission}`))
+              settleReject(new Error(`Permission request timeout after 5 minutes: ${request.permission}`))
             }, PERMISSION_TIMEOUT)
 
             s.pending[id] = {
               info,
               ruleset: runtimeRuleset,
-              resolve: () => {
-                clearTimeout(timeout)
-                resolve()
-              },
-              reject: (err) => {
-                clearTimeout(timeout)
-                reject(err)
-              },
+              resolve: settleResolve,
+              reject: settleReject,
             }
+            if (signal?.aborted) {
+              settleReject(abortError(signal))
+              return
+            }
+            signal?.addEventListener("abort", onAbort, { once: true })
             Bus.publish(Event.Asked, info)
           })
         }
@@ -330,5 +348,10 @@ export namespace PermissionNext {
 
   export async function list() {
     return state().then((x) => Object.values(x.pending).map((x) => x.info))
+  }
+
+  function abortError(signal?: AbortSignal) {
+    if (signal?.reason instanceof Error) return signal.reason
+    return new DOMException("Permission request aborted.", "AbortError")
   }
 }
