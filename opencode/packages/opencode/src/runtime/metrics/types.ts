@@ -110,8 +110,10 @@ export type ResourceMetricEvent =
       turnSnapshotId?: string
       declaredMcp: number
       declaredSkills: number
+      declaredRegisteredTools: number
       resolvedMcp: number
       resolvedSkills: number
+      resolvedRegisteredTools: number
       failures: number
     }
   | {
@@ -120,8 +122,11 @@ export type ResourceMetricEvent =
       recordedAt: number
       sessionID: string
       turnSnapshotId?: string
-      resourceType: "mcp" | "skill"
+      resourceType: "mcp" | "skill" | "tool"
       resourceID: string
+      ownerID?: string
+      generation?: number
+      code?: string
       failureStatus: "degraded" | "unavailable" | "auth-required"
       stage: "resolve" | "connect" | "auth" | "load" | "execute"
       reason?: string
@@ -176,7 +181,7 @@ export type ToolMetricsRow = {
 }
 
 export type ResourceMetricsRow = {
-  resourceType: "mcp" | "skill"
+  resourceType: "mcp" | "skill" | "tool"
   resourceID: string
   failures: number
   recoverableFailures: number

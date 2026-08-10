@@ -2,7 +2,10 @@ import z from "zod"
 import { Bus } from "@/bus"
 import { BusEvent } from "@/bus/bus-event"
 import { Config } from "@/config/config"
+import { Instance } from "@/project/instance"
 import { Log } from "@/util/log"
+import { RuntimeToolCatalog } from "@/runtime/tool/catalog"
+import { sanitizePlatformToolDiagnostic } from "@/runtime/tool/sanitize"
 import type {
   McpResourceSpec,
   ResourceAvailability,
@@ -14,14 +17,18 @@ import type {
 export namespace RuntimeResourceResolver {
   const log = Log.create({ service: "runtime.resource-resolver" })
   const RESOURCE_TEMPLATE_ID = "resource-resolver"
+  const emittedToolFailures = Instance.state(() => new Map<string, string>())
 
   export const Failed = BusEvent.define(
     "runtime.resource.failed",
     z.object({
       sessionID: z.string(),
       turnSnapshotId: z.string().optional(),
-      resourceType: z.enum(["mcp", "skill"]),
+      resourceType: z.enum(["mcp", "skill", "tool"]),
       resourceID: z.string(),
+      ownerID: z.string().optional(),
+      generation: z.number().int().positive().optional(),
+      code: z.string().optional(),
       status: z.enum(["degraded", "unavailable", "auth-required"]),
       stage: z.enum(["resolve", "connect", "auth", "load", "execute"]),
       reason: z.string().optional(),
@@ -44,14 +51,16 @@ export namespace RuntimeResourceResolver {
       declared: z.object({
         mcp: z.array(z.string()),
         skills: z.array(z.string()),
+        registeredTools: z.array(z.string()),
       }),
       resolved: z.object({
         mcp: z.array(z.string()),
         skills: z.array(z.string()),
+        registeredTools: z.array(z.string()),
       }),
       unavailable: z.array(
         z.object({
-          type: z.enum(["mcp", "skill"]),
+          type: z.enum(["mcp", "skill", "tool"]),
           id: z.string(),
           reason: z.string().optional(),
           error: z.string().optional(),
@@ -63,6 +72,11 @@ export namespace RuntimeResourceResolver {
 
   export type Resolved = {
     builtinTools: ResourceSpec["builtinTools"]
+    registeredTools: {
+      declaredTools: string[]
+      availableTools: RuntimeToolCatalog.ResolvedReference[]
+      availability: Record<string, ResourceAvailability>
+    }
     mcp: {
       declaredServers: string[]
       availableServers: string[]
@@ -78,12 +92,14 @@ export namespace RuntimeResourceResolver {
       declared: {
         mcp: string[]
         skills: string[]
+        registeredTools: string[]
       }
       resolved: {
         mcp: string[]
         skills: string[]
+        registeredTools: string[]
       }
-      unavailable: Array<{ type: "mcp" | "skill"; id: string; reason?: string; error?: string }>
+      unavailable: Array<{ type: "mcp" | "skill" | "tool"; id: string; reason?: string; error?: string }>
     }
   }
 
@@ -179,16 +195,39 @@ export namespace RuntimeResourceResolver {
     sessionID: string
     turnSnapshotId?: string
     profile?: SessionProfileSnapshot
+    projectID?: string
+    directory?: string
+    agent?: string
+    templateIds?: string[]
+    occupiedToolIDs?: ReadonlySet<string>
+    isToolExposureDenied?: (toolID: string) => boolean | Promise<boolean>
+    toolAvailabilityBudgetMs?: number
     emitFailures?: boolean
     emitResolved?: boolean
   }): Promise<Resolved> {
     const resources = input.profile?.resources ?? (await compileProfileResources())
-    const mcp = await resolveMcp(resources.mcp)
-    const skills = await resolveSkills(resources.skills)
-    const failures = [...mcp.failures, ...skills.failures]
+    const [mcp, skills, registeredTools] = await Promise.all([
+      resolveMcp(resources.mcp),
+      resolveSkills(resources.skills),
+      resolveRegisteredTools(input, resources),
+    ])
+    const failures = [...mcp.failures, ...skills.failures, ...registeredTools.failures]
+
+    const failedToolIDs = new Set(registeredTools.failures.map((failure) => failure.resourceID))
+    for (const tool of registeredTools.available) {
+      if (!failedToolIDs.has(tool.id)) clearToolFailure(input.sessionID, tool.id)
+    }
 
     if (input.emitFailures !== false) {
       for (const failure of failures) {
+        if (failure.resourceType === "tool") {
+          await publishToolFailure({
+            sessionID: input.sessionID,
+            turnSnapshotId: input.turnSnapshotId,
+            failure,
+          })
+          continue
+        }
         await Bus.publish(Failed, {
           ...failure,
           sessionID: input.sessionID,
@@ -201,6 +240,11 @@ export namespace RuntimeResourceResolver {
 
     const result: Resolved = {
       builtinTools: resources.builtinTools,
+      registeredTools: {
+        declaredTools: registeredTools.declared,
+        availableTools: registeredTools.available,
+        availability: registeredTools.availability,
+      },
       mcp: {
         declaredServers: mcp.declaredServers,
         availableServers: mcp.availableServers,
@@ -216,10 +260,12 @@ export namespace RuntimeResourceResolver {
         declared: {
           mcp: mcp.declaredServers,
           skills: skills.declaredSkills,
+          registeredTools: registeredTools.declared,
         },
         resolved: {
           mcp: mcp.availableServers,
           skills: skills.availableSkills.map((skill) => skill.name),
+          registeredTools: registeredTools.available.map((tool) => tool.id),
         },
         unavailable: failures.map((failure) => ({
           type: failure.resourceType,
@@ -244,6 +290,110 @@ export namespace RuntimeResourceResolver {
     }
 
     return result
+  }
+
+  export async function publishToolFailure(input: {
+    sessionID: string
+    turnSnapshotId?: string
+    failure: ResourceFailure
+  }) {
+    if (input.failure.resourceType !== "tool") {
+      throw new Error("publishToolFailure only accepts registered tool failures.")
+    }
+    const failure = sanitizeToolFailure(input.failure)
+    const key = `${input.sessionID}:${failure.resourceID}`
+    const signature = failureSignature(failure)
+    const emitted = emittedToolFailures()
+    const previous = emitted.get(key)
+    if (previous === signature) return false
+    emitted.set(key, signature)
+
+    try {
+      await Bus.publish(Failed, {
+        ...failure,
+        sessionID: input.sessionID,
+        turnSnapshotId: input.turnSnapshotId,
+      })
+    } catch (error) {
+      if (emitted.get(key) === signature) {
+        if (previous === undefined) emitted.delete(key)
+        else emitted.set(key, previous)
+      }
+      log.warn("failed to publish registered tool failure event", { error })
+      return false
+    }
+    return true
+  }
+
+  export function clearToolFailure(sessionID: string, toolID: string) {
+    return emittedToolFailures().delete(`${sessionID}:${toolID}`)
+  }
+
+  function failureSignature(failure: ResourceFailure) {
+    return [
+      failure.ownerID ?? "missing-owner",
+      failure.generation ?? 0,
+      failure.code ?? failure.reason ?? failure.status,
+      failure.status,
+    ].join(":")
+  }
+
+  function sanitizeToolFailure(failure: ResourceFailure): ResourceFailure {
+    return {
+      ...failure,
+      reason: failure.reason ? sanitizePlatformToolDiagnostic(failure.reason) : undefined,
+      message: sanitizePlatformToolDiagnostic(failure.message),
+      action: failure.action
+        ? {
+            ...failure.action,
+            label: sanitizePlatformToolDiagnostic(failure.action.label),
+          }
+        : undefined,
+    }
+  }
+
+  async function resolveRegisteredTools(
+    input: {
+      sessionID: string
+      profile?: SessionProfileSnapshot
+      projectID?: string
+      directory?: string
+      agent?: string
+      templateIds?: string[]
+      occupiedToolIDs?: ReadonlySet<string>
+      isToolExposureDenied?: (toolID: string) => boolean | Promise<boolean>
+      toolAvailabilityBudgetMs?: number
+    },
+    resources: ResourceSpec,
+  ) {
+    const declared = uniqueSorted(resources.registeredTools?.tools ?? [])
+    if (declared.length === 0) {
+      return {
+        declared,
+        available: [] as RuntimeToolCatalog.ResolvedReference[],
+        availability: {} as Record<string, ResourceAvailability>,
+        failures: [] as RuntimeToolCatalog.ToolFailure[],
+        summaries: [] as RuntimeToolCatalog.ToolSummary[],
+      }
+    }
+
+    if (!input.profile && (!input.agent || !input.directory || input.templateIds === undefined)) {
+      throw new Error("Registered tool resolution requires authoritative agent, directory, and template context.")
+    }
+
+    return RuntimeToolCatalog.resolveDeclared({
+      ids: declared,
+      context: {
+        sessionId: input.sessionID,
+        projectId: input.projectID ?? Instance.project.id,
+        directory: input.directory ?? Instance.directory,
+        agent: input.profile?.agent.name ?? input.agent!,
+        templateIds: input.profile?.sourceTemplateIds ?? input.templateIds!,
+      },
+      occupiedToolIDs: input.occupiedToolIDs,
+      isExposureDenied: input.isToolExposureDenied,
+      budgetMs: input.toolAvailabilityBudgetMs,
+    })
   }
 
   async function resolveMcp(spec: McpResourceSpec) {

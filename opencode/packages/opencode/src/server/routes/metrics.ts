@@ -15,11 +15,16 @@ const DetailQuery = WindowQuery.extend({
   providerID: z.string().optional(),
   modelID: z.string().optional(),
   tool: z.string().optional(),
-  resourceType: z.enum(["mcp", "skill"]).optional(),
+  resourceType: z.enum(["mcp", "skill", "tool"]).optional(),
   resourceID: z.string().optional(),
   sessionID: z.string().optional(),
   turnSnapshotId: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
+})
+
+const ResourceQuery = WindowQuery.extend({
+  resourceType: z.enum(["mcp", "skill", "tool"]).optional(),
+  resourceID: z.string().optional(),
 })
 
 function windowMs(value?: z.infer<typeof WindowQuery>["window"]) {
@@ -225,10 +230,15 @@ export const MetricsRoutes = lazy(() =>
           },
         },
       }),
-      validator("query", WindowQuery),
+      validator("query", ResourceQuery),
       async (c) => {
         const query = c.req.valid("query")
-        return c.json(summarize(query.window).resources)
+        const resources = summarize(query.window).resources.filter((resource) => {
+          if (query.resourceType && resource.resourceType !== query.resourceType) return false
+          if (query.resourceID && resource.resourceID !== query.resourceID) return false
+          return true
+        })
+        return c.json(resources)
       },
     ),
 )

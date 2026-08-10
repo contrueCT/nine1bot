@@ -79,6 +79,67 @@ describe("Runtime metrics pipeline", () => {
     })
   })
 
+  test("normalizes registered tool resource counts and preserves tool failure fields", () => {
+    const resolved = RuntimeMetricsNormalizer.normalize({
+      type: "runtime.resources.resolved",
+      properties: {
+        sessionID: "session_test",
+        declared: { mcp: [], skills: [], registeredTools: ["demo_lookup"] },
+        resolved: { mcp: [], skills: [], registeredTools: ["demo_lookup"] },
+        unavailable: [],
+        failures: 0,
+      },
+    })
+    const failed = RuntimeMetricsNormalizer.normalize({
+      type: "runtime.resource.failed",
+      properties: {
+        sessionID: "session_test",
+        resourceType: "tool",
+        resourceID: "demo_lookup",
+        ownerID: "demo",
+        generation: 2,
+        code: "auth-required",
+        status: "auth-required",
+        stage: "auth",
+        recoverable: true,
+      },
+    })
+
+    expect(resolved[0]).toMatchObject({
+      kind: "resource",
+      status: "resolved",
+      declaredRegisteredTools: 1,
+      resolvedRegisteredTools: 1,
+    })
+    expect(failed[0]).toMatchObject({
+      kind: "resource",
+      status: "failed",
+      resourceType: "tool",
+      ownerID: "demo",
+      generation: 2,
+      code: "auth-required",
+    })
+    expect(RuntimeMetricsQueries.detail(failed, { resourceType: "tool" })).toEqual(failed)
+    expect(RuntimeMetricsAggregator.resources(failed)[0]).toMatchObject({
+      resourceType: "tool",
+      resourceID: "demo_lookup",
+    })
+
+    const legacy = RuntimeMetricsNormalizer.normalize({
+      type: "runtime.resources.resolved",
+      properties: {
+        sessionID: "session_legacy",
+        declared: { mcp: [], skills: [] },
+        resolved: { mcp: [], skills: [] },
+        failures: 0,
+      },
+    })
+    expect(legacy[0]).toMatchObject({
+      declaredRegisteredTools: 0,
+      resolvedRegisteredTools: 0,
+    })
+  })
+
   test("aggregates overview, models, and tools", () => {
     const events = [
       ...RuntimeMetricsNormalizer.normalize({

@@ -14,7 +14,7 @@ export namespace RuntimeMetricsQueries {
     providerID?: string
     modelID?: string
     tool?: string
-    resourceType?: "mcp" | "skill"
+    resourceType?: "mcp" | "skill" | "tool"
     resourceID?: string
     sessionID?: string
     turnSnapshotId?: string
