@@ -240,6 +240,13 @@ describe("nine1bot controller api", () => {
   })
 
   test("applies browser extension sidepanel model and prompt only to extension sessions", async () => {
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      tools: [
+        registeredToolDefinition("demo_lookup", "user-selectable"),
+        registeredToolDefinition("demo_declared", "declared-only"),
+      ],
+    })
     const envSnapshot = { ...process.env }
     const tempDir = await mkdtemp(path.join(tmpdir(), "nine1bot-browser-extension-agent-"))
     const configPath = path.join(tempDir, "nine1bot.config.jsonc")
@@ -252,6 +259,7 @@ describe("nine1bot controller api", () => {
             prompt: "Browser-only controller prompt.",
             mcpServers: ["filesystem"],
             skills: ["browser-review"],
+            registeredTools: ["demo_lookup"],
           },
         },
       }),
@@ -294,6 +302,7 @@ describe("nine1bot controller api", () => {
                 resources?: {
                   mcp?: { servers?: string[] }
                   skills?: { skills?: string[] }
+                  registeredTools?: { tools?: string[] }
                 }
               }
             }
@@ -305,6 +314,7 @@ describe("nine1bot controller api", () => {
             })
             expect(browserBody.profileSnapshot?.resources?.mcp?.servers).toContain("filesystem")
             expect(browserBody.profileSnapshot?.resources?.skills?.skills).toContain("browser-review")
+            expect(browserBody.profileSnapshot?.resources?.registeredTools?.tools).toContain("demo_lookup")
 
             const browserSent = await app.request(`/nine1bot/agent/sessions/${browserSessionId}/messages`, {
               method: "POST",
@@ -353,6 +363,7 @@ describe("nine1bot controller api", () => {
               resources?: {
                 mcp?: { servers?: string[] }
                 skills?: { skills?: string[] }
+                registeredTools?: { tools?: string[] }
               }
             }
           }
@@ -364,6 +375,7 @@ describe("nine1bot controller api", () => {
           })
           expect(webBody.profileSnapshot?.resources?.mcp?.servers ?? []).not.toContain("filesystem")
           expect(webBody.profileSnapshot?.resources?.skills?.skills ?? []).not.toContain("browser-review")
+          expect(webBody.profileSnapshot?.resources?.registeredTools?.tools ?? []).not.toContain("demo_lookup")
 
             const webSent = await app.request(`/nine1bot/agent/sessions/${webSessionId}/messages`, {
               method: "POST",
@@ -402,6 +414,45 @@ describe("nine1bot controller api", () => {
       }
       await rm(tempDir, { recursive: true, force: true })
     }
+  })
+
+  test("returns a safe 400 response for direct selection of a declared-only tool", async () => {
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      tools: [registeredToolDefinition("demo_declared", "declared-only")],
+    })
+
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const body = {
+          sessionChoice: {
+            resources: {
+              registeredTools: { tools: ["demo_declared"] },
+            },
+          },
+        }
+        const response = await Server.App().request("/nine1bot/agent/sessions", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify(body),
+        })
+        expect(response.status).toBe(400)
+        const expected = {
+          error: "Some registered tools cannot be selected for this session.",
+          invalid: [{ id: "demo_declared", reason: "declared-only" }],
+        }
+        await expect(response.json()).resolves.toEqual(expected)
+
+        const templateResponse = await Server.App().request("/nine1bot/agent/templates/resolve", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify(body),
+        })
+        expect(templateResponse.status).toBe(400)
+        await expect(templateResponse.json()).resolves.toEqual(expected)
+      },
+    })
   })
 
   test("reports declared and conflict-finalized registered tools in session debug", async () => {
@@ -537,11 +588,14 @@ function restoreEnv(snapshot: NodeJS.ProcessEnv) {
   }
 }
 
-function registeredToolDefinition(id: string): RuntimeToolRegistry.Definition {
+function registeredToolDefinition(
+  id: string,
+  catalogVisibility: RuntimeToolRegistry.Definition["catalogVisibility"] = "declared-only",
+): RuntimeToolRegistry.Definition {
   return {
     id,
     description: `Use ${id}`,
-    catalogVisibility: "declared-only",
+    catalogVisibility,
     inputSchema: {
       type: "object",
       additionalProperties: false,

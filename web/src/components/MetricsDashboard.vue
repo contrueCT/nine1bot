@@ -47,7 +47,7 @@ type DetailSelection =
       kind: 'resource'
       title: string
       subtitle: string
-      params: { kind: 'resource'; resourceType: 'mcp' | 'skill'; resourceID: string }
+      params: { kind: 'resource'; resourceType: 'mcp' | 'skill' | 'tool'; resourceID: string }
     }
 
 const selectedWindow = ref<WindowOption>('24h')
@@ -156,7 +156,7 @@ const overviewCards = computed<Array<{
     {
       label: '资源失败',
       value: formatNumber(value.resourceFailuresTotal),
-      note: 'MCP / 技能问题',
+      note: 'MCP / 技能 / 平台工具问题',
       icon: ServerCrash,
       tone: value.resourceFailuresTotal >= 5 ? 'critical' : value.resourceFailuresTotal > 0 ? 'watch' : 'healthy',
     },
@@ -370,7 +370,7 @@ async function openToolDetail(row: ToolMetricsRow) {
 async function openResourceDetail(row: ResourceMetricsRow) {
   detailSelection.value = {
     kind: 'resource',
-    title: `${row.resourceType} / ${row.resourceID}`,
+    title: `${resourceTypeLabel(row.resourceType)} / ${row.resourceID}`,
     subtitle: '最近的资源失败及恢复相关的运行时事件。',
     params: {
       kind: 'resource',
@@ -548,7 +548,7 @@ function detailEventTitle(event: MetricsDetailEvent) {
   if (event.kind === 'controller_api') return `${event.method} ${event.route}`
   if (event.kind === 'turn') return event.status === 'failed' ? '轮次失败' : '轮次完成'
   if (event.kind === 'tool') return `${event.tool} · ${event.status}`
-  return event.status === 'failed' ? `${event.resourceType} / ${event.resourceID}` : '资源解析'
+  return event.status === 'failed' ? `${resourceTypeLabel(event.resourceType)} / ${event.resourceID}` : '资源解析'
 }
 
 function detailEventSummary(event: MetricsDetailEvent) {
@@ -573,7 +573,13 @@ function detailEventSummary(event: MetricsDetailEvent) {
   if (event.status === 'failed') {
     return `${event.failureStatus} · ${event.stage}${event.reason ? ` · ${event.reason}` : ''}`
   }
-  return `${event.resolvedMcp ?? 0} MCP · ${event.resolvedSkills ?? 0} 个技能`
+  return `${event.resolvedMcp ?? 0} MCP · ${event.resolvedSkills ?? 0} 个技能 · ${event.resolvedRegisteredTools ?? 0} 个平台注册工具`
+}
+
+function resourceTypeLabel(value: ResourceMetricsRow['resourceType']) {
+  if (value === 'mcp') return 'MCP'
+  if (value === 'skill') return '技能'
+  return '平台注册工具'
 }
 
 function detailMeta(event: MetricsDetailEvent) {
@@ -590,7 +596,7 @@ function formatDebugFailures(debug?: SessionDebugResponse | null) {
   if (!failures.length) return '暂无资源失败记录。'
   return failures
     .slice(0, 3)
-    .map((item) => `${item.resourceType}/${item.resourceID} · ${item.status} · ${item.stage}`)
+    .map((item) => `${resourceTypeLabel(item.resourceType ?? 'mcp')}/${item.resourceID} · ${item.status} · ${item.stage}`)
     .join(' · ')
 }
 
@@ -1003,7 +1009,7 @@ onUnmounted(() => {
           </div>
           <div v-if="topResource" class="highlight-body">
             <div class="highlight-title-row">
-              <strong>{{ topResource.resourceType }} / {{ topResource.resourceID }}</strong>
+              <strong>{{ resourceTypeLabel(topResource.resourceType) }} / {{ topResource.resourceID }}</strong>
               <span class="severity-pill" :class="`severity-${resourceSeverity(topResource)}`">
                 {{ severityLabel(resourceSeverity(topResource)) }}
               </span>
@@ -1163,7 +1169,7 @@ onUnmounted(() => {
           <div class="panel-head">
             <div>
               <h2>资源</h2>
-              <span>MCP 与技能性能下降 / 鉴权问题</span>
+              <span>MCP、技能与平台注册工具的性能下降 / 鉴权问题</span>
             </div>
             <div class="panel-controls">
               <div class="filter-group">
@@ -1173,6 +1179,7 @@ onUnmounted(() => {
                   <option value="all">全部类型</option>
                   <option value="mcp">MCP</option>
                   <option value="skill">技能</option>
+                  <option value="tool">平台注册工具</option>
                 </select>
                 <select v-model="resourceSeverityFilter" class="filter-select">
                   <option value="all">全部状态</option>
@@ -1211,7 +1218,7 @@ onUnmounted(() => {
                 >
                   <td>
                     <div class="primary-cell">
-                      <strong>{{ row.resourceType }}</strong>
+                      <strong>{{ resourceTypeLabel(row.resourceType) }}</strong>
                       <small>{{ row.resourceID }}</small>
                     </div>
                   </td>
@@ -1337,8 +1344,10 @@ onUnmounted(() => {
             <article class="debug-item debug-item-wide">
               <span>资源</span>
               <strong>
-                MCP {{ formatNumber(detailDebug.profileSnapshot?.resources?.mcp?.length ?? 0) }} ·
-                技能 {{ formatNumber(detailDebug.profileSnapshot?.resources?.skills?.length ?? 0) }}
+                MCP {{ formatNumber(detailDebug.profileSnapshot?.resources?.mcp?.servers?.length ?? 0) }} ·
+                技能 {{ formatNumber(detailDebug.profileSnapshot?.resources?.skills?.skills?.length ?? 0) }} ·
+                平台工具声明 {{ formatNumber(detailDebug.registeredTools?.declared?.length ?? 0) }} ·
+                当前可用 {{ formatNumber(detailDebug.registeredTools?.resolved?.length ?? 0) }}
               </strong>
             </article>
             <article class="debug-item debug-item-wide">

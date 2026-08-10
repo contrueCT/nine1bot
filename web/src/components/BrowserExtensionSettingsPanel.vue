@@ -4,20 +4,24 @@ import { CheckCircle2, Link2, Server, Sparkles, Wrench, X } from 'lucide-vue-nex
 import {
   mcpApi,
   nine1botConfigApi,
+  platformApi,
   providerApi,
   skillApi,
   type BrowserExtensionConfig,
   type McpServer,
+  type PlatformToolSummary,
   type Provider,
   type Skill,
 } from '../api/client'
 import { getTrustedExtensionParentContext, isTrustedExtensionParentEvent } from '../utils/extension-parent'
+import { platformToolRows } from '../utils/platform-tool-catalog'
+import { platformSettingsUrl } from '../utils/settings-deeplink'
 
 const emit = defineEmits<{
   close: []
 }>()
 
-type SettingsTab = 'models' | 'prompt' | 'mcp' | 'skills' | 'relay'
+type SettingsTab = 'models' | 'prompt' | 'mcp' | 'skills' | 'tools' | 'relay'
 
 interface BrowserRelaySettings {
   origin: string
@@ -37,12 +41,14 @@ const statusTone = ref<'neutral' | 'success' | 'error'>('neutral')
 const providers = ref<Provider[]>([])
 const mcpServers = ref<McpServer[]>([])
 const skills = ref<Skill[]>([])
+const platformTools = ref<PlatformToolSummary[]>([])
 const config = ref<BrowserExtensionConfig>({})
 
 const selectedModel = ref('')
 const promptDraft = ref('')
 const selectedMcpServers = ref<string[]>([])
 const selectedSkills = ref<string[]>([])
+const selectedRegisteredTools = ref<string[]>([])
 
 const relaySettings = ref<BrowserRelaySettings>({
   origin: '',
@@ -69,6 +75,11 @@ const sortedProviders = computed(() => [...providers.value].sort((a, b) => {
 const enabledMcpServers = computed(() =>
   mcpServers.value.filter((server) => server.status !== 'disabled'),
 )
+const registeredToolRows = computed(() => platformToolRows(platformTools.value))
+const staleRegisteredToolIDs = computed(() => {
+  const known = new Set(registeredToolRows.value.map((tool) => tool.id))
+  return selectedRegisteredTools.value.filter((toolID) => !known.has(toolID)).sort()
+})
 
 function getStatusText(status: string): string {
   switch (status) {
@@ -110,6 +121,7 @@ function applyConfig(next: BrowserExtensionConfig) {
   promptDraft.value = next.prompt || ''
   selectedMcpServers.value = [...(next.mcpServers || [])]
   selectedSkills.value = [...(next.skills || [])]
+  selectedRegisteredTools.value = [...(next.registeredTools || [])]
 }
 
 function applyRelaySettings(next?: BrowserRelaySettings) {
@@ -130,6 +142,35 @@ function toggleMcp(name: string) {
 
 function toggleSkill(name: string) {
   selectedSkills.value = toggleValue(selectedSkills.value, name)
+}
+
+function toggleRegisteredTool(tool: ReturnType<typeof platformToolRows>[number]) {
+  const selected = selectedRegisteredTools.value.includes(tool.id)
+  if (!selected && !tool.selectable) return
+  selectedRegisteredTools.value = toggleValue(selectedRegisteredTools.value, tool.id)
+}
+
+function removeStaleRegisteredTool(toolID: string) {
+  selectedRegisteredTools.value = selectedRegisteredTools.value.filter((item) => item !== toolID)
+}
+
+function registeredToolStatus(tool: ReturnType<typeof platformToolRows>[number]) {
+  if (tool.status === 'registered') return '可用'
+  if (tool.status === 'auth-required') return '需要认证'
+  if (tool.status === 'conflict') return '与当前项目工具冲突'
+  if (tool.status === 'disabled') return '平台已停用'
+  if (tool.status === 'error') return '状态检查失败'
+  return '当前不可用'
+}
+
+function openPlatformSettings(tool: ReturnType<typeof platformToolRows>[number]) {
+  if (!tool.canOpenSettings) return
+  try {
+    const baseUrl = relaySettings.value.origin || window.location.origin
+    window.open(platformSettingsUrl(baseUrl, tool.ownerId), '_blank', 'noopener,noreferrer')
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : '无法打开平台设置。', 'error')
+  }
 }
 
 function requestRelay(type: string, payload: Record<string, unknown> = {}) {
@@ -177,17 +218,19 @@ async function loadSettings() {
   loading.value = true
   setStatus('')
   try {
-    const [browserConfig, providerResult, servers, skillList, relay] = await Promise.all([
+    const [browserConfig, providerResult, servers, skillList, toolList, relay] = await Promise.all([
       nine1botConfigApi.getBrowserExtension(),
       providerApi.list(),
       mcpApi.list().catch(() => [] as McpServer[]),
       skillApi.list().catch(() => [] as Skill[]),
+      platformApi.tools({ templateIds: ['browser-generic'] }).catch(() => [] as PlatformToolSummary[]),
       requestRelay('nine1bot.getBrowserRelaySettings').catch(() => undefined),
     ])
     applyConfig(browserConfig)
     providers.value = providerResult.providers
     mcpServers.value = servers
     skills.value = skillList
+    platformTools.value = toolList
     applyRelaySettings(relay?.settings)
   } catch (error) {
     setStatus(error instanceof Error ? error.message : '加载插件设置失败。', 'error')
@@ -205,6 +248,7 @@ async function saveDefaults() {
       prompt: promptDraft.value.trim() || null,
       mcpServers: selectedMcpServers.value,
       skills: selectedSkills.value,
+      registeredTools: selectedRegisteredTools.value,
     })
     applyConfig(next)
     setStatus('插件默认配置已保存。', 'success')
@@ -271,6 +315,7 @@ onUnmounted(() => {
         <button class="tab" :class="{ active: activeTab === 'prompt' }" type="button" @click="activeTab = 'prompt'">提示词</button>
         <button class="tab" :class="{ active: activeTab === 'mcp' }" type="button" @click="activeTab = 'mcp'">MCP</button>
         <button class="tab" :class="{ active: activeTab === 'skills' }" type="button" @click="activeTab = 'skills'">技能</button>
+        <button class="tab" :class="{ active: activeTab === 'tools' }" type="button" @click="activeTab = 'tools'">工具</button>
         <button class="tab" :class="{ active: activeTab === 'relay' }" type="button" @click="activeTab = 'relay'">连接</button>
       </div>
 
@@ -376,6 +421,68 @@ onUnmounted(() => {
             </div>
           </section>
 
+          <section v-if="activeTab === 'tools'" class="settings-section">
+            <h3>平台注册工具</h3>
+            <p>选择以后新建的浏览器插件会话默认声明哪些平台专属工具。现有会话不会被修改。</p>
+            <div v-if="registeredToolRows.length === 0 && staleRegisteredToolIDs.length === 0" class="empty-state">
+              当前项目没有可由用户选择的平台工具。
+            </div>
+            <div v-else class="resource-list">
+              <div
+                v-for="tool in registeredToolRows"
+                :key="tool.id"
+                class="resource-card tool-resource-card"
+                :class="{
+                  active: selectedRegisteredTools.includes(tool.id),
+                  unavailable: !tool.selectable,
+                }"
+              >
+                <span class="resource-icon"><Wrench :size="16" /></span>
+                <span class="resource-main">
+                  <strong>{{ tool.id }}</strong>
+                  <small>
+                    {{ tool.description }} · {{ registeredToolStatus(tool) }}
+                    <template v-if="tool.unavailableReason"> · {{ tool.unavailableReason }}</template>
+                  </small>
+                </span>
+                <div class="tool-row-actions">
+                  <button
+                    v-if="tool.selectable || selectedRegisteredTools.includes(tool.id)"
+                    class="tool-action-btn"
+                    type="button"
+                    @click="toggleRegisteredTool(tool)"
+                  >
+                    <CheckCircle2 v-if="selectedRegisteredTools.includes(tool.id)" :size="15" />
+                    <span>{{ selectedRegisteredTools.includes(tool.id) ? '取消' : '选择' }}</span>
+                  </button>
+                  <button
+                    v-if="tool.canOpenSettings"
+                    class="tool-action-btn"
+                    type="button"
+                    @click="openPlatformSettings(tool)"
+                  >
+                    打开平台设置
+                  </button>
+                </div>
+              </div>
+
+              <div
+                v-for="toolID in staleRegisteredToolIDs"
+                :key="`stale:${toolID}`"
+                class="resource-card tool-resource-card unavailable"
+              >
+                <span class="resource-icon"><Wrench :size="16" /></span>
+                <span class="resource-main">
+                  <strong>{{ toolID }}</strong>
+                  <small>已保存，但当前项目未注册或平台已停用。可取消后保存配置。</small>
+                </span>
+                <button class="tool-action-btn" type="button" @click="removeStaleRegisteredTool(toolID)">
+                  取消
+                </button>
+              </div>
+            </div>
+          </section>
+
           <section v-if="activeTab === 'relay'" class="settings-section">
             <h3>浏览器 relay</h3>
             <p>修改浏览器插件连接到的 Nine1Bot Origin。Bootstrap 与 WebSocket 端点会自动派生。</p>
@@ -461,7 +568,7 @@ onUnmounted(() => {
 
 .settings-tabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 4px;
   margin: 0 24px;
   padding: 4px;
@@ -687,6 +794,36 @@ label {
   flex: 1;
 }
 
+.tool-resource-card {
+  cursor: default;
+}
+
+.tool-resource-card.unavailable {
+  border-color: var(--border-subtle);
+}
+
+.tool-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tool-action-btn {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
 .relay-actions {
   display: flex;
   gap: 8px;
@@ -771,5 +908,20 @@ code {
 
 .status-message.error {
   color: var(--error);
+}
+
+@media (max-width: 640px) {
+  .settings-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .tool-resource-card {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .tool-row-actions {
+    width: 100%;
+  }
 }
 </style>

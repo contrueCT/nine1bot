@@ -114,6 +114,7 @@ describe('loadConfig browser migration guards', () => {
       sidepanel: {
         mcpServers: [],
         skills: [],
+        registeredTools: [],
       },
     })
   })

@@ -14,6 +14,7 @@ export const BrowserExtensionConfigPatch = z.object({
   prompt: z.string().nullable().optional(),
   mcpServers: z.array(z.string()).nullable().optional(),
   skills: z.array(z.string()).nullable().optional(),
+  registeredTools: z.array(z.string()).nullable().optional(),
 })
 export type BrowserExtensionConfigPatch = z.infer<typeof BrowserExtensionConfigPatch>
 
@@ -22,6 +23,7 @@ export interface BrowserExtensionConfig {
   prompt?: string
   mcpServers?: string[]
   skills?: string[]
+  registeredTools?: string[]
 }
 
 export function isBrowserExtensionEntry(entry?: RuntimeControllerProtocol.Entry): boolean {
@@ -73,12 +75,14 @@ function normalizeBrowserExtensionConfig(config: Record<string, any>): BrowserEx
     : undefined
   const mcpServers = normalizeStringList(sidepanel.mcpServers)
   const skills = normalizeStringList(sidepanel.skills)
+  const registeredTools = normalizeStringList(sidepanel.registeredTools)
 
   return {
     ...(model ? { model } : {}),
     ...(prompt ? { prompt } : {}),
     ...(mcpServers.length > 0 ? { mcpServers } : {}),
     ...(skills.length > 0 ? { skills } : {}),
+    ...(registeredTools.length > 0 ? { registeredTools } : {}),
   }
 }
 
@@ -124,6 +128,12 @@ export async function patchBrowserExtensionConfig(patch: BrowserExtensionConfigP
     const skills = normalizeStringList(patch.skills)
     if (skills.length > 0) sidepanel.skills = skills
     else delete sidepanel.skills
+  }
+
+  if ("registeredTools" in patch) {
+    const registeredTools = normalizeStringList(patch.registeredTools)
+    if (registeredTools.length > 0) sidepanel.registeredTools = registeredTools
+    else delete sidepanel.registeredTools
   }
 
   browser.sidepanel = sidepanel

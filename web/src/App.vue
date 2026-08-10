@@ -33,6 +33,7 @@ import { useTheme } from './composables/useTheme'
 import { Globe2, Plus, RefreshCw, Settings, Terminal } from 'lucide-vue-next'
 import { getTrustedExtensionParentContext, isTrustedExtensionParentEvent } from './utils/extension-parent'
 import { useAccessAuth } from './composables/useAccessAuth'
+import { parseSettingsDeepLink } from './utils/settings-deeplink'
 
 import { MAX_PARALLEL_AGENTS } from './composables/useParallelSessions'
 
@@ -123,6 +124,7 @@ const {
   selectModel: settingsSelectModel,
   loadProviders,
   loadConfig,
+  loadPlatformDetail,
 } = useSettings()
 
 const { isBrowserExtension } = useClientSurface()
@@ -539,12 +541,23 @@ watch(accessAuthenticated, (value) => {
   if (!value) stopAuthenticatedRuntime()
 })
 
+function applySettingsDeepLink() {
+  const target = parseSettingsDeepLink(window.location.href)
+  if (target?.section !== 'platforms') return
+  settingsTab.value = 'platforms'
+  openSettings()
+  if (target.platformId) void loadPlatformDetail(target.platformId)
+}
+
 onMounted(async () => {
   if (isBrowserExtension.value) {
     window.addEventListener('message', handleExtensionParentMessage)
   }
   const allowed = await initializeAccessAuth(isBrowserExtension.value ? 'browser-extension' : 'web')
-  if (allowed) await startAuthenticatedRuntime()
+  if (allowed) {
+    await startAuthenticatedRuntime()
+    if (!isBrowserExtension.value) applySettingsDeepLink()
+  }
 })
 
 onUnmounted(() => {

@@ -22,6 +22,7 @@ import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 import { ControllerTemplateResolver } from "@/runtime/controller/template-resolver"
 import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
+import { RuntimeToolSelectionError } from "@/runtime/tool/registry"
 import { ToolRegistry } from "@/tool/registry"
 import { Log } from "@/util/log"
 import { lazy } from "@/util/lazy"
@@ -148,6 +149,8 @@ function controllerMetricFailure(error: unknown) {
     busy = true
   } else if (error instanceof HTTPException) {
     status = error.status
+  } else if (error instanceof RuntimeToolSelectionError) {
+    status = 400
   } else if (error instanceof NamedError) {
     if (error instanceof Storage.NotFoundError) status = 404
     else if (error instanceof Provider.ModelNotFoundError) status = 400
@@ -221,7 +224,7 @@ function mergeBrowserExtensionResources(
   current: RuntimeControllerProtocol.ResourceSelection,
   config: BrowserExtensionConfig,
 ): RuntimeControllerProtocol.ResourceSelection {
-  if (!config.mcpServers?.length && !config.skills?.length) return current
+  if (!config.mcpServers?.length && !config.skills?.length && !config.registeredTools?.length) return current
 
   const merged: NonNullable<RuntimeControllerProtocol.ResourceSelection> = {
     ...(current ?? {}),
@@ -236,6 +239,14 @@ function mergeBrowserExtensionResources(
     merged.skills = {
       ...(merged.skills ?? {}),
       skills: unique([...(merged.skills?.skills ?? []), ...config.skills]),
+    }
+  }
+  if (config.registeredTools?.length) {
+    merged.registeredTools = {
+      tools: unique([
+        ...(merged.registeredTools?.tools ?? []),
+        ...config.registeredTools,
+      ]),
     }
   }
   return merged
@@ -627,17 +638,27 @@ export const Nine1BotAgentRoutes = lazy(() =>
       validator("json", RuntimeControllerProtocol.TemplateResolveRequest),
       async (c) => {
         const body = c.req.valid("json")
-        const result = await withControllerMetrics({
-          route: "/nine1bot/agent/templates/resolve",
-          method: c.req.method,
-          entry: body?.entry,
-          protocolVersion: RuntimeControllerProtocol.VERSION,
-          run: async () => ({
-            status: 200,
-            body: await resolveTemplate(body),
-          }),
-        })
-        return c.json(result.body, result.status as never)
+        try {
+          const result = await withControllerMetrics({
+            route: "/nine1bot/agent/templates/resolve",
+            method: c.req.method,
+            entry: body?.entry,
+            protocolVersion: RuntimeControllerProtocol.VERSION,
+            run: async () => ({
+              status: 200,
+              body: await resolveTemplate(body),
+            }),
+          })
+          return c.json(result.body, result.status as never)
+        } catch (error) {
+          if (error instanceof RuntimeToolSelectionError) {
+            return c.json({
+              error: "Some registered tools cannot be selected for this session.",
+              invalid: error.invalid,
+            }, 400)
+          }
+          throw error
+        }
       },
     )
     .post(
@@ -645,18 +666,28 @@ export const Nine1BotAgentRoutes = lazy(() =>
       validator("json", RuntimeControllerProtocol.SessionCreateRequest),
       async (c) => {
         const body = c.req.valid("json")
-        const result = await withControllerMetrics({
-          route: "/nine1bot/agent/sessions",
-          method: c.req.method,
-          entry: body?.entry,
-          protocolVersion: RuntimeControllerProtocol.VERSION,
-          run: async () => ({
-            status: 200,
-            accepted: true,
-            body: await createControllerSession(body),
-          }),
-        })
-        return c.json(result.body, result.status as never)
+        try {
+          const result = await withControllerMetrics({
+            route: "/nine1bot/agent/sessions",
+            method: c.req.method,
+            entry: body?.entry,
+            protocolVersion: RuntimeControllerProtocol.VERSION,
+            run: async () => ({
+              status: 200,
+              accepted: true,
+              body: await createControllerSession(body),
+            }),
+          })
+          return c.json(result.body, result.status as never)
+        } catch (error) {
+          if (error instanceof RuntimeToolSelectionError) {
+            return c.json({
+              error: "Some registered tools cannot be selected for this session.",
+              invalid: error.invalid,
+            }, 400)
+          }
+          throw error
+        }
       },
     )
     .post(

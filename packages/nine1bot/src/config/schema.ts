@@ -64,6 +64,8 @@ export const BrowserSidepanelConfigSchema = z.object({
   mcpServers: z.array(z.string()).default([]),
   // 浏览器插件侧边栏默认追加的技能
   skills: z.array(z.string()).default([]),
+  // 浏览器插件侧边栏默认声明的平台工具
+  registeredTools: z.array(z.string()).default([]),
 })
 
 export const BrowserConfigSchema = z.object({
@@ -76,7 +78,7 @@ export const BrowserConfigSchema = z.object({
   // 是否使用无头模式
   headless: z.boolean().default(false),
   // 浏览器插件侧边栏配置
-  sidepanel: BrowserSidepanelConfigSchema.default({ mcpServers: [], skills: [] }),
+  sidepanel: BrowserSidepanelConfigSchema.default({ mcpServers: [], skills: [], registeredTools: [] }),
 })
 
 export const RuntimeFeatureFlagSchema = z.object({

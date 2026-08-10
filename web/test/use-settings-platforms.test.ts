@@ -74,6 +74,8 @@ describe('useSettings platform selection', () => {
       features: {},
       settings: {},
       runtimeStatus: { status: 'available' },
+      desiredConfigRevision: 1,
+      appliedConfigRevision: 1,
     }
     installFetchMock((url) => {
       if (url === '/nine1bot/platforms') return jsonResponse({ platforms: [] })
@@ -102,6 +104,8 @@ describe('useSettings platform selection', () => {
             status: 'available',
             lifecycleStatus: 'healthy',
             capabilities: {},
+            desiredConfigRevision: 1,
+            appliedConfigRevision: 1,
           }],
         })
       }
@@ -128,6 +132,8 @@ describe('useSettings platform selection', () => {
           features: {},
           settings: {},
           runtimeStatus: { status: 'available' },
+          desiredConfigRevision: 1,
+          appliedConfigRevision: 1,
         })
       }
       throw new Error(`Unexpected request: ${url}`)

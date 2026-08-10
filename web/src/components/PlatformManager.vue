@@ -247,6 +247,23 @@ function statusIcon(status: string) {
   return CircleAlert
 }
 
+function toolVisibilityLabel(value: 'declared-only' | 'user-selectable') {
+  return value === 'user-selectable' ? '用户可选' : '仅由平台声明'
+}
+
+function runtimeToolStatusLabel(status: string) {
+  if (status === 'registered') return '已注册'
+  if (status === 'disabled') return '已停用'
+  if (status === 'error') return '注册失败'
+  return statusText(status)
+}
+
+function runtimeToolStatusClass(status: string) {
+  if (status === 'registered') return statusClass('available')
+  if (status === 'disabled') return statusClass('disabled')
+  return statusClass('error')
+}
+
 function runStatusLabel(status: string) {
   const labels: Record<string, string> = {
     accepted: '已接受',
@@ -1265,6 +1282,39 @@ function actionResultDetails(result: PlatformActionResult) {
             </p>
           </div>
 
+          <div
+            v-if="selectedPlatform.desiredConfigRevision !== selectedPlatform.appliedConfigRevision"
+            class="platform-alert warning"
+          >
+            最新配置修订 {{ selectedPlatform.desiredConfigRevision }} 尚未成功应用；当前仍使用修订
+            {{ selectedPlatform.appliedConfigRevision ?? '未应用' }} 的运行时快照。
+          </div>
+
+          <div class="platform-section">
+            <div class="platform-section-heading-row">
+              <h5 class="platform-section-title">平台注册工具</h5>
+              <span class="text-muted text-sm">
+                应用修订 {{ selectedPlatform.appliedConfigRevision ?? '未应用' }}
+              </span>
+            </div>
+            <div v-if="selectedPlatform.runtimeTools?.length" class="platform-tool-list">
+              <div v-for="tool in selectedPlatform.runtimeTools" :key="tool.id" class="platform-tool-row">
+                <div class="platform-tool-main">
+                  <strong>{{ tool.id }}</strong>
+                  <span class="text-muted text-sm">{{ tool.description }}</span>
+                </div>
+                <div class="platform-tool-meta">
+                  <span class="platform-chip">{{ toolVisibilityLabel(tool.catalogVisibility) }}</span>
+                  <span class="platform-chip">generation {{ tool.generation }}</span>
+                  <span class="platform-status-pill" :class="runtimeToolStatusClass(tool.status)">
+                    {{ runtimeToolStatusLabel(tool.status) }}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <p v-else class="text-muted text-sm">该平台当前没有注册工具。</p>
+          </div>
+
           <div v-if="isGitLabPlatform" class="platform-section">
             <div class="platform-section-heading-row">
               <h5 class="platform-section-title">GitLab Review 运行记录</h5>
@@ -1919,6 +1969,43 @@ function actionResultDetails(result: PlatformActionResult) {
   background: var(--bg-primary);
 }
 
+.platform-tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.platform-tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+}
+
+.platform-tool-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.platform-tool-main strong,
+.platform-tool-main span {
+  overflow-wrap: anywhere;
+}
+
+.platform-tool-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
 .platform-status-label,
 .platform-status-value {
   display: block;
@@ -2221,6 +2308,15 @@ function actionResultDetails(result: PlatformActionResult) {
 
   .platform-status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .platform-tool-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .platform-tool-meta {
+    justify-content: flex-start;
   }
 
   .gitlab-guide-grid,
