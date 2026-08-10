@@ -8,10 +8,15 @@ describe("runtime platform boundaries", () => {
   test("runtime core does not import concrete platform packages", async () => {
     const files = await listTypeScriptFiles(sourceRoot)
     const offenders: string[] = []
+    const forbiddenPackages = [
+      "@nine1bot/platform-feishu",
+      "@nine1bot/platform-gitlab",
+      "@nine1bot/platform-test",
+    ]
 
     for (const file of files) {
       const content = await readFile(file, "utf8")
-      if (content.includes("@nine1bot/platform-gitlab") || content.includes("platform-gitlab")) {
+      if (forbiddenPackages.some((packageName) => content.includes(packageName))) {
         offenders.push(path.relative(sourceRoot, file))
       }
     }
