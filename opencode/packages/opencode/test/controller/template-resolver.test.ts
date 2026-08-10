@@ -21,6 +21,7 @@ describe("controller template resolver", () => {
     await using tmp = await tmpdir({
       git: true,
       config: {
+        model: "test-provider/test-model",
         mcp: {
           enabled_server: {
             type: "local",
@@ -125,6 +126,7 @@ describe("controller template resolver", () => {
     await using tmp = await tmpdir({
       git: true,
       config: {
+        model: "test-provider/test-model",
         mcp: {
           disabled_server: {
             type: "local",
@@ -185,6 +187,9 @@ describe("controller template resolver", () => {
   test("filters disabled platform templates and resource contributions with audit", async () => {
     await using tmp = await tmpdir({
       git: true,
+      config: {
+        model: "test-provider/test-model",
+      },
     })
 
     await Instance.provide({
@@ -227,7 +232,12 @@ describe("controller template resolver", () => {
     const fixtureSecret = "demo-runtime-secret-value"
     registerDemoTools(fixtureSecret)
 
-    await using tmp = await tmpdir({ git: true })
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        model: "test-provider/test-model",
+      },
+    })
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
@@ -318,7 +328,12 @@ describe("controller template resolver", () => {
       tools: [definition("other_tool", "declared-only", "other-secret")],
     })
 
-    await using tmp = await tmpdir({ git: true })
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        model: "test-provider/test-model",
+      },
+    })
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
@@ -353,6 +368,7 @@ describe("controller template resolver", () => {
     await using tmp = await tmpdir({
       git: true,
       config: {
+        model: "test-provider/test-model",
         runtime: {
           resourceResolver: {
             enabled: false,
