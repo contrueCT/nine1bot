@@ -28,6 +28,7 @@ import { SessionProfileCompiler } from "@/runtime/session/profile-compiler"
 import { SessionRuntimeProfile } from "@/runtime/session/profile"
 import type { SessionProfileSnapshot } from "@/runtime/protocol/agent-run-spec"
 import { RuntimeContextEvents } from "@/runtime/context/events"
+import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
@@ -426,8 +427,12 @@ export namespace Session {
         await Storage.remove(msg)
       }
       await Storage.remove(["session", project.id, sessionID])
-      await SessionRuntimeProfile.remove(session)
-      await RuntimeContextEvents.removeAll({ sessionID, projectID: project.id })
+      try {
+        await SessionRuntimeProfile.remove(session)
+        await RuntimeContextEvents.removeAll({ sessionID, projectID: project.id })
+      } finally {
+        RuntimeResourceResolver.clearSessionState(sessionID)
+      }
       Bus.publish(Event.Deleted, {
         info: session,
       })

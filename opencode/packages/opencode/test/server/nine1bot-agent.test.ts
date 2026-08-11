@@ -58,9 +58,48 @@ describe("nine1bot controller api", () => {
         })
         expect(response.status).toBe(200)
         const body = (await response.json()) as {
-          server: { registeredTools?: boolean }
+          server: {
+            resourceResolver: boolean
+            registeredTools?: boolean
+          }
         }
+        expect(body.server.resourceResolver).toBe(true)
         expect(body.server.registeredTools).toBe(true)
+      },
+    })
+  })
+
+  test("does not advertise registered tools when the resource resolver is disabled", async () => {
+    const configPath = process.env.OPENCODE_CONFIG
+    if (!configPath) throw new Error("Expected isolated OpenCode config path")
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        model: "openai/gpt-4o-mini",
+        runtime: {
+          resourceResolver: {
+            enabled: false,
+          },
+        },
+      }),
+      "utf-8",
+    )
+
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const response = await Server.App().request("/nine1bot/runtime/capabilities", {
+          headers: jsonHeaders,
+        })
+        expect(response.status).toBe(200)
+        const body = (await response.json()) as {
+          server: {
+            resourceResolver: boolean
+            registeredTools: boolean
+          }
+        }
+        expect(body.server.resourceResolver).toBe(false)
+        expect(body.server.registeredTools).toBe(false)
       },
     })
   })

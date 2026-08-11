@@ -2,7 +2,7 @@
 
 日期：2026-08-10
 
-状态：待用户审阅
+状态：已确认，PR #53 评审中
 
 实施基线：`main@ed05b9caef4be4198ecd684b8d9ec048d55e796b`
 
@@ -343,7 +343,7 @@ registeredTools?: {
 }
 ```
 
-这是一项兼容的 `agent-runtime/v1` 可选扩展，不提升协议主版本。Server capability 增加 `registeredTools: true`；支持资源选择的客户端据此展示平台工具，旧客户端继续忽略未知 capability 和资源字段。
+这是一项兼容的 `agent-runtime/v1` 可选扩展，不提升协议主版本。Server capability 增加 `registeredTools`，它与 `runtime.resourceResolver.enabled` 的当前有效值保持一致。客户端只在该 capability 为 `true` 时展示和选择平台工具；旧客户端继续忽略未知 capability 和资源字段。
 
 资源合并顺序为默认用户资源、平台模板贡献、session choice，最后去重写入 profile。`registeredTools` 只能增加 ID，不能删除模板声明；Agent 权限仍可以拒绝执行。平台 adapter 只能贡献属于自身 owner 的工具，session choice 只能选择当前标记为 `user-selectable` 的工具；直接提交 `declared-only` ID 必须被拒绝，不能依赖 UI 隐藏来维持边界。
 
@@ -364,6 +364,8 @@ Controller 的 template audit、resources preview、turn `AuditSpec.resources` �
 | Catalog/诊断 API | 返回可序列化摘要和不可用原因。 | 不暴露定义函数、原始 schema、配置或凭据。 |
 
 现有 `ToolRegistry` 继续管理原生、项目和 plugin 工具。平台定义不写入其 `custom` 数组；`SessionPrompt.resolveTools()` 在当前 Instance 上下文中分别取得现有工具、平台工具和 MCP 工具，然后做最终冲突检查和统一包装。
+
+`RuntimeResourceResolver` 为 resolution event 和 tool failure event 保存按 session 去重的 Instance 状态。`Session.remove()` 必须在发布 `session.deleted` 前同步清理该 session 的去重记录，避免长生命周期项目持续保留历史 session ID，也避免复用同一 ID 的后续事件继承旧去重状态。
 
 ### 5.2 RuntimeToolRegistry
 
@@ -586,7 +588,7 @@ export type PlatformToolSummary = {
 | Platform protocol | 工具 ID、必填 parser、visibility、timeout、结果和 `registeredTools` 类型。 |
 | Runtime registry | owner 原子注册、同组重复、跨 owner 冲突、generation、revision、unregister tombstone、历史 ID 不可被其他 owner 接管。 |
 | Platform manager | 首次启用、成功重载、失败重载保留旧快照、首次失败不发布、显式停用立即失效。 |
-| Resource resolver | 声明合并、平台只能声明自身工具、session choice 拒绝 `declared-only`、并发 availability 预算、认证缺失、事件扩展和去重。 |
+| Resource resolver | 声明合并、平台只能声明自身工具、session choice 拒绝 `declared-only`、并发 availability 预算、认证缺失、事件扩展、去重和 session 删除后的去重状态清理。 |
 | Session tool assembly | 与原生、项目、plugin、MCP 的冲突优先级，以及 plugin hook 保持。 |
 | Executor | parser、permission allow/ask/deny、授权期间重载、超时、取消、截断、metadata 清洗和异常脱敏。 |
 | Session 生命周期 | 新旧 session 差异、平台停用与同 ID 恢复、破坏性版本使用新 ID。 |
@@ -657,4 +659,4 @@ bun run typecheck
 - 跨进程 registry、分布式 generation 和通用平台工具并发队列；
 - 与具体 Feishu、GitLab 业务 API 绑定的生产工具。
 
-本设计通过用户书面审阅前，不进入实施计划或代码修改。用户确认本 spec 后，下一步单独编写文件级实施计划。
+本设计已经获得用户书面确认。PR #53 评审 follow-up 的文件级步骤见 [`../plans/2026-08-12-platform-tool-review-followups.md`](../plans/2026-08-12-platform-tool-review-followups.md)。

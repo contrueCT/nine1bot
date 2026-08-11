@@ -450,6 +450,15 @@ export namespace RuntimeResourceResolver {
     return emittedToolFailures().delete(`${sessionID}:${toolID}`)
   }
 
+  export function clearSessionState(sessionID: string) {
+    lastPublishedResolution().delete(sessionID)
+    const failures = emittedToolFailures()
+    const prefix = `${sessionID}:`
+    for (const key of failures.keys()) {
+      if (key.startsWith(prefix)) failures.delete(key)
+    }
+  }
+
   function failureSignature(failure: ResourceFailure) {
     return [
       failure.ownerID ?? "missing-owner",

@@ -4,6 +4,7 @@ import { Instance } from "../../src/project/instance"
 import { RuntimeResourceResolver } from "../../src/runtime/resource/resolver"
 import type { SessionProfileSnapshot } from "../../src/runtime/protocol/agent-run-spec"
 import { RuntimeToolRegistry } from "../../src/runtime/tool/registry"
+import { Session } from "../../src/session"
 import { tmpdir } from "../fixture/fixture"
 
 function testProfile(resources: SessionProfileSnapshot["resources"]): SessionProfileSnapshot {
@@ -208,6 +209,138 @@ test("deduplicates identical tool failures and resets after a successful state c
       } finally {
         unsubscribe()
         RuntimeToolRegistry.clearForTesting()
+      }
+    },
+  })
+})
+
+test("clears resolution dedupe state when a session is deleted", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    config: { model: "test-provider/test-model" },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const session = await Session.create({})
+      const otherSession = await Session.create({})
+      const resolved = await RuntimeResourceResolver.resolve({
+        sessionID: session.id,
+        profile: testProfile(RuntimeResourceResolver.emptyResources()),
+        emitFailures: false,
+        emitResolved: false,
+      })
+      let deleted = false
+      let otherDeleted = false
+
+      try {
+        expect(await RuntimeResourceResolver.publishResolution({
+          sessionID: session.id,
+          turnSnapshotId: "turn_session_cleanup",
+          resolved,
+        })).toBe(true)
+        expect(await RuntimeResourceResolver.publishResolution({
+          sessionID: session.id,
+          turnSnapshotId: "turn_session_cleanup",
+          resolved,
+        })).toBe(false)
+        expect(await RuntimeResourceResolver.publishResolution({
+          sessionID: otherSession.id,
+          turnSnapshotId: "turn_other_session",
+          resolved,
+        })).toBe(true)
+        expect(await RuntimeResourceResolver.publishResolution({
+          sessionID: otherSession.id,
+          turnSnapshotId: "turn_other_session",
+          resolved,
+        })).toBe(false)
+
+        await Session.remove(session.id)
+        deleted = true
+
+        expect(await RuntimeResourceResolver.publishResolution({
+          sessionID: otherSession.id,
+          turnSnapshotId: "turn_other_session",
+          resolved,
+        })).toBe(false)
+        expect(await RuntimeResourceResolver.publishResolution({
+          sessionID: session.id,
+          turnSnapshotId: "turn_session_cleanup",
+          resolved,
+        })).toBe(true)
+
+        await Session.remove(otherSession.id)
+        otherDeleted = true
+      } finally {
+        if (!deleted) await Session.remove(session.id)
+        if (!otherDeleted) await Session.remove(otherSession.id)
+      }
+    },
+  })
+})
+
+test("clears tool failure dedupe state when a session is deleted", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    config: { model: "test-provider/test-model" },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const session = await Session.create({})
+      const otherSession = await Session.create({})
+      const failure = {
+        resourceType: "tool" as const,
+        resourceID: "demo_cleanup",
+        ownerID: "demo",
+        generation: 1,
+        code: "tool-missing",
+        status: "unavailable" as const,
+        stage: "resolve" as const,
+        reason: "disabled-by-current-config",
+        message: "The registered tool is unavailable.",
+        recoverable: true,
+      }
+      let deleted = false
+      let otherDeleted = false
+
+      try {
+        expect(await RuntimeResourceResolver.publishToolFailure({
+          sessionID: session.id,
+          failure,
+        })).toBe(true)
+        expect(await RuntimeResourceResolver.publishToolFailure({
+          sessionID: session.id,
+          failure,
+        })).toBe(false)
+        expect(await RuntimeResourceResolver.publishToolFailure({
+          sessionID: otherSession.id,
+          failure,
+        })).toBe(true)
+        expect(await RuntimeResourceResolver.publishToolFailure({
+          sessionID: otherSession.id,
+          failure,
+        })).toBe(false)
+
+        await Session.remove(session.id)
+        deleted = true
+
+        expect(await RuntimeResourceResolver.publishToolFailure({
+          sessionID: otherSession.id,
+          failure,
+        })).toBe(false)
+        expect(await RuntimeResourceResolver.publishToolFailure({
+          sessionID: session.id,
+          failure,
+        })).toBe(true)
+
+        await Session.remove(otherSession.id)
+        otherDeleted = true
+      } finally {
+        if (!deleted) await Session.remove(session.id)
+        if (!otherDeleted) await Session.remove(otherSession.id)
       }
     },
   })

@@ -45,6 +45,7 @@ type ControllerPromptBody = Omit<
 >
 
 async function capabilities(): Promise<RuntimeControllerProtocol.CapabilitiesResponse> {
+  const resourceResolver = await RuntimeFeatureFlags.resourceResolverEnabled()
   return {
     version: RuntimeControllerProtocol.VERSION,
     protocolVersions: [RuntimeControllerProtocol.VERSION],
@@ -52,8 +53,8 @@ async function capabilities(): Promise<RuntimeControllerProtocol.CapabilitiesRes
       controllerApi: true,
       sessionProfileSnapshots: await RuntimeFeatureFlags.profileSnapshotEnabled(),
       contextPipeline: await RuntimeFeatureFlags.contextPipelineEnabled(),
-      resourceResolver: await RuntimeFeatureFlags.resourceResolverEnabled(),
-      registeredTools: true,
+      resourceResolver,
+      registeredTools: resourceResolver,
       sessionEvents: true,
       interactionEvents: true,
       artifactEvents: true,

@@ -83,6 +83,7 @@ describe("controller agent run compiler", () => {
       expect(spec.capabilities?.client?.debugPanel).toBe(true)
       expect(spec.capabilities?.client?.pageContext).toBe(true)
       expect(spec.capabilities?.client?.resourceFailureEvents).toBe(true)
+      expect(spec.capabilities?.server?.registeredTools).toBe(true)
 
       await Session.remove(session.id)
     })
@@ -140,6 +141,36 @@ describe("controller agent run compiler", () => {
       expect(spec.audit?.resources.registeredTools).toEqual(["demo_lookup"])
 
       await Session.remove(session.id)
+    })
+  })
+
+  test("does not advertise registered tools when the resource resolver is disabled", async () => {
+    await using project = await tmpdir({
+      git: true,
+      config: {
+        model: "test-provider/test-model",
+        runtime: {
+          resourceResolver: {
+            enabled: false,
+          },
+        },
+      },
+    })
+
+    await Instance.provide({
+      directory: project.path,
+      fn: async () => {
+        const session = await Session.create({})
+        const spec = await ControllerAgentRunCompiler.compileSpec({
+          session,
+          turnSnapshotId: "turn_registered_tool_capability_disabled",
+          body: messageBody(),
+        })
+
+        expect(spec.capabilities?.server?.registeredTools).toBe(false)
+
+        await Session.remove(session.id)
+      },
     })
   })
 

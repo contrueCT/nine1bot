@@ -32,6 +32,7 @@ export namespace ControllerAgentRunCompiler {
   export async function compileSpec(input: Input): Promise<AgentRunSpec> {
     const body = input.body
     const profileSnapshotEnabled = await RuntimeFeatureFlags.profileSnapshotEnabled()
+    const resourceResolverEnabled = await RuntimeFeatureFlags.resourceResolverEnabled()
     const storedProfile = profileSnapshotEnabled ? await SessionRuntimeProfile.read(input.session) : undefined
     const profile =
       storedProfile ??
@@ -68,7 +69,7 @@ export namespace ControllerAgentRunCompiler {
     const contextBlocks = controllerContextBlocks(body)
     const resources = profile?.resources ?? RuntimeResourceResolver.emptyResources()
     const templateIds = body.entry?.templateIds ?? ["default-user-template", "controller-message"]
-    const capabilities = capabilitiesFrom(body, { profileSnapshotEnabled })
+    const capabilities = capabilitiesFrom(body, { profileSnapshotEnabled, resourceResolverEnabled })
     const permissionSources = profile ? ["controller-message", "profile-snapshot"] : ["controller-message"]
 
     const spec: AgentRunSpec = {
@@ -277,7 +278,7 @@ export namespace ControllerAgentRunCompiler {
 
   function capabilitiesFrom(
     body: RuntimeControllerProtocol.MessageSendRequest,
-    flags: { profileSnapshotEnabled: boolean },
+    flags: { profileSnapshotEnabled: boolean; resourceResolverEnabled: boolean },
   ): AgentRunSpec["capabilities"] {
     return {
       client: {
@@ -293,7 +294,7 @@ export namespace ControllerAgentRunCompiler {
         resourceHealthEvents: true,
         sessionPermissionGrants: true,
         profileSnapshots: flags.profileSnapshotEnabled,
-        registeredTools: true,
+        registeredTools: flags.resourceResolverEnabled,
       },
     }
   }
