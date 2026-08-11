@@ -64,6 +64,23 @@ describe("RuntimeControllerEvents", () => {
       requestId: "permission_test",
       options: ["allow-once", "allow-session", "deny"],
     })
+
+    const cancelled = RuntimeControllerEvents.project({
+      type: "permission.cancelled",
+      properties: {
+        sessionID: "session_test",
+        requestID: "permission_test",
+        reason: "timeout",
+      },
+    })
+
+    expect(cancelled).toHaveLength(1)
+    expect(cancelled[0]?.type).toBe("runtime.interaction.cancelled")
+    expect(cancelled[0]?.data).toEqual({
+      kind: "permission",
+      requestId: "permission_test",
+      reason: "timeout",
+    })
   })
 
   test("projects tool attachments and previews into artifact envelopes", () => {

@@ -214,6 +214,7 @@ export namespace RuntimeControllerProtocol {
     "runtime.message.part.removed",
     "runtime.interaction.requested",
     "runtime.interaction.answered",
+    "runtime.interaction.cancelled",
     "runtime.artifact.available",
     "runtime.artifact.closed",
     "runtime.agent.unavailable",

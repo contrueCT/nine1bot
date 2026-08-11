@@ -313,7 +313,46 @@ export namespace PlatformToolExecutor {
       })
     }
 
+    const currentAvailability = await invocationAvailability(input)
+    if (currentAvailability.kind === "cancelled") {
+      permissionOutcome = "cancelled"
+      return finishFailure({
+        code: "cancelled",
+        message: "The platform tool call was cancelled.",
+        recoverable: true,
+        publish: false,
+      })
+    }
+    if (currentAvailability.kind === "blocked") {
+      return finishFailure({
+        code: currentAvailability.code,
+        message: currentAvailability.message,
+        recoverable: currentAvailability.recoverable,
+        status: currentAvailability.status,
+        action: currentAvailability.action,
+        stage: currentAvailability.stage,
+      })
+    }
+    if (!isCurrent(input.reference)) {
+      return finishFailure({
+        code: "stale-generation",
+        message: "The platform tool definition changed during the final availability check. Retry on the next turn.",
+        recoverable: true,
+        status: "unavailable",
+        publish: false,
+      })
+    }
+
     const execution = await executeWithDeadline(input, parsed, now)
+    if (execution.kind === "stale-generation") {
+      return finishFailure({
+        code: "stale-generation",
+        message: "The platform tool definition changed before execution. Retry on the next turn.",
+        recoverable: true,
+        status: "unavailable",
+        publish: false,
+      })
+    }
     if (execution.kind === "cancelled") {
       permissionOutcome = "cancelled"
       return finishFailure({
@@ -568,7 +607,9 @@ export namespace PlatformToolExecutor {
     const turnRemaining = input.turnDeadlineAt === undefined ? undefined : input.turnDeadlineAt - now()
     if (turnRemaining !== undefined && turnRemaining <= 0) return { kind: "timeout" }
 
-    const turnTimeout = turnRemaining === undefined ? undefined : defaultTimeout(Math.max(1, turnRemaining))
+    const turnTimeout = turnRemaining === undefined
+      ? undefined
+      : (input.createTimeout ?? defaultTimeout)(Math.max(1, turnRemaining))
     const combined = combineSignals([
       input.call.signal,
       ...(turnTimeout ? [turnTimeout.signal] : []),
@@ -599,7 +640,8 @@ export namespace PlatformToolExecutor {
 
   async function executeWithDeadline(input: Input, parsed: unknown, now: () => number) {
     const toolLimit = input.reference.definition.execution?.timeoutMs ?? DEFAULT_EXECUTION_TIMEOUT_MS
-    return runWithDeadline(input, now, toolLimit, async (signal) => {
+    const execution = await runWithDeadline(input, now, toolLimit, async (signal) => {
+      if (!isCurrent(input.reference)) return { kind: "stale-generation" as const }
       const call: RuntimeToolRegistry.CallContext = {
         ...input.call,
         signal,
@@ -614,8 +656,14 @@ export namespace PlatformToolExecutor {
           })
         },
       }
-      return input.reference.definition.execute(parsed, call)
+      return {
+        kind: "executed" as const,
+        result: await input.reference.definition.execute(parsed, call),
+      }
     })
+    if (execution.kind !== "result") return execution
+    if (execution.result.kind === "stale-generation") return { kind: "stale-generation" as const }
+    return { kind: "result" as const, result: execution.result.result }
   }
 
   async function runWithDeadline<T>(
@@ -639,8 +687,7 @@ export namespace PlatformToolExecutor {
     const timeout = (input.createTimeout ?? defaultTimeout)(Math.max(1, effectiveTimeoutMs))
     const combined = combineSignals([input.call.signal, timeout.signal])
     const cancellation = watchAbort(input.call.signal)
-    const pending = Promise.resolve()
-      .then(() => task(combined.signal))
+    const pending = (async () => task(combined.signal))()
       .then(
         (result) => ({ kind: "result" as const, result }),
         () => ({ kind: "threw" as const }),

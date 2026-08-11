@@ -11,6 +11,7 @@ import {
 } from './cards'
 import type { FeishuIMRouteKey } from './route'
 import {
+  type FeishuIMCard,
   type FeishuIMReplyClient,
   type FeishuIMReplyDelivery,
   type FeishuIMResolvedPresentation,
@@ -90,6 +91,8 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
   private turnResultPollInProgress = false
   private readonly partTextLengths = new Map<string, number>()
   private readonly pendingInteractions = new Set<string>()
+  private readonly pendingInteractionCards = new Map<string, FeishuIMSentMessage>()
+  private readonly pendingInteractionTerminalCards = new Map<string, FeishuIMCard>()
 
   constructor(private readonly options: FeishuReplySinkOptions) {
     this.done = new Promise((resolve) => {
@@ -165,6 +168,10 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
         await this.handleInteractionAnswered(event)
         return
       }
+      if (type === 'runtime.interaction.cancelled') {
+        await this.handleInteractionCancelled(event)
+        return
+      }
       if (type === 'runtime.resource.failed') {
         await this.handleResourceFailed(event)
         return
@@ -201,6 +208,8 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
       decrementFeishuIMPendingInteractions()
     }
     this.pendingInteractions.clear()
+    this.pendingInteractionCards.clear()
+    this.pendingInteractionTerminalCards.clear()
     decrementFeishuIMActiveReplySinks()
     this.deactivateStreamingTelemetry()
     this.resolveDoneOnce({ status: this.completed ? 'final' : 'stopped' })
@@ -246,7 +255,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
       incrementFeishuIMPendingInteractions()
     }
     if (kind === 'permission') {
-      await this.options.client.sendCard({
+      const sentCard = await this.options.client.sendCard({
         ...this.delivery(),
         card: renderFeishuPermissionCard({
           accountId: this.options.accountId,
@@ -258,6 +267,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
           data,
         }),
       })
+      this.pendingInteractionCards.set(requestId, sentCard)
       return
     }
     if (kind === 'question') {
@@ -282,12 +292,65 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
     if (requestId && this.pendingInteractions.delete(requestId)) {
       decrementFeishuIMPendingInteractions()
     }
+    if (requestId) {
+      this.pendingInteractionCards.delete(requestId)
+      this.pendingInteractionTerminalCards.delete(requestId)
+    }
     await this.options.client.sendCard({
       ...this.delivery(),
       card: renderFeishuInteractionAnsweredCard({
         message: '飞书卡片操作已提交。',
       }),
     })
+  }
+
+  private async handleInteractionCancelled(event: FeishuRuntimeEventEnvelope): Promise<void> {
+    const data = eventData(event)
+    const requestId = stringValue(data.requestId) ?? stringValue(data.requestID)
+    if (requestId && this.pendingInteractions.delete(requestId)) {
+      decrementFeishuIMPendingInteractions()
+    }
+    const card = renderFeishuInteractionAnsweredCard({
+      title: '已取消',
+      message: '权限请求已取消。',
+    })
+    const sentCard = requestId ? this.pendingInteractionCards.get(requestId) : undefined
+    if (requestId && (sentCard?.messageId || sentCard?.cardId)) {
+      this.pendingInteractionTerminalCards.set(requestId, card)
+      await this.updatePendingInteractionCard(requestId)
+      return
+    }
+    if (requestId) {
+      this.pendingInteractionCards.delete(requestId)
+      this.pendingInteractionTerminalCards.delete(requestId)
+    }
+    await this.options.client.sendCard({
+      ...this.delivery(),
+      card,
+    })
+  }
+
+  private async updatePendingInteractionCard(requestId: string): Promise<void> {
+    const sentCard = this.pendingInteractionCards.get(requestId)
+    const card = this.pendingInteractionTerminalCards.get(requestId)
+    if (!card || (!sentCard?.messageId && !sentCard?.cardId)) return
+    await this.options.client.updateCard({
+      messageId: sentCard.messageId,
+      cardId: sentCard.cardId,
+      card,
+    })
+    this.pendingInteractionCards.delete(requestId)
+    this.pendingInteractionTerminalCards.delete(requestId)
+  }
+
+  private async retryPendingInteractionCardUpdates(): Promise<void> {
+    for (const requestId of this.pendingInteractionTerminalCards.keys()) {
+      try {
+        await this.updatePendingInteractionCard(requestId)
+      } catch (error) {
+        recordFeishuIMReplyError(error instanceof Error ? error : new Error(String(error)))
+      }
+    }
   }
 
   private async handleResourceFailed(event: FeishuRuntimeEventEnvelope): Promise<void> {
@@ -331,10 +394,13 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
       await this.sendTerminalFallback(status, resultMessage)
     }
 
+    await this.retryPendingInteractionCardUpdates()
     for (const _id of this.pendingInteractions) {
       decrementFeishuIMPendingInteractions()
     }
     this.pendingInteractions.clear()
+    this.pendingInteractionCards.clear()
+    this.pendingInteractionTerminalCards.clear()
     this.subscription?.stop()
     this.subscription = undefined
     decrementFeishuIMActiveReplySinks()
@@ -591,6 +657,7 @@ export class FeishuReplySink implements FeishuReplySinkHandle {
       || type === 'runtime.tool.failed'
       || type === 'runtime.interaction.requested'
       || type === 'runtime.interaction.answered'
+      || type === 'runtime.interaction.cancelled'
       || type === 'runtime.resource.failed'
       || type === 'runtime.turn.completed'
       || type === 'runtime.turn.failed'
@@ -628,6 +695,7 @@ type FeishuTurnCardStatus = Parameters<typeof renderFeishuTurnCard>[0]['status']
 export function normalizedEventType(event: FeishuRuntimeEventEnvelope): string {
   if (event.type === 'message.part.updated') return 'runtime.message.part.updated'
   if (event.type === 'permission.asked' || event.type === 'question.asked') return 'runtime.interaction.requested'
+  if (event.type === 'permission.cancelled') return 'runtime.interaction.cancelled'
   if (event.type === 'permission.replied' || event.type === 'question.replied' || event.type === 'question.rejected') {
     return 'runtime.interaction.answered'
   }
@@ -644,6 +712,7 @@ function shouldBufferUntilTurn(event: FeishuRuntimeEventEnvelope): boolean {
     || type === 'runtime.tool.failed'
     || type === 'runtime.interaction.requested'
     || type === 'runtime.interaction.answered'
+    || type === 'runtime.interaction.cancelled'
     || type === 'runtime.resource.failed'
     || type === 'runtime.turn.completed'
     || type === 'runtime.turn.failed'

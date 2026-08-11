@@ -267,6 +267,45 @@ describe('useSession event recovery', () => {
     useParallelSessions().clearSession(selected.id)
   })
 
+  it('removes a pending permission when the runtime cancels it', async () => {
+    const selected = session('session-permission-cancelled')
+    api.getMessages = async () => []
+
+    active = useSession()
+    await active.selectSession(selected)
+    const runtimeSource = FakeEventSource.latest
+    runtimeSource.emit({
+      version: '1',
+      id: 'event-permission-requested',
+      sessionId: selected.id,
+      createdAt: Date.now(),
+      type: 'runtime.interaction.requested',
+      data: {
+        kind: 'permission',
+        requestId: 'permission-cancelled',
+        permission: 'sandbox',
+        patterns: ['*'],
+      },
+    })
+    expect(active.pendingPermissions.value.map((item) => item.id)).toEqual(['permission-cancelled'])
+
+    runtimeSource.emit({
+      version: '1',
+      id: 'event-permission-cancelled',
+      sessionId: selected.id,
+      createdAt: Date.now(),
+      type: 'runtime.interaction.cancelled',
+      data: {
+        kind: 'permission',
+        requestId: 'permission-cancelled',
+        reason: 'aborted',
+      },
+    })
+
+    expect(active.pendingPermissions.value).toEqual([])
+    useParallelSessions().clearSession(selected.id)
+  })
+
   it('shows one persistent page notification when both event streams report the same session error', async () => {
     const selected = {
       ...session('session-error'),

@@ -7280,6 +7280,32 @@
         },
         "required": ["type", "properties"]
       },
+      "Event.permission.cancelled": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "permission.cancelled"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string"
+              },
+              "requestID": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "enum": ["aborted", "timeout"]
+              }
+            },
+            "required": ["sessionID", "requestID", "reason"]
+          }
+        },
+        "required": ["type", "properties"]
+      },
       "SessionStatus": {
         "anyOf": [
           {
@@ -8256,6 +8282,9 @@
           },
           {
             "$ref": "#/components/schemas/Event.permission.replied"
+          },
+          {
+            "$ref": "#/components/schemas/Event.permission.cancelled"
           },
           {
             "$ref": "#/components/schemas/Event.session.status"

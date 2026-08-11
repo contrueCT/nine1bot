@@ -778,7 +778,8 @@ export function useSession() {
         break
 
       case 'permission.replied':
-        // 权限已回复，从待处理列表移除
+      case 'permission.cancelled':
+        // 权限已回复或取消，从待处理列表移除
         if (properties?.requestID) {
           pendingPermissions.value = pendingPermissions.value.filter(p => p.id !== properties.requestID)
         }

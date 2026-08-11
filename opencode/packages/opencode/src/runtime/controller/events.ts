@@ -382,6 +382,19 @@ export namespace RuntimeControllerEvents {
           }),
         ]
         break
+      case "permission.cancelled":
+        projected = [
+          envelope({
+            ...base,
+            type: "runtime.interaction.cancelled",
+            data: {
+              kind: "permission",
+              requestId: properties.requestID,
+              reason: properties.reason,
+            },
+          }),
+        ]
+        break
       case "file-preview.open":
         projected = [
           envelope({

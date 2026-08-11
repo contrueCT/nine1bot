@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { Bus } from "../../src/bus"
 import { PermissionNext } from "../../src/permission/next"
 import { Instance } from "../../src/project/instance"
 import type { RuntimeToolCatalog } from "../../src/runtime/tool/catalog"
@@ -134,6 +135,119 @@ describe("PlatformToolExecutor", () => {
     expect(failureCode(result)).toBe("stale-generation")
     expect(oldExecutions).toBe(0)
     expect(newExecutions).toBe(0)
+  })
+
+  test("rechecks invocation availability after pending permission before execution", async () => {
+    let availabilityStatus: "available" | "auth-required" = "available"
+    let availabilityChecks = 0
+    let executions = 0
+    let releasePermission: (() => void) | undefined
+    let permissionStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      permissionStarted = resolve
+    })
+    const reference = registeredReference({
+      availability: () => {
+        availabilityChecks += 1
+        return availabilityStatus === "available"
+          ? { status: "available" }
+          : { status: "auth-required", reason: "expired-session" }
+      },
+      execute: async () => {
+        executions += 1
+        return { status: "ok", title: "unexpected", output: "unexpected" }
+      },
+    })
+
+    const pending = PlatformToolExecutor.execute(baseInput(reference, {
+      askPermission: async () => {
+        permissionStarted?.()
+        await new Promise<void>((resolve) => {
+          releasePermission = resolve
+        })
+      },
+    }))
+    await started
+    availabilityStatus = "auth-required"
+    releasePermission?.()
+
+    const result = await pending
+    expect(failureCode(result)).toBe("auth-required")
+    expect(availabilityChecks).toBe(2)
+    expect(executions).toBe(0)
+  })
+
+  test("rechecks generation after the final asynchronous availability gate", async () => {
+    let availabilityChecks = 0
+    let oldExecutions = 0
+    let newExecutions = 0
+    let releaseAvailability: ((value: RuntimeToolRegistry.Availability) => void) | undefined
+    let finalAvailabilityStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      finalAvailabilityStarted = resolve
+    })
+    const reference = registeredReference({
+      async availability() {
+        availabilityChecks += 1
+        if (availabilityChecks === 1) return { status: "available" }
+        finalAvailabilityStarted?.()
+        return new Promise<RuntimeToolRegistry.Availability>((resolve) => {
+          releaseAvailability = resolve
+        })
+      },
+      execute: async () => {
+        oldExecutions += 1
+        return { status: "ok", title: "old", output: "old" }
+      },
+    })
+
+    const pending = PlatformToolExecutor.execute(baseInput(reference))
+    await started
+    RuntimeToolRegistry.registerOwner({
+      owner: { id: "demo", kind: "platform", enabled: true },
+      tools: [definition({
+        execute: async () => {
+          newExecutions += 1
+          return { status: "ok", title: "new", output: "new" }
+        },
+      })],
+    })
+    releaseAvailability?.({ status: "available" })
+
+    const result = await pending
+    expect(failureCode(result)).toBe("stale-generation")
+    expect(availabilityChecks).toBe(2)
+    expect(oldExecutions).toBe(0)
+    expect(newExecutions).toBe(0)
+  })
+
+  test("does not yield between the final availability gate and implementation start", async () => {
+    let available = true
+    let availableAtExecution: boolean | undefined
+    const reference = registeredReference({
+      availability: () => ({ status: available ? "available" : "auth-required" }),
+      execute: async () => {
+        availableAtExecution = available
+        return { status: "ok", title: "Demo", output: "ok" }
+      },
+    })
+
+    const result = await PlatformToolExecutor.execute(baseInput(reference, {
+      createTimeout: () => {
+        const controller = new AbortController()
+        queueMicrotask(() => {
+          available = false
+        })
+        return {
+          signal: controller.signal,
+          elapsed: new Promise<void>(() => undefined),
+          dispose: () => undefined,
+        }
+      },
+    }))
+
+    expect(result.output).toBe("ok")
+    expect(availableAtExecution).toBe(true)
   })
 
   test("rechecks the resolved permission against current resource-level denies", async () => {
@@ -353,18 +467,27 @@ describe("PlatformToolExecutor", () => {
 
     for (const item of cases) {
       RuntimeToolRegistry.clearForTesting()
+      let executions = 0
       const reference = registeredReference({
         execution: item.execution,
-        execute: async () => new Promise(() => {}),
+        execute: async () => {
+          executions += 1
+          return new Promise(() => {})
+        },
       })
       const observed: number[] = []
+      let timeoutCalls = 0
       const result = await PlatformToolExecutor.execute(baseInput(reference, {
         turnDeadlineAt: item.turnDeadlineAt,
         now: () => item.now,
-        createTimeout: (milliseconds) => immediateTimeout(milliseconds, observed),
+        createTimeout: (milliseconds) => {
+          if (item.turnDeadlineAt !== undefined && timeoutCalls++ === 0) return dormantTimeout()
+          return immediateTimeout(milliseconds, observed)
+        },
       }))
       expect(observed).toEqual([item.expected])
       expect(failureCode(result)).toBe("execution-timeout")
+      expect(executions).toBe(1)
     }
   })
 
@@ -427,48 +550,80 @@ describe("PlatformToolExecutor", () => {
     await Instance.provide({
       directory: project.path,
       fn: async () => {
-        for (const mode of ["cancel", "deadline"] as const) {
-          RuntimeToolRegistry.clearForTesting()
-          const controller = new AbortController()
-          let executions = 0
-          const reference = registeredReference({
-            permission: () => ({
-              permission: "sandbox",
-              patterns: ["*"],
-              always: ["*"],
-            }),
-            execute: async () => {
-              executions += 1
-              return { status: "ok", title: "unexpected", output: "unexpected" }
-            },
-          })
-          const pending = PlatformToolExecutor.execute(baseInput(reference, {
-            call: {
-              ...callContext(controller.signal),
-              directory: project.path,
-            },
-            turnDeadlineAt: mode === "deadline" ? Date.now() + 30 : undefined,
-            askPermission: (request, signal) => PermissionNext.ask({
-              ...request,
-              sessionID: "session_test",
-              metadata: {},
-              always: request.always ?? request.patterns,
-              tool: {
-                messageID: "message_test",
-                callID: "call_test",
+        const cancellationReasons: PermissionNext.CancellationReason[] = []
+        const unsubscribe = Bus.subscribe(PermissionNext.Event.Cancelled, (event) => {
+          cancellationReasons.push(event.properties.reason)
+        })
+        try {
+          for (const mode of ["cancel", "deadline"] as const) {
+            RuntimeToolRegistry.clearForTesting()
+            const controller = new AbortController()
+            let expirePermissionDeadline: (() => void) | undefined
+            let executions = 0
+            const reference = registeredReference({
+              permission: () => ({
+                permission: "sandbox",
+                patterns: ["*"],
+                always: ["*"],
+              }),
+              execute: async () => {
+                executions += 1
+                return { status: "ok", title: "unexpected", output: "unexpected" }
               },
-              ruleset: [],
-              signal,
-            }),
-          }))
+            })
+            const pending = PlatformToolExecutor.execute(baseInput(reference, {
+              call: {
+                ...callContext(controller.signal),
+                directory: project.path,
+              },
+              turnDeadlineAt: mode === "deadline" ? Date.now() + 60_000 : undefined,
+              createTimeout: mode === "deadline"
+                ? () => {
+                    const deadline = new AbortController()
+                    let resolveElapsed: (() => void) | undefined
+                    const elapsed = new Promise<void>((resolve) => {
+                      resolveElapsed = resolve
+                    })
+                    expirePermissionDeadline = () => {
+                      deadline.abort(new DOMException("Platform tool deadline exceeded.", "TimeoutError"))
+                      resolveElapsed?.()
+                    }
+                    return {
+                      signal: deadline.signal,
+                      elapsed,
+                      dispose: () => undefined,
+                    }
+                  }
+                : undefined,
+              askPermission: (request, signal) => PermissionNext.ask({
+                ...request,
+                sessionID: "session_test",
+                metadata: {},
+                always: request.always ?? request.patterns,
+                tool: {
+                  messageID: "message_test",
+                  callID: "call_test",
+                },
+                ruleset: [],
+                signal,
+              }),
+            }))
 
-          await waitForPendingPermission()
-          if (mode === "cancel") controller.abort()
-          const result = await pending
+            await waitForPendingPermission()
+            if (mode === "cancel") controller.abort()
+            else {
+              expect(expirePermissionDeadline).toBeDefined()
+              expirePermissionDeadline?.()
+            }
+            const result = await pending
 
-          expect(failureCode(result)).toBe(mode === "cancel" ? "cancelled" : "execution-timeout")
-          expect(executions).toBe(0)
-          expect(await PermissionNext.list()).toEqual([])
+            expect(failureCode(result)).toBe(mode === "cancel" ? "cancelled" : "execution-timeout")
+            expect(executions).toBe(0)
+            expect(await PermissionNext.list()).toEqual([])
+            expect(cancellationReasons).toEqual(mode === "cancel" ? ["aborted"] : ["aborted", "timeout"])
+          }
+        } finally {
+          unsubscribe()
         }
       },
     })
@@ -672,6 +827,15 @@ function immediateTimeout(milliseconds: number, observed: number[]): PlatformToo
     elapsed: Promise.resolve().then(() => {
       controller.abort()
     }),
+    dispose: () => undefined,
+  }
+}
+
+function dormantTimeout(): PlatformToolExecutor.TimeoutHandle {
+  const controller = new AbortController()
+  return {
+    signal: controller.signal,
+    elapsed: new Promise<void>(() => undefined),
     dispose: () => undefined,
   }
 }

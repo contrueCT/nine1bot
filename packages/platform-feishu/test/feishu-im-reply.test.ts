@@ -254,6 +254,118 @@ describe('Feishu IM reply sink', () => {
     sink.stop()
   })
 
+  test('permission cancellation closes the pending Feishu interaction', async () => {
+    clearFeishuIMReplyRuntimeSummaryForTesting()
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_cancelled',
+      controller: bridge,
+      client,
+      replyMode: 'message',
+      presentation: 'card',
+      timeoutMs: 10_000,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_cancelled')
+    await bridge.emit({
+      type: 'runtime.interaction.requested',
+      turnSnapshotId: 'turn_cancelled',
+      data: {
+        kind: 'permission',
+        requestId: 'perm_cancelled',
+        permission: 'edit',
+        patterns: ['src/*'],
+      },
+    })
+    const sentCardCount = client.cards.length
+    const permissionCardIdentity = {
+      messageId: `card_message_${sentCardCount}`,
+      cardId: `card_${sentCardCount}`,
+    }
+    expect(getFeishuIMReplyRuntimeSummary().pendingInteractions).toBe(1)
+
+    await bridge.emit({
+      type: 'runtime.interaction.cancelled',
+      turnSnapshotId: 'turn_cancelled',
+      data: {
+        kind: 'permission',
+        requestId: 'perm_cancelled',
+        reason: 'aborted',
+      },
+    })
+
+    expect(getFeishuIMReplyRuntimeSummary().pendingInteractions).toBe(0)
+    expect(client.cards).toHaveLength(sentCardCount)
+    expect(client.updates.at(-1)).toMatchObject(permissionCardIdentity)
+    expect(JSON.stringify(client.updates.at(-1)?.card)).toContain('已取消')
+    sink.stop()
+  })
+
+  test('permission cancellation retries the original card update during terminal delivery', async () => {
+    clearFeishuIMReplyRuntimeSummaryForTesting()
+    const bridge = new EventBridge()
+    const client = new MemoryFeishuIMReplyClient()
+    const updateCard = client.updateCard.bind(client)
+    let failNextUpdate = true
+    client.updateCard = async (input) => {
+      if (failNextUpdate) {
+        failNextUpdate = false
+        throw new Error('transient card update failure')
+      }
+      return updateCard(input)
+    }
+    const sink = new FeishuReplySink({
+      accountId: account.id,
+      routeKey: routeKeyForFeishuMessage(message({ chatType: 'group', chatId: 'oc_group' }), { accountId: account.id }),
+      sessionId: 'ses_cancelled_retry',
+      controller: bridge,
+      client,
+      replyMode: 'message',
+      presentation: 'text',
+      timeoutMs: 10_000,
+    })
+
+    await sink.start()
+    await sink.bindTurnSnapshotId('turn_cancelled_retry')
+    await bridge.emit({
+      type: 'runtime.interaction.requested',
+      turnSnapshotId: 'turn_cancelled_retry',
+      data: {
+        kind: 'permission',
+        requestId: 'perm_cancelled_retry',
+        permission: 'edit',
+        patterns: ['src/*'],
+      },
+    })
+    await bridge.emit({
+      type: 'runtime.interaction.cancelled',
+      turnSnapshotId: 'turn_cancelled_retry',
+      data: {
+        kind: 'permission',
+        requestId: 'perm_cancelled_retry',
+        reason: 'timeout',
+      },
+    })
+    expect(client.updates).toEqual([])
+
+    await bridge.emit({
+      type: 'runtime.turn.completed',
+      turnSnapshotId: 'turn_cancelled_retry',
+      data: {},
+    })
+
+    await expect(sink.done).resolves.toMatchObject({ status: 'final' })
+    expect(client.updates.at(-1)).toMatchObject({
+      messageId: 'card_message_1',
+      cardId: 'card_1',
+    })
+    expect(JSON.stringify(client.updates.at(-1)?.card)).toContain('已取消')
+  })
+
   test('auto presentation uses text for DM and streaming card for group routes', async () => {
     const dmBridge = new EventBridge()
     const dmClient = new MemoryFeishuIMReplyClient()

@@ -520,6 +520,15 @@ export type EventPermissionReplied = {
   }
 }
 
+export type EventPermissionCancelled = {
+  type: "permission.cancelled"
+  properties: {
+    sessionID: string
+    requestID: string
+    reason: "aborted" | "timeout"
+  }
+}
+
 export type SessionStatus =
   | {
       type: "idle"
@@ -897,6 +906,7 @@ export type Event =
   | EventMessagePartRemoved
   | EventPermissionAsked
   | EventPermissionReplied
+  | EventPermissionCancelled
   | EventSessionStatus
   | EventSessionIdle
   | EventQuestionAsked

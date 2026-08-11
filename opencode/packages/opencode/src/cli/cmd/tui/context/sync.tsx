@@ -110,7 +110,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         case "server.instance.disposed":
           bootstrap()
           break
-        case "permission.replied": {
+        case "permission.replied":
+        case "permission.cancelled": {
           const requests = store.permission[event.properties.sessionID]
           if (!requests) break
           const match = Binary.search(requests, event.properties.requestID, (r) => r.id)

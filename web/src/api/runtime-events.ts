@@ -32,6 +32,7 @@ export const RUNTIME_EVENT_TYPES = [
   'runtime.message.part.removed',
   'runtime.interaction.requested',
   'runtime.interaction.answered',
+  'runtime.interaction.cancelled',
   'runtime.artifact.available',
   'runtime.artifact.closed',
   'runtime.resource.failed',
@@ -146,6 +147,9 @@ export function normalizeRuntimeEventEnvelope(envelope: RuntimeEventEnvelope): N
 
     case 'runtime.interaction.answered':
       return normalizeInteractionAnswered(sessionID, data)
+
+    case 'runtime.interaction.cancelled':
+      return normalizeInteractionCancelled(sessionID, data)
 
     case 'runtime.artifact.available':
       return normalizeArtifactAvailable(sessionID, data)
@@ -301,6 +305,24 @@ function normalizeInteractionAnswered(sessionID: string, data: Record<string, an
   }
 
   return [{ type: 'runtime.interaction.answered', properties: { ...data, sessionID } }]
+}
+
+function normalizeInteractionCancelled(sessionID: string, data: Record<string, any>): NormalizedSSEEvent[] {
+  const requestID = data.requestId ?? data.requestID ?? data.id
+  if (data.kind === 'permission') {
+    return [
+      {
+        type: 'permission.cancelled',
+        properties: {
+          requestID,
+          sessionID,
+          reason: data.reason,
+        },
+      },
+    ]
+  }
+
+  return [{ type: 'runtime.interaction.cancelled', properties: { ...data, sessionID } }]
 }
 
 function normalizeArtifactAvailable(sessionID: string, data: Record<string, any>): NormalizedSSEEvent[] {

@@ -415,6 +415,101 @@ describe('PlatformAdapterManager', () => {
     expect(manager.configSnapshot().demo?.settings).toMatchObject({ version: 'two', fail: true })
   })
 
+  it('keeps a retained runtime degraded when status refresh follows a failed reload', async () => {
+    const statusSettings: string[] = []
+    const base = contribution('demo', {
+      defaultEnabled: true,
+      tools(context) {
+        const settings = context.settings as Record<string, unknown>
+        if (settings.fail === true) throw new Error('fixture reload failed')
+        return [toolDefinition()]
+      },
+    })
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...base,
+        async getStatus(context) {
+          statusSettings.push(String((context.settings as Record<string, unknown>).version))
+          return { status: 'available' }
+        },
+      }],
+      config: {
+        demo: {
+          settings: { version: 'one' },
+        },
+      },
+    })
+    manager.registerRuntimeAdapters()
+
+    await manager.updateConfig('demo', {
+      settings: { version: 'two', fail: true },
+    })
+    const refreshed = await manager.refreshStatus('demo')
+
+    expect(refreshed.status).toBe('degraded')
+    expect(statusSettings).toEqual([])
+    expect(manager.get('demo')).toMatchObject({
+      lifecycleStatus: 'degraded',
+      runtimeStatus: { status: 'degraded' },
+      desiredConfigRevision: 2,
+      appliedConfigRevision: 1,
+    })
+  })
+
+  it('does not let an in-flight old status refresh overwrite a failed reload', async () => {
+    let releaseStatus: (() => void) | undefined
+    let statusStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      statusStarted = resolve
+    })
+    const base = contribution('demo', {
+      defaultEnabled: true,
+      tools(context) {
+        const settings = context.settings as Record<string, unknown>
+        if (settings.fail === true) throw new Error('fixture reload failed')
+        return [toolDefinition()]
+      },
+    })
+    const manager = new PlatformAdapterManager({
+      contributions: [{
+        ...base,
+        async getStatus() {
+          statusStarted?.()
+          await new Promise<void>((resolve) => {
+            releaseStatus = resolve
+          })
+          return { status: 'available' }
+        },
+      }],
+      config: {
+        demo: {
+          settings: { version: 'one' },
+        },
+      },
+    })
+    manager.registerRuntimeAdapters()
+
+    const refreshing = manager.refreshStatus('demo')
+    await started
+    await manager.updateConfig('demo', {
+      settings: { version: 'two', fail: true },
+    })
+    expect(manager.get('demo')?.runtimeStatus.status).toBe('degraded')
+
+    releaseStatus?.()
+    const refreshed = await refreshing
+
+    expect(refreshed.status).toBe('degraded')
+    expect(manager.get('demo')).toMatchObject({
+      lifecycleStatus: 'degraded',
+      runtimeStatus: { status: 'degraded' },
+      settings: { version: 'two', fail: true },
+      desiredConfigRevision: 2,
+      appliedConfigRevision: 1,
+    })
+    expect(manager.configSnapshot().demo?.settings).toMatchObject({ version: 'two', fail: true })
+  })
+
   it('does not let an action status mask a failed runtime settings reload', async () => {
     const base = contribution('demo', {
       defaultEnabled: true,

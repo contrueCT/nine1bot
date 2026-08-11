@@ -555,11 +555,17 @@ export class PlatformAdapterManager {
       return disabled
     }
 
+    if (record.appliedConfigRevision !== record.desiredConfigRevision) {
+      return record.runtimeStatus
+    }
+
     const contribution = this.contributions.get(id)
     if (!contribution?.getStatus) return record.runtimeStatus
 
     try {
       const runtimeStatus = await contribution.getStatus(this.createContext(record))
+      const current = this.records.get(id)
+      if (current !== record) return current?.runtimeStatus ?? record.runtimeStatus
       this.records.set(id, {
         ...record,
         lifecycleStatus: lifecycleStatusFromRuntime(runtimeStatus.status),
@@ -569,6 +575,8 @@ export class PlatformAdapterManager {
       })
       return runtimeStatus
     } catch (error) {
+      const current = this.records.get(id)
+      if (current !== record) return current?.runtimeStatus ?? record.runtimeStatus
       const message = error instanceof Error ? error.message : String(error)
       const runtimeStatus: PlatformRuntimeStatus = {
         status: 'error',
