@@ -1,3 +1,5 @@
+
+
 # Nine1Bot
 
 [简体中文](./README.zh.md)
@@ -210,6 +212,7 @@ git clone https://github.com/contrueCT/nine1bot.git
 cd nine1bot
 
 # Install dependencies
+bun install
 cd opencode && bun install && cd ..
 cd packages/nine1bot && bun install && cd ../..
 cd web && bun install && cd ..
