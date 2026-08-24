@@ -5,12 +5,17 @@ import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
 import { useUserProfile } from '../composables/useUserProfile'
 import { NINE1BOT_WEB_PROVENANCE } from '../provenance'
+import type { Nine1BotProjectOption } from '../api/client'
 import McpManager from './McpManager.vue'
 import SkillsList from './SkillsList.vue'
 import ModelSelector from './ModelSelector.vue'
 import AuthManager from './AuthManager.vue'
 import PreferencesPanel from './PreferencesPanel.vue'
 import PlatformManager from './PlatformManager.vue'
+
+const { projects } = defineProps<{
+  projects: Nine1BotProjectOption[]
+}>()
 
 const emit = defineEmits<{
   close: []
@@ -247,6 +252,7 @@ function handleOverlayClick(e: MouseEvent) {
           :error="platformError"
           :action-result="platformActionResult"
           :providers="providers"
+          :projects="projects"
           @select="loadPlatformDetail"
           @update="updatePlatform"
           @refresh="refreshPlatformStatus"

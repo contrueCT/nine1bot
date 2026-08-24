@@ -1,4 +1,9 @@
 import type { ReviewFinding } from './types'
+import {
+  GitLabReviewPublicationBudgetError,
+  gitLabReviewPublicationBudget,
+  snapshotGitLabReviewPublicationContent,
+} from './publication-budget'
 
 export type ReviewStageResult = {
   stage: string
@@ -51,16 +56,33 @@ export const reviewStageResultJsonSchema = {
   },
 } satisfies Record<string, unknown>
 
-export function parseReviewStageResult(input: unknown): ReviewStageResult {
+export function parseReviewStageResult(input: unknown, options: { runId?: string } = {}): ReviewStageResult {
   if (!isRecord(input)) throw new Error('Review stage result must be an object.')
   const findingsInput = input.findings
   if (!Array.isArray(findingsInput)) throw new Error('Review stage result findings must be an array.')
-  return {
+  if (findingsInput.length > gitLabReviewPublicationBudget.maxFindings) {
+    throw new GitLabReviewPublicationBudgetError()
+  }
+  const nextActionsInput = input.nextActions
+  if (Array.isArray(nextActionsInput) && nextActionsInput.length > gitLabReviewPublicationBudget.maxWarnings) {
+    throw new GitLabReviewPublicationBudgetError()
+  }
+  const parsed = {
+    runId: options.runId,
     stage: stringField(input.stage, 'stage'),
-    status: statusField(input.status),
     summary: stringField(input.summary, 'summary'),
     findings: findingsInput.map(parseFinding),
-    nextActions: Array.isArray(input.nextActions) ? input.nextActions.filter((item): item is string => typeof item === 'string') : undefined,
+    warnings: Array.isArray(nextActionsInput)
+      ? nextActionsInput.filter((item): item is string => typeof item === 'string')
+      : undefined,
+  }
+  const snapshot = snapshotGitLabReviewPublicationContent(parsed)
+  return {
+    stage: snapshot.stage!,
+    status: statusField(input.status),
+    summary: snapshot.summary,
+    findings: snapshot.findings,
+    nextActions: snapshot.warnings,
   }
 }
 

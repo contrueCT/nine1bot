@@ -3,9 +3,7 @@ name: platform.gitlab.spec-writer
 description: GitLab review subagent for extracting review assumptions, acceptance criteria, documentation deltas, and release notes from MR context.
 mode: subagent
 permission:
-  edit: deny
-  bash: deny
-  task: deny
+  "*": deny
 ---
 
 # GitLab Review Spec Writer

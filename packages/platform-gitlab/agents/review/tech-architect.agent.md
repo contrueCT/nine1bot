@@ -3,9 +3,7 @@ name: platform.gitlab.tech-architect
 description: GitLab review subagent for runtime boundaries, API contracts, persistence, workflow orchestration, and architectural correctness.
 mode: subagent
 permission:
-  edit: deny
-  bash: deny
-  task: deny
+  "*": deny
 ---
 
 # GitLab Review Tech Architect

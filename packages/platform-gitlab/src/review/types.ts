@@ -79,7 +79,7 @@ export type GitLabDiffManifest = {
 
 export type GitLabSkippedFile = {
   path: string
-  reason: 'blacklisted' | 'empty-diff' | 'too-large' | 'generated' | 'budget-exceeded'
+  reason: 'blacklisted' | 'empty-diff' | 'too-large' | 'generated' | 'budget-exceeded' | 'profile-excluded'
 }
 
 export type ReviewSeverity = 'info' | 'minor' | 'major' | 'critical' | 'blocker'

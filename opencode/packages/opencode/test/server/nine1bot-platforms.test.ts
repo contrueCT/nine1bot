@@ -14,6 +14,7 @@ import {
   resetBuiltinPlatformManagerForTesting,
 } from "../../../../../packages/nine1bot/src/platform/builtin"
 import { FilePlatformSecretStore } from "../../../../../packages/nine1bot/src/platform/secrets"
+import { gitLabCliToolIds } from "../../../../../packages/platform-gitlab/src/cli"
 import type {
   AnyPlatformToolDefinition,
   PlatformAdapterContribution,
@@ -243,14 +244,24 @@ describe("nine1bot platform api", () => {
       descriptor: { id: string }
       actions: Array<{ id: string }>
       runtimeStatus: { status: string }
-      runtimeTools?: unknown[]
+      runtimeTools?: Array<{
+        id: string
+        ownerId: string
+        catalogVisibility: string
+        status: string
+      }>
       desiredConfigRevision: number
       appliedConfigRevision?: number
     }
     expect(detailBody.descriptor.id).toBe("gitlab")
     expect(detailBody.actions.map((action) => action.id)).toContain("connection.test")
     expect(detailBody.runtimeStatus.status).toBe("available")
-    expect(detailBody.runtimeTools).toBeUndefined()
+    expect(detailBody.runtimeTools?.map((tool) => tool.id)).toEqual(Object.values(gitLabCliToolIds))
+    expect(detailBody.runtimeTools?.every((tool) => (
+      tool.ownerId === "gitlab"
+      && tool.catalogVisibility === "declared-only"
+      && tool.status === "registered"
+    ))).toBe(true)
     expect(detailBody.desiredConfigRevision).toBe(1)
     expect(detailBody.appliedConfigRevision).toBe(1)
   })

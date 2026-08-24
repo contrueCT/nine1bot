@@ -4,7 +4,7 @@ import type {
   PlatformResourceContribution as ProtocolPlatformResourceContribution,
 } from '@nine1bot/platform-protocol'
 
-export type KnownGitLabPageType = 'gitlab-repo' | 'gitlab-file' | 'gitlab-mr' | 'gitlab-issue'
+export type KnownGitLabPageType = 'gitlab-repo' | 'gitlab-file' | 'gitlab-mr' | 'gitlab-commit' | 'gitlab-issue'
 
 export type PageContextPayload = PlatformPagePayload
 
@@ -17,7 +17,8 @@ export interface GitLabUrlInfo {
   filePath?: string
   treePath?: string
   iid?: string
-  route: 'repo' | 'blob' | 'tree' | 'merge_request' | 'issue'
+  sha?: string
+  route: 'repo' | 'blob' | 'tree' | 'merge_request' | 'commit' | 'issue'
 }
 
 export type PlatformContextBlock = ProtocolPlatformContextBlock

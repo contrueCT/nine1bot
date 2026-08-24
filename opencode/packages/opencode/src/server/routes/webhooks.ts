@@ -3,26 +3,41 @@ import { Project } from "@/project/project"
 import { RuntimeControllerProtocol } from "@/runtime/controller/protocol"
 import { Webhook } from "@/webhook/webhook"
 import { Hono } from "hono"
+import { bodyLimit } from "hono/body-limit"
 import { describeRoute, resolver, validator } from "hono-openapi"
+import { constants } from "fs"
+import { access, stat } from "fs/promises"
 import { networkInterfaces, type NetworkInterfaceInfo } from "os"
 import z from "zod"
 import { lazy } from "../../util/lazy"
 import { errors } from "../error"
-import { runAutomatedControllerSession, type AutomatedControllerResponse } from "./automated-controller"
+import {
+  runAutomatedControllerSession,
+  type AutomatedControllerResponse,
+  type AutomatedControllerRunner,
+  type AutomatedRunStatus,
+} from "./automated-controller"
 import {
   extractGitLabReviewStageResultFromRuntimeText,
   handleGitLabReviewWebhook,
   gitLabReviewRuntimeSkillIds,
   publishGitLabReviewRunResult,
+  rejectGitLabReviewRuntimeConfiguration,
   reportGitLabReviewRunFailure,
   resolveGitLabReviewModelSelection,
+  retryGitLabReviewAttempt,
   validateGitLabDedicatedWebhookSecret as validateGitLabDedicatedWebhookPathSecret,
+  type GitLabReviewWebhookResult,
 } from "../../../../../../packages/nine1bot/src/review/gitlab-controller"
 import { buildGitLabReviewRuntimePrompt } from "../../../../../../packages/nine1bot/src/review/gitlab-controller"
 import { ReviewRunStore, type ReviewRunRecord } from "../../../../../../packages/nine1bot/src/review/run-store"
 import { readPlatformManagerConfig } from "../../../../../../packages/nine1bot/src/platform/config-store"
 import { FilePlatformSecretStore } from "../../../../../../packages/nine1bot/src/platform/secrets"
 import { registerBuiltinPlatformAdapters } from "../../../../../../packages/nine1bot/src/platform/builtin"
+import {
+  GITLAB_REVIEW_PUBLICATION_INPUT_TOO_LARGE,
+  gitLabReviewPublicationBudget,
+} from "../../../../../../packages/platform-gitlab/src/review"
 
 const WEBHOOK_CLIENT_CAPABILITIES = {
   interactions: false,
@@ -56,6 +71,78 @@ const GitLabReviewPublishBody = z.object({
   stageResult: z.unknown(),
 }).strict()
 
+const gitLabReviewPublishBodyLimit = bodyLimit({
+  maxSize: gitLabReviewPublicationBudget.maxManagementRequestBytes,
+  onError(c) {
+    return c.json({
+      published: false,
+      runId: c.req.param("runId"),
+      error: GITLAB_REVIEW_PUBLICATION_INPUT_TOO_LARGE,
+    }, 413)
+  },
+})
+
+export async function gitLabReviewWebhookBodyLimit(c: any, next: () => Promise<void>) {
+  const maxBytes = gitLabReviewPublicationBudget.maxManagementRequestBytes
+  const declaredBytes = Number.parseInt(c.req.raw.headers.get("content-length") ?? "", 10)
+  if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+    await cancelGitLabWebhookBody(c.req.raw)
+    return gitLabWebhookPayloadTooLarge(c)
+  }
+
+  let body: ArrayBuffer | undefined
+  try {
+    body = await readBoundedGitLabWebhookBody(c.req.raw, maxBytes)
+  } catch {
+    return c.json({ accepted: false, error: "invalid_json_body" }, 400)
+  }
+  if (!body) return gitLabWebhookPayloadTooLarge(c)
+  if (c.req.raw.body) c.req.raw = new Request(c.req.raw, { body })
+  await next()
+}
+
+async function cancelGitLabWebhookBody(request: Request) {
+  if (!request.body || request.body.locked) return
+  await request.body.cancel().catch(() => undefined)
+}
+
+async function readBoundedGitLabWebhookBody(request: Request, maxBytes: number) {
+  if (!request.body) return new ArrayBuffer(0)
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => undefined)
+        return undefined
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  const buffer = new ArrayBuffer(size)
+  const body = new Uint8Array(buffer)
+  let offset = 0
+  for (const chunk of chunks) {
+    body.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return buffer
+}
+
+function gitLabWebhookPayloadTooLarge(c: any) {
+  return c.json({
+    accepted: false,
+    error: "gitlab_webhook_payload_too_large",
+  }, 413)
+}
+
 const RUN_MONITOR_TIMEOUT_MS = 30 * 60 * 1000
 const PROMPT_PREVIEW_LIMIT = 4000
 const FULL_PERMISSION_RULES: PermissionNext.Ruleset = [
@@ -66,8 +153,30 @@ const FULL_PERMISSION_RULES: PermissionNext.Ruleset = [
   },
 ]
 
-function projectDirectory(project: Project.Info) {
+function projectDirectory(project: Pick<Project.Info, "rootDirectory" | "worktree">) {
   return project.rootDirectory || project.worktree
+}
+
+export async function resolveGitLabReviewRuntimeDirectory(
+  project: { nine1botProjectID?: string } | undefined,
+  getProject: (projectID: string) => Promise<Pick<Project.Info, "rootDirectory" | "worktree">> = Project.get,
+  inspectDirectory: (directory: string) => Promise<void> = inspectGitLabReviewRuntimeDirectory,
+) {
+  const projectID = project?.nine1botProjectID?.trim()
+  if (!projectID) throw new Error("project_binding_missing")
+  const boundProject = await getProject(projectID).catch(() => undefined)
+  const directory = boundProject ? projectDirectory(boundProject) : undefined
+  if (!directory) throw new Error("project_binding_missing")
+  await inspectDirectory(directory).catch(() => {
+    throw new Error("project_binding_missing")
+  })
+  return directory
+}
+
+async function inspectGitLabReviewRuntimeDirectory(directory: string) {
+  const info = await stat(directory)
+  if (!info.isDirectory()) throw new Error("project_binding_missing")
+  await access(directory, constants.R_OK | constants.X_OK)
 }
 
 function currentOrigin(c: { req: { url: string } }) {
@@ -184,6 +293,7 @@ async function handleWebhookTrigger(c: any, input: {
   authentication:
     | { type: "public-secret"; secret: string }
     | { type: "management-test" }
+  runner?: AutomatedControllerRunner
 }) {
   const { sourceID } = input
   let source: Webhook.Source
@@ -331,7 +441,21 @@ async function handleWebhookTrigger(c: any, input: {
 
     try {
       const directory = projectDirectory(project)
-      const created = await runAutomatedControllerSession({
+      const startedAt = Date.now()
+      let terminal:
+        | {
+            status: AutomatedRunStatus
+            error?: string
+            finishedAt: number
+        }
+        | undefined
+      let runUpdateTail = Promise.resolve()
+      const queueRunUpdate = <T>(operation: () => Promise<T>) => {
+        const current = runUpdateTail.then(operation, operation)
+        runUpdateTail = current.then(() => undefined, () => undefined)
+        return current
+      }
+      const created = await (input.runner ?? runAutomatedControllerSession)({
         directory,
         title: `Webhook: ${source.name}`,
         permission: permissionForSource(source),
@@ -350,31 +474,46 @@ async function handleWebhookTrigger(c: any, input: {
         },
         async onControllerResponse(response) {
           const responseBody = responseForRun(run.id, response)
-          await Webhook.updateRun(run.id, {
-            sessionID: response.sessionID,
-            turnSnapshotId: response.turnSnapshotId,
-            status: response.accepted ? "running" : "failed",
-            httpStatus: response.status,
-            responseBody,
-            time: { started: Date.now() },
-            ...(response.accepted ? {} : { error: "controller_message_not_accepted" }),
+          await queueRunUpdate(async () => {
+            const finished = terminal
+            await Webhook.updateRun(run.id, {
+              sessionID: response.sessionID,
+              turnSnapshotId: response.turnSnapshotId,
+              status: finished?.status ?? (response.accepted ? "running" : "failed"),
+              httpStatus: response.status,
+              responseBody,
+              time: {
+                started: startedAt,
+                ...(finished ? { finished: finished.finishedAt } : {}),
+              },
+              ...(finished?.error
+                ? { error: finished.error }
+                : response.accepted || finished
+                  ? {}
+                  : { error: "controller_message_not_accepted" }),
+            })
           })
           if (response.accepted) {
             await Webhook.markCooldown(source, run.id)
           }
         },
         async onFinished(result) {
-          await Webhook.updateRun(run.id, {
-            status: result.status,
-            ...(result.error ? { error: result.error } : {}),
-            time: { finished: Date.now() },
-          }).catch(() => undefined)
+          const finished = {
+            ...result,
+            finishedAt: Math.max(Date.now(), startedAt),
+          }
+          terminal = finished
+          await queueRunUpdate(() => Webhook.updateRun(run.id, {
+            status: finished.status,
+            ...(finished.error ? { error: finished.error } : {}),
+            time: { finished: finished.finishedAt },
+          })).catch(() => undefined)
         },
         async onInteraction(interaction) {
           if (!interaction.error) return
-          await Webhook.updateRun(run.id, {
+          await queueRunUpdate(() => Webhook.updateRun(run.id, {
             error: interaction.error,
-          }).catch(() => undefined)
+          })).catch(() => undefined)
         },
       })
 
@@ -398,11 +537,12 @@ async function handleWebhookTrigger(c: any, input: {
   })
 }
 
-async function triggerWebhook(c: any) {
+async function triggerWebhook(c: any, options: { runner?: AutomatedControllerRunner } = {}) {
   const { sourceID, secret } = c.req.param()
   return handleWebhookTrigger(c, {
     sourceID,
     authentication: { type: "public-secret", secret },
+    runner: options.runner,
   })
 }
 
@@ -415,8 +555,47 @@ async function testWebhook(c: any) {
 }
 
 export function publicGitLabReviewRun(run: ReviewRunRecord) {
-  const { context: _context, ...publicRun } = run
-  return publicRun
+  const { context: _context, project, ci, repository: _repository, ...publicRun } = run
+  return {
+    ...publicRun,
+    ...(project ? {
+      project: {
+        id: project.id,
+        host: project.host,
+        projectId: project.projectId,
+        nine1botProjectID: project.nine1botProjectID,
+        pathWithNamespace: project.pathWithNamespace,
+        displayName: project.displayName,
+        enabled: project.enabled,
+        source: project.source,
+        matchedAt: project.matchedAt,
+      },
+    } : {}),
+    ...(ci ? {
+      ci: {
+        ...(ci.pipeline ? {
+          pipeline: {
+            id: ci.pipeline.id,
+            sha: ci.pipeline.sha,
+            status: ci.pipeline.status,
+            ref: ci.pipeline.ref,
+            web_url: ci.pipeline.webUrl ?? (ci.pipeline as { web_url?: string }).web_url,
+            kind: ci.pipeline.kind,
+            verification: ci.pipeline.verification,
+          },
+        } : {}),
+        diagnostics: ci.diagnostics,
+      },
+    } : {}),
+  }
+}
+
+export function publicGitLabReviewWebhookResult(
+  result: GitLabReviewWebhookResult,
+) {
+  if (!result.accepted) return result
+  const { context: _context, ...publicResult } = result
+  return publicResult
 }
 
 async function triggerGitLabReviewWebhook(c: any) {
@@ -445,17 +624,11 @@ async function triggerGitLabReviewWebhook(c: any) {
   })
 
   if (isAcceptedGitLabReviewWithContext(result) && result.status === "accepted") {
-    startGitLabReviewRuntimeRun(result).catch((error) => {
-      const message = error instanceof Error ? error.message : String(error)
-      ReviewRunStore.update(result.runId, {
-        status: "failed",
-        error: message,
-      })
-      reportStoredGitLabReviewFailure(result.runId, "runtime_start", message).catch(() => undefined)
-    })
+    const runtimeResult = await startGitLabReviewRuntime(result, "runtime_start")
+    return c.json(publicGitLabReviewWebhookResult(runtimeResult), runtimeResult.accepted ? 202 : runtimeResult.httpStatus as never)
   }
 
-  return c.json(result, result.accepted ? 202 : result.httpStatus as never)
+  return c.json(publicGitLabReviewWebhookResult(result), result.accepted ? 202 : result.httpStatus as never)
 }
 
 async function validateGitLabDedicatedWebhookSecret(c: any, platforms: Awaited<ReturnType<typeof readPlatformManagerConfig>>) {
@@ -471,8 +644,8 @@ async function validateGitLabDedicatedWebhookSecret(c: any, platforms: Awaited<R
   return { verified: true }
 }
 
-type AcceptedGitLabReviewWithContext = Extract<Awaited<ReturnType<typeof handleGitLabReviewWebhook>>, { accepted: true }> & {
-  context: NonNullable<Extract<Awaited<ReturnType<typeof handleGitLabReviewWebhook>>, { accepted: true }>["context"]>
+type AcceptedGitLabReviewWithContext = Extract<GitLabReviewWebhookResult, { accepted: true }> & {
+  context: NonNullable<Extract<GitLabReviewWebhookResult, { accepted: true }>["context"]>
 }
 
 type GitLabReviewRuntimeRunInput = {
@@ -482,29 +655,58 @@ type GitLabReviewRuntimeRunInput = {
   context: AcceptedGitLabReviewWithContext["context"]
 }
 
+export type GitLabReviewRuntimeRunOptions = {
+  runner?: AutomatedControllerRunner
+  platforms?: Awaited<ReturnType<typeof readPlatformManagerConfig>>
+  secrets?: FilePlatformSecretStore
+}
+
+export type GitLabReviewRuntimePreflightOptions = {
+  getProject?: Parameters<typeof resolveGitLabReviewRuntimeDirectory>[1]
+  inspectDirectory?: Parameters<typeof resolveGitLabReviewRuntimeDirectory>[2]
+  start?: (result: GitLabReviewRuntimeRunInput, directory: string) => Promise<unknown>
+}
+
+export async function startGitLabReviewRuntime(
+  result: AcceptedGitLabReviewWithContext,
+  phase: "runtime_start" | "runtime_retry",
+  options: GitLabReviewRuntimePreflightOptions = {},
+) {
+  let directory: string
+  try {
+    directory = await resolveGitLabReviewRuntimeDirectory(
+      result.context.project,
+      options.getProject,
+      options.inspectDirectory,
+    )
+  } catch {
+    return rejectGitLabReviewRuntimeConfiguration(result.runId, "project_binding_missing")
+  }
+
+  const start = options.start ?? startGitLabReviewRuntimeRun
+  start(result, directory).catch((error) => {
+    const message = gitLabReviewRuntimeFailure(phase, error)
+    failGitLabReviewRuntimeRun(result.runId, phase, message).catch(() => undefined)
+  })
+  return result
+}
+
 function isAcceptedGitLabReviewWithContext(
-  result: Awaited<ReturnType<typeof handleGitLabReviewWebhook>>,
+  result: GitLabReviewWebhookResult,
 ): result is AcceptedGitLabReviewWithContext {
   return result.accepted && Boolean(result.context)
 }
 
-function gitLabReviewRuntimeInputFromRecord(run: ReviewRunRecord): GitLabReviewRuntimeRunInput | { error: string } {
-  if (!run.idempotencyKey) return { error: "review_run_idempotency_key_missing" }
-  if (!run.trigger || !run.context) return { error: "review_run_context_missing" }
-  return {
-    runId: run.id,
-    idempotencyKey: run.idempotencyKey,
-    trigger: run.trigger as GitLabReviewRuntimeRunInput["trigger"],
-    context: run.context as GitLabReviewRuntimeRunInput["context"],
-  }
-}
-
-async function startGitLabReviewRuntimeRun(result: GitLabReviewRuntimeRunInput) {
-  const directory = process.env.NINE1BOT_PROJECT_DIR || process.cwd()
-  const platforms = await readPlatformManagerConfig()
+export async function startGitLabReviewRuntimeRun(
+  result: GitLabReviewRuntimeRunInput,
+  directory: string,
+  options: GitLabReviewRuntimeRunOptions = {},
+) {
+  const platforms = options.platforms ?? await readPlatformManagerConfig()
+  const secrets = options.secrets ?? new FilePlatformSecretStore(process.env.NINE1BOT_PLATFORM_SECRETS_PATH)
   registerBuiltinPlatformAdapters({
     config: platforms,
-    secrets: new FilePlatformSecretStore(process.env.NINE1BOT_PLATFORM_SECRETS_PATH),
+    secrets,
   })
   let publishAttempted = false
   const entry = {
@@ -515,7 +717,7 @@ async function startGitLabReviewRuntimeRun(result: GitLabReviewRuntimeRunInput) 
     traceId: result.runId,
   } satisfies RuntimeControllerProtocol.Entry
 
-  await runAutomatedControllerSession({
+  await (options.runner ?? runAutomatedControllerSession)({
     directory,
     title: `GitLab review: ${result.trigger.projectPath ?? result.trigger.projectId}`,
     sessionChoice: {
@@ -533,6 +735,7 @@ async function startGitLabReviewRuntimeRun(result: GitLabReviewRuntimeRunInput) 
     context: {
       blocks: result.context.contextBlocks,
     },
+    tools: gitLabReviewRuntimeTools(result.trigger.objectType),
     timeoutMs: RUN_MONITOR_TIMEOUT_MS,
     timeoutMessage: "GitLab review run monitor timed out.",
     interactionPolicy: {
@@ -542,62 +745,156 @@ async function startGitLabReviewRuntimeRun(result: GitLabReviewRuntimeRunInput) 
       permissionDenyMessage: "GitLab review runs are non-interactive, so permission requests are denied.",
       questionDenyMessage: "Question request denied automatically in GitLab review run.",
     },
+    async onSessionCreated({ sessionID }) {
+      const run = ReviewRunStore.get(result.runId)
+      if (!run) throw new Error("review_run_not_found")
+      const patch = gitLabReviewSessionCreatedPatch(
+        sessionID,
+        run,
+      )
+      if (patch) ReviewRunStore.update(result.runId, patch)
+    },
     async onControllerResponse(response) {
-      ReviewRunStore.update(result.runId, {
-        status: response.accepted ? "running" : "failed",
-        sessionId: response.sessionID,
-        turnSnapshotId: response.turnSnapshotId,
-        ...(response.accepted ? {} : { error: "controller_message_not_accepted" }),
-      })
+      const patch = gitLabReviewControllerResponsePatch(ReviewRunStore.get(result.runId), response)
+      if (!patch) return
       if (!response.accepted) {
-        await reportStoredGitLabReviewFailure(result.runId, "controller_message", "controller_message_not_accepted")
+        await failGitLabReviewRuntimeRun(result.runId, "controller_message", "controller_message_not_accepted", patch)
+        return
       }
+      updateGitLabReviewRuntimeRun(result.runId, patch)
     },
     async onRuntimeOutput(output) {
       if (publishAttempted || output.kind !== "part" || !output.text) return
       const stageResult = extractGitLabReviewStageResultFromRuntimeText(output.text)
       if (!stageResult) return
       publishAttempted = true
-      const published = await publishGitLabReviewRunResult({
-        runId: result.runId,
-        stageResult,
-        platforms: await readPlatformManagerConfig(),
-        secrets: new FilePlatformSecretStore(process.env.NINE1BOT_PLATFORM_SECRETS_PATH),
-      })
-      if (!published.published) {
-        ReviewRunStore.update(result.runId, {
-          status: "failed",
-          error: published.error,
+      try {
+        const published = await publishGitLabReviewRunResult({
+          runId: result.runId,
+          stageResult,
+          platforms: await readPlatformManagerConfig(),
+          secrets: new FilePlatformSecretStore(process.env.NINE1BOT_PLATFORM_SECRETS_PATH),
+        })
+        if (published.published) return
+        await failGitLabReviewRuntimeRun(result.runId, "publish_result", published.error, {
           warnings: published.warnings,
         })
-        await reportStoredGitLabReviewFailure(result.runId, "publish_result", published.error)
+      } catch (error) {
+        const diagnostic = gitLabReviewRuntimeFailure("runtime_publish", error)
+        await failGitLabReviewRuntimeRun(result.runId, "publish_result", diagnostic)
       }
     },
     async onFinished(finished) {
+      const beforeCiDiagnostic = ReviewRunStore.get(result.runId)
+      const ciDiagnosticPatch = beforeCiDiagnostic && gitLabReviewCiNotQueriedPatch(beforeCiDiagnostic)
+      if (ciDiagnosticPatch) updateGitLabReviewRuntimeRun(result.runId, ciDiagnosticPatch)
       if (publishAttempted) return
       const current = ReviewRunStore.get(result.runId)
       if (current?.publishedAt) return
       if (finished.status === "succeeded") {
         const error = "gitlab_review_result_missing"
-        ReviewRunStore.update(result.runId, {
-          status: "failed",
-          error,
+        await failGitLabReviewRuntimeRun(result.runId, "runtime_output", error, {
           warnings: [
             ...((current?.warnings as string[] | undefined) ?? []),
             "Runtime session finished without a valid GITLAB_REVIEW_RESULT payload.",
           ],
         })
-        await reportStoredGitLabReviewFailure(result.runId, "runtime_output", error)
         return
       }
-      const error = finished.error ?? `runtime_finished_${finished.status}`
-      ReviewRunStore.update(result.runId, {
-        status: "failed",
-        error,
-      })
-      await reportStoredGitLabReviewFailure(result.runId, "runtime_finished", error)
+      const error = gitLabReviewRuntimeFailure("runtime_finished", finished.error)
+      await failGitLabReviewRuntimeRun(result.runId, "runtime_finished", error)
     },
   })
+}
+
+export function gitLabReviewRuntimePatch(
+  run: ReviewRunRecord | undefined,
+  patch: Parameters<typeof ReviewRunStore.update>[1],
+) {
+  if (!run || run.status === "rejected" || run.publication) return undefined
+  return patch
+}
+
+function updateGitLabReviewRuntimeRun(runId: string, patch: Parameters<typeof ReviewRunStore.update>[1]) {
+  const guardedPatch = gitLabReviewRuntimePatch(ReviewRunStore.get(runId), patch)
+  if (!guardedPatch) return false
+  return Boolean(ReviewRunStore.update(runId, guardedPatch))
+}
+
+async function failGitLabReviewRuntimeRun(
+  runId: string,
+  phase: string,
+  error: string,
+  patch: Parameters<typeof ReviewRunStore.update>[1] = {},
+) {
+  const updated = updateGitLabReviewRuntimeRun(runId, {
+    ...patch,
+    status: "failed",
+    error,
+  })
+  if (!updated) return false
+  await reportStoredGitLabReviewFailure(runId, phase, error)
+  return true
+}
+
+export function gitLabReviewSessionCreatedPatch(
+  sessionID: string,
+  run?: ReviewRunRecord,
+) {
+  const patch = {
+    status: "running" as const,
+    sessionId: sessionID,
+    turnSnapshotId: undefined,
+    error: undefined,
+    repository: {
+      queryCount: 0,
+      readCount: 0,
+      searchCount: 0,
+      outputBytes: 0,
+      apiRequestCount: 0,
+      fileFetchCount: 0,
+      fetchedBytes: 0,
+    },
+  } satisfies Parameters<typeof ReviewRunStore.update>[1]
+  return run ? gitLabReviewRuntimePatch(run, patch) : patch
+}
+
+export function gitLabReviewControllerResponsePatch(
+  run: ReviewRunRecord | undefined,
+  response: Pick<AutomatedControllerResponse, "accepted" | "turnSnapshotId">,
+) {
+  if (!run || run.publishedAt || (run.status !== "accepted" && run.status !== "running")) return undefined
+  return gitLabReviewRuntimePatch(run, {
+    status: response.accepted ? "running" as const : "failed" as const,
+    turnSnapshotId: response.turnSnapshotId,
+    ...(response.accepted ? {} : { error: "controller_message_not_accepted" }),
+  } satisfies Parameters<typeof ReviewRunStore.update>[1])
+}
+
+export function gitLabReviewRuntimeTools(objectType: "mr" | "commit") {
+  return {
+    "*": false,
+    task: true,
+    gitlab_ci_inspect: objectType === "mr",
+    gitlab_repository_inspect: true,
+  }
+}
+
+export function gitLabReviewCiNotQueriedPatch(run: ReviewRunRecord) {
+  if (
+    run.trigger?.objectType !== "mr"
+    || (run.ci?.queryCount ?? 0) > 0
+    || (run.ci?.jobLogReadCount ?? 0) > 0
+  ) return undefined
+  return {
+    ci: {
+      ...run.ci,
+      diagnostics: uniqueStrings([
+        ...(run.ci?.diagnostics ?? []),
+        "ci_not_queried",
+      ]),
+    },
+  } satisfies Parameters<typeof ReviewRunStore.update>[1]
 }
 
 async function reportStoredGitLabReviewFailure(runId: string, phase: string, error: string) {
@@ -620,75 +917,66 @@ function gitLabReviewModelChoice(model: ReturnType<typeof resolveGitLabReviewMod
   } satisfies NonNullable<RuntimeControllerProtocol.SessionChoice>
 }
 
+export function gitLabReviewRuntimeFailure(
+  phase: "runtime_start" | "runtime_retry" | "runtime_publish" | "runtime_finished",
+  _error: unknown,
+) {
+  return `gitlab_review_${phase}_failed`
+}
+
 export function gitLabReviewPublishStatus(error: string | undefined) {
   if (!error) return 400
   if (error === "review_run_not_found") return 404
-  if (error === "review_run_already_published" || error === "review_run_already_active") return 409
+  if (error === GITLAB_REVIEW_PUBLICATION_INPUT_TOO_LARGE) return 413
+  if (
+    error === "review_run_already_published"
+    || error === "review_run_already_active"
+    || error === "review_run_publish_in_progress"
+    || error === "review_run_publish_payload_mismatch"
+    || error === "review_run_publish_claim_lost"
+    || error === "gitlab_review_publication_legacy_ambiguous"
+  ) return 409
   if (error.startsWith("gitlab_api_")) return 502
   return 400
 }
 
-export function gitLabReviewRetryPatch(run: ReviewRunRecord) {
-  return {
-    status: "accepted",
-    error: undefined,
-    sessionId: undefined,
-    turnSnapshotId: undefined,
-    failureNotifiedAt: undefined,
-    retryCount: (run.retryCount ?? 0) + 1,
-    lastRetryAt: Date.now(),
-    warnings: uniqueStrings([
-      ...((run.warnings as string[] | undefined) ?? []),
-      "Review run manually retried from stored GitLab context.",
-    ]),
-    publishedAt: undefined,
-  } satisfies Parameters<typeof ReviewRunStore.update>[1]
-}
-
 async function retryGitLabReviewRun(c: any) {
   const runId = c.req.valid("param").runId
-  const run = ReviewRunStore.get(runId)
-  if (!run) return c.json({ accepted: false, error: "review_run_not_found" }, 404)
-  if (run.publishedAt) return c.json({ accepted: false, runId, error: "review_run_already_published" }, 409)
-  if (run.status === "running" || run.status === "accepted") {
-    return c.json({ accepted: false, runId, error: "review_run_already_active" }, 409)
-  }
-
-  const input = gitLabReviewRuntimeInputFromRecord(run)
-  if ("error" in input) return c.json({ accepted: false, runId, error: input.error }, 400)
-
-  ReviewRunStore.update(runId, gitLabReviewRetryPatch(run))
-
-  startGitLabReviewRuntimeRun(input).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error)
-    ReviewRunStore.update(runId, {
-      status: "failed",
-      error: message,
-    })
-    reportStoredGitLabReviewFailure(runId, "runtime_retry", message).catch(() => undefined)
+  const result = await retryGitLabReviewAttempt({
+    runId,
+    platforms: await readPlatformManagerConfig(),
+    secrets: new FilePlatformSecretStore(process.env.NINE1BOT_PLATFORM_SECRETS_PATH),
   })
 
-  return c.json({ accepted: true, runId }, 202)
+  if (isAcceptedGitLabReviewWithContext(result) && result.status === "accepted") {
+    const runtimeResult = await startGitLabReviewRuntime(result, "runtime_retry")
+    return c.json(publicGitLabReviewWebhookResult(runtimeResult), runtimeResult.accepted ? 202 : runtimeResult.httpStatus as never)
+  }
+
+  return c.json(publicGitLabReviewWebhookResult(result), result.accepted ? 202 : result.httpStatus as never)
 }
 
 function uniqueStrings(items: string[]) {
   return [...new Set(items)]
 }
 
-export const WebhookPublicRoutes = lazy(() =>
-  new Hono()
-    .post("/gitlab", triggerGitLabReviewWebhook)
+export function createWebhookPublicRoutes(options: { runner?: AutomatedControllerRunner } = {}) {
+  return new Hono()
+    .post("/gitlab", gitLabReviewWebhookBodyLimit, triggerGitLabReviewWebhook)
     .post(
       "/gitlab/:secret",
+      gitLabReviewWebhookBodyLimit,
       validator("param", z.object({ secret: z.string() })),
       triggerGitLabReviewWebhook,
     )
     .post(
       "/:sourceID/:secret",
       validator("param", z.object({ sourceID: z.string(), secret: z.string() })),
-      triggerWebhook,
-    ),
-)
+      (c) => triggerWebhook(c, options),
+    )
+}
+
+export const WebhookPublicRoutes = lazy(() => createWebhookPublicRoutes())
 
 export const WebhookRoutes = lazy(() =>
   new Hono()
@@ -803,12 +1091,13 @@ export const WebhookRoutes = lazy(() =>
       async (c) => {
         const run = ReviewRunStore.get(c.req.valid("param").runId)
         if (!run) return c.json({ error: "review_run_not_found" }, 404)
-        return c.json(run)
+        return c.json(publicGitLabReviewRun(run))
       },
     )
     .post(
       "/gitlab/runs/:runId/publish",
       validator("param", z.object({ runId: z.string() })),
+      gitLabReviewPublishBodyLimit,
       validator("json", GitLabReviewPublishBody),
       async (c) => {
         const result = await publishGitLabReviewRunResult({

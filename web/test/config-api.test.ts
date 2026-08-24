@@ -115,6 +115,13 @@ describe('web config APIs', () => {
             id: 'review_1',
             platform: 'gitlab',
             status: 'succeeded',
+            rootRunId: 'review_root',
+            attempt: 2,
+            retryOf: 'review_root',
+            triggerKey: 'trigger_review_1',
+            generation: 'generation_review_1',
+            recoverable: false,
+            rejectionKind: 'policy',
             createdAt: 1,
             updatedAt: 2,
             publishedAt: 3,
@@ -133,6 +140,13 @@ describe('web config APIs', () => {
       id: 'review_1',
       platform: 'gitlab',
       status: 'succeeded',
+      rootRunId: 'review_root',
+      attempt: 2,
+      retryOf: 'review_root',
+      triggerKey: 'trigger_review_1',
+      generation: 'generation_review_1',
+      recoverable: false,
+      rejectionKind: 'policy',
       createdAt: 1,
       updatedAt: 2,
       publishedAt: 3,
@@ -143,6 +157,20 @@ describe('web config APIs', () => {
     expect(callSummary()).toEqual([
       ['GET', '/webhooks/gitlab/runs?limit=25'],
       ['POST', '/webhooks/gitlab/runs/review_1/retry'],
+    ])
+  })
+
+  it('surfaces backend rejection when a GitLab run is not retryable', async () => {
+    installFetchMock((url) => {
+      if (url === '/webhooks/gitlab/runs/policy-run/retry') {
+        return jsonResponse({ accepted: false, error: 'review_run_not_recoverable' }, 409)
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+
+    await expect(gitLabReviewApi.retry('policy-run')).rejects.toThrow('review_run_not_recoverable')
+    expect(callSummary()).toEqual([
+      ['POST', '/webhooks/gitlab/runs/policy-run/retry'],
     ])
   })
 

@@ -601,6 +601,10 @@ export interface Project {
   sandboxes: string[]
 }
 
+export type Nine1BotProjectOption = Pick<Project, 'id' | 'name' | 'worktree'> & {
+  rootDirectory?: string
+}
+
 export interface ProjectEnvironmentResponse {
   keys: string[]
   variables: Record<string, string>
@@ -703,12 +707,19 @@ export interface WebhookStatus {
 
 export interface GitLabReviewRun {
   id: string
+  rootRunId: string
+  attempt: number
+  retryOf?: string
+  triggerKey: string
+  generation: string
   platform: 'gitlab'
   idempotencyKey?: string
   status: 'accepted' | 'rejected' | 'blocked' | 'running' | 'succeeded' | 'failed'
   createdAt: number
   updatedAt: number
   error?: string
+  rejectionKind?: string
+  recoverable?: boolean
   sessionId?: string
   turnSnapshotId?: string
   publishedAt?: number
@@ -716,6 +727,27 @@ export interface GitLabReviewRun {
   retryCount?: number
   lastRetryAt?: number
   warnings?: string[]
+  project?: {
+    id: string
+    host?: string
+    projectId: string | number
+    nine1botProjectID: string
+    pathWithNamespace?: string
+    displayName?: string
+    enabled: boolean
+    source: 'configured' | 'unconfigured'
+    matchedAt: number
+  }
+  ci?: {
+    pipeline?: {
+      id: string | number
+      sha?: string
+      status?: string
+      ref?: string
+      web_url?: string
+    }
+    diagnostics: string[]
+  }
   trigger?: {
     eventName?: string
     mode?: string

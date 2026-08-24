@@ -230,7 +230,7 @@ describe("platform tool registration lifecycle", () => {
           title: "Test lookup",
           output: "lookup:prompt:wired",
         })
-        expect(resolved.tools.display_file).toBeDefined()
+        expect(resolved.tools.display_file).toBeUndefined()
         expect(resolved.resources?.registeredTools.availableTools.map((tool) => tool.id)).toEqual(["demo_lookup"])
         expect(resolved.resources?.failures).toContainEqual(expect.objectContaining({
           resourceID: "display_file",

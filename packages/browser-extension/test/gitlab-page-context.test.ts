@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { buildPageContextPayload, parseGitLabUrl } from '@nine1bot/platform-gitlab/browser'
 
 describe('browser extension GitLab page parser', () => {
-  it('detects GitLab repo, file, tree, merge request, and issue pages', () => {
+  it('detects GitLab repo, file, tree, merge request, commit, and issue pages', () => {
     expect(parseGitLabUrl('https://gitlab.com/nine1/nine1bot')).toMatchObject({
       pageType: 'gitlab-repo',
       objectKey: 'gitlab.com:nine1/nine1bot:repo',
@@ -27,6 +27,12 @@ describe('browser extension GitLab page parser', () => {
       objectKey: 'gitlab.com:nine1/nine1bot:merge_request:42',
       iid: '42',
       route: 'merge_request',
+    })
+    expect(parseGitLabUrl('https://gitlab.com/nine1/nine1bot/-/commit/abc123')).toMatchObject({
+      pageType: 'gitlab-commit',
+      objectKey: 'gitlab.com:nine1/nine1bot:commit:abc123',
+      sha: 'abc123',
+      route: 'commit',
     })
     expect(parseGitLabUrl('https://gitlab.com/nine1/nine1bot/-/issues/7')).toMatchObject({
       pageType: 'gitlab-issue',

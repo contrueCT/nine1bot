@@ -13,5 +13,6 @@ export {
   refreshLocalWebhookBaseUrl,
 } from './runtime'
 export type { GitLabPlatformAdapter } from './runtime'
+export * from './cli'
 export * from './review'
 export type * from './types'

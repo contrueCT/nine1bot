@@ -1,19 +1,31 @@
 import {
   asRecord,
   gitLabTemplateIdsForPage,
-  isGitLabPagePayload,
   normalizeGitLabPagePayload,
   parseGitLabUrl,
+  type GitLabHostPolicy,
 } from './shared'
 import { randomBytes } from 'node:crypto'
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os'
-import { GitLabApiClient, GitLabApiError, type GitLabReviewSecretRef } from './review'
-import { gitLabReviewProjectIdsForHookSync, normalizeGitLabReviewSettings } from './review/settings'
+import { createGitLabCliPlatformTools, getGitLabCliStatus, gitLabCliToolIds, type GitLabCliStatus } from './cli'
+import {
+  GitLabApiClient,
+  GitLabApiError,
+  sanitizeGitLabSecrets,
+  type GitLabReviewSecretRef,
+} from './review'
+import {
+  gitLabReviewProjectIdsForHookSync,
+  hasUsableGitLabReviewProjectProfile,
+  normalizeGitLabReviewSettings,
+} from './review/settings'
 import type {
+  AnyPlatformToolDefinition,
   PlatformActionResult,
   PlatformAdapterContext,
   PlatformAdapterContribution,
   PlatformDescriptor,
+  PlatformResourceContributionInput,
   PlatformRuntimeAdapter,
   PlatformRuntimeStatus,
   PlatformSecretAccess,
@@ -29,7 +41,7 @@ export type GitLabPlatformAdapter = PlatformRuntimeAdapter & {
   blocksFromPage: (page: PageContextPayload, observedAt: number) => PlatformContextBlock[] | undefined
   inferTemplateIds: (input: { entry?: { platform?: string }; page?: PageContextPayload }) => string[]
   templateContextBlocks: (input: { templateIds: string[]; page?: PageContextPayload }) => PlatformContextBlock[]
-  resourceContributions: (input: { templateIds: string[] }) => PlatformResourceContribution | undefined
+  resourceContributions: (input: PlatformResourceContributionInput) => PlatformResourceContribution | undefined
 }
 
 export const gitlabPlatformDescriptor = {
@@ -40,7 +52,7 @@ export const gitlabPlatformDescriptor = {
   defaultEnabled: true,
   capabilities: {
     pageContext: true,
-    templates: ['browser-gitlab', 'gitlab-repo', 'gitlab-file', 'gitlab-mr', 'gitlab-issue'],
+    templates: ['browser-gitlab', 'gitlab-repo', 'gitlab-file', 'gitlab-mr', 'gitlab-commit', 'gitlab-issue'],
     resources: true,
     browserExtension: true,
     auth: 'token',
@@ -57,7 +69,7 @@ export const gitlabPlatformDescriptor = {
             key: 'allowedHosts',
             type: 'string-list',
             label: 'Allowed GitLab hosts',
-            description: 'GitLab hosts that can contribute page context.',
+            description: 'GitLab hosts allowed to contribute page context and receive CLI wrapper access.',
           },
           {
             key: 'apiEnrichment',
@@ -145,6 +157,12 @@ export const gitlabPlatformDescriptor = {
             type: 'json',
             label: 'Hook groups',
             description: 'GitLab groups whose group hooks should be managed by Nine1Bot.',
+          },
+          {
+            key: 'review.projects',
+            type: 'json',
+            label: 'Project review profiles',
+            description: 'Per-project review context, focus, limits, and CI evidence policy.',
           },
           {
             key: 'review.webhookSecretRef',
@@ -252,7 +270,7 @@ export const gitlabPlatformDescriptor = {
 export const gitlabPlatformContribution = {
   descriptor: gitlabPlatformDescriptor,
   runtime: {
-    createAdapter: createGitLabPlatformAdapter,
+    createAdapter: (ctx) => createGitLabPlatformAdapter(ctx.settings),
     sources: (ctx) => ({
       agents: [
         {
@@ -273,34 +291,48 @@ export const gitlabPlatformContribution = {
         },
       ],
     }),
+    tools: (ctx: PlatformAdapterContext) => {
+      const hostPolicy = effectiveGitLabHostPolicy(ctx.settings)
+      return applyGitLabHostPolicyToCliTargetResolution(createGitLabCliPlatformTools({
+        allowedHosts: [...hostPolicy.allowedHosts],
+        allowedHostsInvalid: hostPolicy.allowedHostsInvalid,
+      }), hostPolicy)
+    },
   },
   getStatus: getGitLabPlatformStatus,
   validateConfig: validateGitLabPlatformConfig,
   handleAction: handleGitLabPlatformAction,
 } satisfies PlatformAdapterContribution
 
-export function createGitLabPlatformAdapter(): GitLabPlatformAdapter {
+export function createGitLabPlatformAdapter(settingsInput?: unknown): GitLabPlatformAdapter {
+  const hostPolicy = effectiveGitLabHostPolicy(settingsInput)
   return {
     id: 'gitlab',
-    matchPage: isGitLabPagePayload,
-    normalizePage: normalizeGitLabPagePayload,
-    blocksFromPage: buildGitLabContextBlocks,
+    matchPage: (page) => Boolean(normalizeGitLabPagePayload(page, hostPolicy)),
+    normalizePage: (page) => normalizeGitLabPagePayload(page, hostPolicy),
+    blocksFromPage: (page, observedAt) => buildGitLabContextBlocks(page, observedAt, hostPolicy),
     inferTemplateIds(input) {
       if (input.entry?.platform !== 'gitlab' && !input.page) return []
-      const ids = gitLabTemplateIdsForPage(input.page)
-      return ids.length > 0 || input.entry?.platform !== 'gitlab' ? ids : ['browser-gitlab']
+      if (input.page) return gitLabTemplateIdsForPage(input.page, hostPolicy)
+      return ['browser-gitlab']
     },
     templateContextBlocks(input) {
-      return buildGitLabTemplateContextBlocks(input.templateIds, input.page)
+      return buildGitLabTemplateContextBlocks(input.templateIds, input.page, hostPolicy)
     },
     resourceContributions(input) {
       if (!input.templateIds.some((templateId) => templateId === 'browser-gitlab' || templateId.startsWith('gitlab-'))) {
         return undefined
       }
-      return emptyResources(['gitlab-context'])
+      if (input.agentName !== 'platform.gitlab.assistant') {
+        return emptyResources(['gitlab-context'])
+      }
+      return gitLabResourcesForTemplates(input.templateIds)
     },
     recommendedAgent(input) {
-      return input.templateIds.includes('gitlab-mr') ? 'platform.gitlab.pm-coordinator' : input.fallback
+      if (input.fallback === 'platform.gitlab.pm-coordinator') return input.fallback
+      return input.templateIds.some((templateId) => templateId === 'browser-gitlab' || templateId.startsWith('gitlab-'))
+        ? 'platform.gitlab.assistant'
+        : input.fallback
     },
   }
 }
@@ -309,8 +341,19 @@ export { gitLabTemplateIdsForPage, normalizeGitLabPagePayload, parseGitLabUrl }
 
 async function getGitLabPlatformStatus(ctx: PlatformAdapterContext): Promise<PlatformRuntimeStatus> {
   const settings = normalizeGitLabReviewSettings(ctx.settings)
+  const cliStatus = await cachedGitLabCliStatus()
   const cards: PlatformRuntimeStatus['cards'] = [
     { id: 'context', label: 'Page context', value: 'enabled', tone: 'success' },
+    {
+      id: 'cli',
+      label: 'GitLab CLI',
+      value: cliStatus.available
+        ? cliStatus.authenticated
+          ? `authenticated${cliStatus.host ? `: ${cliStatus.host}` : ''}`
+          : 'not authenticated'
+        : 'missing',
+      tone: cliStatus.available && cliStatus.authenticated ? 'success' : cliStatus.available ? 'warning' : 'neutral',
+    },
     { id: 'review', label: 'Code review', value: settings.enabled ? 'enabled' : 'disabled', tone: settings.enabled ? 'success' : 'neutral' },
     { id: 'mode', label: 'Review publish', value: settings.dryRun ? 'dry-run' : 'publish', tone: settings.dryRun ? 'warning' : 'success' },
     { id: 'model', label: 'Review model', value: settings.modelProviderId && settings.modelId ? `${settings.modelProviderId}/${settings.modelId}` : 'default', tone: 'neutral' },
@@ -343,6 +386,22 @@ async function getGitLabPlatformStatus(ctx: PlatformAdapterContext): Promise<Pla
     }
   }
 
+  if (!hasUsableGitLabReviewProjectProfile(settings)) {
+    return {
+      status: 'degraded',
+      message: 'GitLab code review is enabled but has no enabled, bound, usable project profile.',
+      cards,
+    }
+  }
+
+  if (settings.configurationErrors.length > 0) {
+    return {
+      status: 'degraded',
+      message: 'GitLab code review configuration contains invalid project profile or host settings.',
+      cards,
+    }
+  }
+
   return {
     status: settings.dryRun ? 'degraded' : 'available',
     message: settings.dryRun
@@ -352,16 +411,50 @@ async function getGitLabPlatformStatus(ctx: PlatformAdapterContext): Promise<Pla
   }
 }
 
-async function validateGitLabPlatformConfig(settingsInput: unknown): Promise<PlatformValidationResult> {
+async function validateGitLabPlatformConfig(
+  settingsInput: unknown,
+  ctx?: PlatformAdapterContext,
+): Promise<PlatformValidationResult> {
   const settings = normalizeGitLabReviewSettings(settingsInput)
   const fieldErrors: Record<string, string> = {}
 
-  if (settings.enabled) {
+  if (settings.configurationErrors.includes('allowed_hosts_invalid')) {
+    fieldErrors.allowedHosts = 'Allowed GitLab hosts must contain only valid host or host:port values.'
+  }
+
+  if (settings.enabled && ctx?.enabled !== false) {
     if (!settings.tokenSecretRef) fieldErrors['review.tokenSecretRef'] = 'GitLab API token is required when code review is enabled.'
     if (settings.baseUrl && !isHttpUrl(settings.baseUrl)) fieldErrors['review.baseUrl'] = 'GitLab base URL must be an http(s) URL.'
     if (!settings.botMention.trim().startsWith('@')) fieldErrors['review.botMention'] = 'Bot mention must start with @.'
     if (settings.modelProviderId && !settings.modelId) fieldErrors['review.modelId'] = 'Review model is required when a review model provider is set.'
     if (!settings.modelProviderId && settings.modelId) fieldErrors['review.modelProviderId'] = 'Review model provider is required when a review model is set.'
+    if (!hasUsableGitLabReviewProjectProfile(settings)) {
+      fieldErrors['review.projects'] = [
+        'At least one GitLab review profile must be enabled, use a valid host,',
+        'and bind an existing Nine1Bot project with a unique identity.',
+      ].join(' ')
+    } else if (settings.configurationErrors.some((error) => (
+      error.startsWith('project_profile_max_context_bytes_invalid:')
+      || error.startsWith('project_profile_max_files_invalid:')
+      || error.startsWith('project_profile_review_context_too_large:')
+    ))) {
+      const limits: string[] = []
+      if (settings.configurationErrors.some((error) => error.startsWith('project_profile_max_context_bytes_invalid:'))) {
+        limits.push('maxContextBytes must be a finite positive number.')
+      }
+      if (settings.configurationErrors.some((error) => error.startsWith('project_profile_max_files_invalid:'))) {
+        limits.push('maxFiles must be a finite positive number.')
+      }
+      if (settings.configurationErrors.some((error) => error.startsWith('project_profile_review_context_too_large:'))) {
+        limits.push('reviewContextMarkdown exceeds the stored project context limit.')
+      }
+      fieldErrors['review.projects'] = limits.join(' ')
+    } else if (settings.configurationErrors.some((error) => error.startsWith('project_'))) {
+      fieldErrors['review.projects'] = [
+        'Every GitLab review profile must use a valid host, bind an existing Nine1Bot project,',
+        'and have unique profile and (host, projectId) identities.',
+      ].join(' ')
+    }
   }
 
   return Object.keys(fieldErrors).length
@@ -445,10 +538,21 @@ async function testGitLabConnection(
     }
     return {
       status: 'failed',
-      message: `GitLab API token check failed: ${error instanceof Error ? error.message : String(error)}.`,
+      message: `GitLab API token check failed: ${gitLabActionErrorText(error)}.`,
       updatedStatus: status,
     }
   }
+}
+
+function gitLabActionErrorText(error: unknown) {
+  if (error instanceof GitLabApiError) return error.message
+  const message = error instanceof Error ? error.message : String(error)
+  return sanitizeGitLabSecrets(message, {
+    maxInputCodeUnits: 4_096,
+    maxInputUtf8Bytes: 4_096,
+    maxOutputCodeUnits: 512,
+    maxOutputUtf8Bytes: 512,
+  }).trim() || 'Unknown GitLab error'
 }
 
 async function searchGitLabProjects(
@@ -483,7 +587,7 @@ async function searchGitLabProjects(
   } catch (error) {
     return {
       status: 'failed',
-      message: `GitLab project search failed: ${error instanceof Error ? error.message : String(error)}.`,
+      message: `GitLab project search failed: ${gitLabActionErrorText(error)}.`,
       updatedStatus: status,
     }
   }
@@ -521,7 +625,7 @@ async function searchGitLabGroups(
   } catch (error) {
     return {
       status: 'failed',
-      message: `GitLab group search failed: ${error instanceof Error ? error.message : String(error)}.`,
+      message: `GitLab group search failed: ${gitLabActionErrorText(error)}.`,
       updatedStatus: status,
     }
   }
@@ -556,7 +660,7 @@ async function syncGitLabProjectHooks(
         await prepared.client.testProjectHook(projectId, hook.id, 'note_events')
       } catch (error) {
         testStatus = 'failed'
-        testMessage = error instanceof Error ? error.message : String(error)
+        testMessage = gitLabActionErrorText(error)
       }
       results.push({
         projectId: String(projectId),
@@ -572,7 +676,7 @@ async function syncGitLabProjectHooks(
         projectId: String(projectId),
         action: 'failed',
         url: prepared.webhookUrl,
-        error: error instanceof Error ? error.message : String(error),
+        error: gitLabActionErrorText(error),
       })
     }
   }
@@ -620,7 +724,7 @@ async function syncGitLabGroupHooks(
         await prepared.client.testGroupHook(group.id, hook.id, 'note_events')
       } catch (error) {
         testStatus = 'failed'
-        testMessage = error instanceof Error ? error.message : String(error)
+        testMessage = gitLabActionErrorText(error)
       }
       results.push({
         groupId: String(group.id),
@@ -638,7 +742,7 @@ async function syncGitLabGroupHooks(
         groupPath: group.fullPath,
         action: 'failed',
         url: prepared.webhookUrl,
-        error: error instanceof Error ? error.message : String(error),
+        error: gitLabActionErrorText(error),
       })
     }
   }
@@ -704,7 +808,7 @@ async function testGitLabGroupHooks(
         groupId: String(group.id),
         groupPath: group.fullPath,
         action: 'failed',
-        error: error instanceof Error ? error.message : String(error),
+        error: gitLabActionErrorText(error),
       })
     }
   }
@@ -769,7 +873,7 @@ async function testGitLabProjectHooks(
       results.push({
         projectId: String(projectId),
         action: 'failed',
-        error: error instanceof Error ? error.message : String(error),
+        error: gitLabActionErrorText(error),
       })
     }
   }
@@ -1029,8 +1133,12 @@ async function resolveOrCreateGitLabWebhookSecret(
   return generated
 }
 
-function buildGitLabContextBlocks(page: PageContextPayload, observedAt: number): PlatformContextBlock[] | undefined {
-  const adapted = normalizeGitLabPagePayload(page)
+function buildGitLabContextBlocks(
+  page: PageContextPayload,
+  observedAt: number,
+  hostPolicy?: GitLabHostPolicy,
+): PlatformContextBlock[] | undefined {
+  const adapted = normalizeGitLabPagePayload(page, hostPolicy)
   if (!adapted) return undefined
   const gitlab = asRecord(adapted.raw?.gitlab)
   const pageType = adapted.pageType ?? 'gitlab-repo'
@@ -1080,8 +1188,12 @@ function buildGitLabContextBlocks(page: PageContextPayload, observedAt: number):
   return blocks
 }
 
-function buildGitLabTemplateContextBlocks(templateIds: string[], page?: PageContextPayload): PlatformContextBlock[] {
-  const normalizedPage = page ? normalizeGitLabPagePayload(page) : undefined
+function buildGitLabTemplateContextBlocks(
+  templateIds: string[],
+  page?: PageContextPayload,
+  hostPolicy?: GitLabHostPolicy,
+): PlatformContextBlock[] {
+  const normalizedPage = page ? normalizeGitLabPagePayload(page, hostPolicy) : undefined
   const blocks: PlatformContextBlock[] = []
   for (const templateId of templateIds) {
     if (templateId === 'browser-gitlab') {
@@ -1089,7 +1201,7 @@ function buildGitLabTemplateContextBlocks(templateIds: string[], page?: PageCont
         id: 'template:browser-gitlab',
         layer: 'platform',
         source: 'template.browser-gitlab',
-        content: 'This session can use GitLab browser context. Treat GitLab repository, file, merge request, and issue page events as active work context.',
+        content: 'This session can use GitLab browser context. Treat GitLab repository, file, merge request, commit, and issue page events as active work context.',
         lifecycle: 'session',
         visibility: 'developer-toggle',
         enabled: true,
@@ -1143,6 +1255,7 @@ function renderPage(page: PageContextPayload, gitlab?: Record<string, unknown>) 
     page.objectKey ? `Object key: ${page.objectKey}` : undefined,
     stringValue(gitlab?.route) ? `GitLab route: ${gitlab?.route}` : undefined,
     stringValue(gitlab?.iid) ? `IID: ${gitlab?.iid}` : undefined,
+    stringValue(gitlab?.sha) ? `Commit SHA: ${gitlab?.sha}` : undefined,
     stringValue(gitlab?.ref) ? `Ref: ${gitlab?.ref}` : undefined,
     stringValue(gitlab?.filePath) ? `File path: ${gitlab?.filePath}` : undefined,
     stringValue(gitlab?.treePath) ? `Tree path: ${gitlab?.treePath}` : undefined,
@@ -1151,10 +1264,53 @@ function renderPage(page: PageContextPayload, gitlab?: Record<string, unknown>) 
     .join('\n')
 }
 
-function emptyResources(enabledGroups: string[]): PlatformResourceContribution {
+function gitLabResourcesForTemplates(templateIds: string[]): PlatformResourceContribution {
+  const skills = new Set<string>()
+  const tools = new Set<string>()
+  const isGitLabTemplate = templateIds.some((templateId) => (
+    templateId === 'browser-gitlab' || templateId.startsWith('gitlab-')
+  ))
+
+  if (isGitLabTemplate) {
+    skills.add('platform.gitlab.gitlab-assisted-workflow')
+    skills.add('platform.gitlab.gitlab-cli-command-policy')
+    tools.add(gitLabCliToolIds.status)
+    tools.add(gitLabCliToolIds.resolveTarget)
+  }
+  if (templateIds.includes('gitlab-repo') || templateIds.includes('gitlab-file')) {
+    skills.add('platform.gitlab.gitlab-repository-health-workflow')
+    tools.add(gitLabCliToolIds.projectSnapshot)
+    tools.add(gitLabCliToolIds.repositoryHealthContext)
+  }
+  if (templateIds.includes('gitlab-mr')) {
+    skills.add('platform.gitlab.gitlab-cli-mr-review-workflow')
+    tools.add(gitLabCliToolIds.mrSnapshot)
+    tools.add(gitLabCliToolIds.mrDiff)
+    tools.add(gitLabCliToolIds.publishReviewNote)
+    tools.add(gitLabCliToolIds.publishReviewDiscussion)
+  }
+  if (templateIds.includes('gitlab-commit')) {
+    skills.add('platform.gitlab.gitlab-cli-commit-review-workflow')
+    tools.add(gitLabCliToolIds.commitDiff)
+    tools.add(gitLabCliToolIds.publishReviewNote)
+  }
+
+  return emptyResources(['gitlab-context'], [...skills], [...tools])
+}
+
+function emptyResources(
+  enabledGroups: string[],
+  skills: string[] = [],
+  registeredTools: string[] = [],
+): PlatformResourceContribution {
   return {
     builtinTools: {
       enabledGroups,
+    },
+    registeredTools: {
+      tools: registeredTools,
+      lifecycle: 'session',
+      mergeMode: 'additive-only',
     },
     mcp: {
       servers: [],
@@ -1162,11 +1318,151 @@ function emptyResources(enabledGroups: string[]): PlatformResourceContribution {
       mergeMode: 'additive-only',
     },
     skills: {
-      skills: [],
+      skills,
       lifecycle: 'session',
       mergeMode: 'additive-only',
     },
   }
+}
+
+function effectiveGitLabHostPolicy(settingsInput: unknown): GitLabHostPolicy {
+  const settings = normalizeGitLabReviewSettings(settingsInput)
+  if (settings.configurationErrors.includes('allowed_hosts_invalid')) {
+    return { allowedHosts: [], allowedHostsInvalid: true }
+  }
+  if (settings.allowedHosts.length > 0) {
+    return { allowedHosts: settings.allowedHosts }
+  }
+
+  const baseUrl = settings.baseUrl
+  if (baseUrl) {
+    try {
+      const url = new URL(baseUrl)
+      if (
+        (url.protocol === 'http:' || url.protocol === 'https:')
+        && !url.username
+        && !url.password
+        && url.hostname
+      ) {
+        return { allowedHosts: [url.host.toLowerCase()] }
+      }
+    } catch {
+      // Invalid base URLs use the public GitLab default until review validation reports the field error.
+    }
+  }
+  return { allowedHosts: ['gitlab.com'] }
+}
+
+function applyGitLabHostPolicyToCliTargetResolution(
+  tools: AnyPlatformToolDefinition[],
+  hostPolicy: GitLabHostPolicy,
+) {
+  return tools.map((tool) => {
+    if (tool.id !== gitLabCliToolIds.resolveTarget) return tool
+    return {
+      ...tool,
+      parse(input: unknown) {
+        return withGitLabCliResolutionPage(tool.parse(input), hostPolicy)
+      },
+    }
+  })
+}
+
+function withGitLabCliResolutionPage(input: unknown, hostPolicy: GitLabHostPolicy) {
+  const record = asRecord(input)
+  if (!record) return input
+
+  const explicitUrl = stringValue(record.url)
+  if (explicitUrl) {
+    const parsed = parseGitLabCliTargetUrl(explicitUrl)
+    return parsed ? gitLabCliResolutionInputWithPage(record, explicitUrl, parsed) : input
+  }
+
+  const page = asRecord(record.page)
+  const pageUrl = stringValue(page?.url)
+  if (pageUrl) {
+    const parsed = parseGitLabCliTargetUrl(pageUrl)
+    if (parsed) return gitLabCliResolutionInputWithPage(record, pageUrl, parsed)
+  }
+  const rawGitLab = asRecord(asRecord(page?.raw)?.gitlab)
+  if (stringValue(rawGitLab?.projectPath)) return input
+
+  const text = stringValue(record.text)
+  for (const url of gitLabUrlsFromText(text)) {
+    const parsed = parseGitLabUrl(url, hostPolicy)
+    if (parsed) return gitLabCliResolutionInputWithPage(record, url, parsed)
+    if (parseGitLabUrl(url)) return input
+  }
+
+  if (hostPolicy.allowedHostsInvalid || hostPolicy.allowedHosts.length !== 1 || !text) return input
+  const shorthand = text.match(/(?<![\w.-])((?:[\w.-]+\/)+[\w.-]+)!(\d+)\b/)
+  const projectPath = shorthand?.[1]
+  const iid = shorthand?.[2]
+  if (!projectPath || !iid) return input
+  const url = `https://${hostPolicy.allowedHosts[0]}/${projectPath}/-/merge_requests/${iid}`
+  const parsed = parseGitLabUrl(url, hostPolicy)
+  return parsed ? gitLabCliResolutionInputWithPage(record, url, parsed) : input
+}
+
+function parseGitLabCliTargetUrl(input: string) {
+  try {
+    const url = new URL(input)
+    return parseGitLabUrl(input, { allowedHosts: [url.host] })
+  } catch {
+    return undefined
+  }
+}
+
+function gitLabCliResolutionInputWithPage(
+  record: Record<string, unknown>,
+  url: string,
+  parsed: NonNullable<ReturnType<typeof parseGitLabUrl>>,
+) {
+  return {
+    ...record,
+    url: undefined,
+    page: {
+      platform: 'gitlab',
+      url,
+      title: 'GitLab target',
+      pageType: parsed.pageType,
+      objectKey: parsed.objectKey,
+      raw: {
+        gitlab: {
+          host: parsed.host,
+          projectPath: parsed.projectPath,
+          route: parsed.route,
+          iid: parsed.iid,
+          sha: parsed.sha,
+        },
+      },
+    },
+  }
+}
+
+function gitLabUrlsFromText(input?: string) {
+  if (!input) return []
+  const matches = input.match(/https?:\/\/[^\s<>"'`，。；、]+/g) ?? []
+  return matches.map((url) => url.replace(/[),.;]+$/, ''))
+}
+
+let cliStatusCache: { status: GitLabCliStatus; expiresAt: number } | undefined
+let cliStatusPending: Promise<GitLabCliStatus> | undefined
+
+async function cachedGitLabCliStatus() {
+  const now = Date.now()
+  if (cliStatusCache && cliStatusCache.expiresAt > now) return cliStatusCache.status
+  if (cliStatusPending) return await cliStatusPending
+
+  cliStatusPending = getGitLabCliStatus({ timeoutMs: 3_000 })
+    .then((status) => {
+      cliStatusCache = { status, expiresAt: Date.now() + 10_000 }
+      return status
+    })
+    .finally(() => {
+      cliStatusPending = undefined
+    })
+  return await cliStatusPending
 }
 
 function pageKeyFor(page: PageContextPayload) {

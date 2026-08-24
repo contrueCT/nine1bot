@@ -1,4 +1,5 @@
 import type { AggregatedReviewFinding, ReviewFinding } from './types'
+import { assertGitLabReviewAggregateBodyBudget } from './publication-budget'
 
 const severityRank = {
   info: 0,
@@ -12,6 +13,7 @@ export function aggregateReviewFindings(findings: ReviewFinding[]): AggregatedRe
   const grouped = new Map<string, AggregatedReviewFinding>()
 
   for (const finding of findings) {
+    assertGitLabReviewAggregateBodyBudget(finding.body)
     const key = findingKey(finding)
     const existing = grouped.get(key)
     if (!existing) {
@@ -31,6 +33,7 @@ export function aggregateReviewFindings(findings: ReviewFinding[]): AggregatedRe
       existing.severity = finding.severity
     }
     existing.body = mergeBody(existing.body, finding.body)
+    assertGitLabReviewAggregateBodyBudget(existing.body)
   }
 
   return [...grouped.values()]

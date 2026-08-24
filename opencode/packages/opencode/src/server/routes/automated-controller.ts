@@ -1,8 +1,9 @@
 import { Bus } from "@/bus"
-import type { PermissionNext } from "@/permission/next"
+import { PermissionNext } from "@/permission/next"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { Instance } from "@/project/instance"
 import type { RuntimeControllerProtocol } from "@/runtime/controller/protocol"
+import { SessionPrompt } from "@/session/prompt"
 import {
   answerInteraction,
   createControllerSession,
@@ -34,6 +35,11 @@ export type AutomatedRuntimeOutput = {
   text?: string
 }
 
+export type AutomatedRunMonitor = {
+  finish(status: AutomatedRunStatus, error?: string): Promise<void>
+  dispose(): void
+}
+
 export type AutomatedControllerInput = {
   title: string
   directory: string
@@ -43,9 +49,11 @@ export type AutomatedControllerInput = {
   clientCapabilities: RuntimeControllerProtocol.ClientCapabilities
   parts: RuntimeControllerProtocol.MessageSendRequest["parts"]
   context?: RuntimeControllerProtocol.MessageSendRequest["context"]
+  tools?: RuntimeControllerProtocol.MessageSendRequest["tools"]
   interactionPolicy: AutomatedInteractionPolicy
   timeoutMs: number
   timeoutMessage?: string
+  onSessionCreated?: (response: { sessionID: string }) => Promise<void>
   onControllerResponse?: (response: AutomatedControllerResponse) => Promise<void>
   onRuntimeOutput?: (output: AutomatedRuntimeOutput) => Promise<void>
   onFinished?: (result: { status: AutomatedRunStatus; error?: string }) => Promise<void>
@@ -59,24 +67,62 @@ export type AutomatedControllerInput = {
 
 export type AutomatedControllerRunner = typeof runAutomatedControllerSession
 
+export async function createAndSendAutomatedControllerTurn<
+  TSession extends { sessionId: string },
+  TMessage,
+>(input: {
+  createSession: () => Promise<TSession>
+  onSessionCreated?: (response: { sessionID: string }) => Promise<void>
+  startMonitor?: (sessionID: string) => AutomatedRunMonitor
+  sendMessage: (sessionID: string) => Promise<TMessage>
+}) {
+  const sessionResponse = await input.createSession()
+  await input.onSessionCreated?.({ sessionID: sessionResponse.sessionId })
+  const monitor = input.startMonitor?.(sessionResponse.sessionId)
+  try {
+    const messageResponse = await input.sendMessage(sessionResponse.sessionId)
+    return { sessionResponse, messageResponse }
+  } catch (error) {
+    await monitor?.finish("failed", formatSessionError(error))
+    throw error
+  }
+}
+
 export async function runAutomatedControllerSession(input: AutomatedControllerInput): Promise<AutomatedControllerResponse> {
   return Instance.provide({
     directory: input.directory,
     init: InstanceBootstrap,
     async fn() {
-      const sessionResponse = await createControllerSession({
-        directory: input.directory,
-        title: input.title,
-        permission: input.permission,
-        sessionChoice: input.sessionChoice,
-        entry: input.entry,
-        clientCapabilities: input.clientCapabilities,
-      })
-      const messageResponse = await sendControllerMessage(sessionResponse.sessionId, {
-        parts: input.parts,
-        context: input.context,
-        entry: input.entry,
-        clientCapabilities: input.clientCapabilities,
+      let monitor: AutomatedRunMonitor | undefined
+      const { sessionResponse, messageResponse } = await createAndSendAutomatedControllerTurn({
+        createSession: async () => await createControllerSession({
+          directory: input.directory,
+          title: input.title,
+          permission: input.permission,
+          sessionChoice: input.sessionChoice,
+          entry: input.entry,
+          clientCapabilities: input.clientCapabilities,
+        }),
+        onSessionCreated: input.onSessionCreated,
+        startMonitor(sessionID) {
+          monitor = startAutomatedRunMonitor({
+            sessionID,
+            timeoutMs: input.timeoutMs,
+            timeoutMessage: input.timeoutMessage,
+            interactionPolicy: input.interactionPolicy,
+            onRuntimeOutput: input.onRuntimeOutput,
+            onFinished: input.onFinished,
+            onInteraction: input.onInteraction,
+          })
+          return monitor
+        },
+        sendMessage: async (sessionID) => await sendControllerMessage(sessionID, {
+          parts: input.parts,
+          context: input.context,
+          tools: input.tools,
+          entry: input.entry,
+          clientCapabilities: input.clientCapabilities,
+        }),
       })
       const response = {
         accepted: messageResponse.response.accepted,
@@ -89,22 +135,9 @@ export async function runAutomatedControllerSession(input: AutomatedControllerIn
       await input.onControllerResponse?.(response)
 
       if (!response.accepted) {
-        await input.onFinished?.({
-          status: "failed",
-          error: "controller_message_not_accepted",
-        })
+        await monitor?.finish("failed", "controller_message_not_accepted")
         return response
       }
-
-      startAutomatedRunMonitor({
-        sessionID: sessionResponse.sessionId,
-        timeoutMs: input.timeoutMs,
-        timeoutMessage: input.timeoutMessage,
-        interactionPolicy: input.interactionPolicy,
-        onRuntimeOutput: input.onRuntimeOutput,
-        onFinished: input.onFinished,
-        onInteraction: input.onInteraction,
-      })
 
       return response
     },
@@ -116,19 +149,38 @@ export function startAutomatedRunMonitor(input: {
   timeoutMs: number
   timeoutMessage?: string
   interactionPolicy: AutomatedInteractionPolicy
+  cancelSession?: (sessionID: string) => unknown
   onFinished?: (result: { status: AutomatedRunStatus; error?: string }) => Promise<void>
   onRuntimeOutput?: AutomatedControllerInput["onRuntimeOutput"]
   onInteraction?: AutomatedControllerInput["onInteraction"]
-}) {
+}): AutomatedRunMonitor {
   let finished = false
   let unsubscribe: (() => void) | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined
 
-  const finish = async (status: AutomatedRunStatus, error?: string) => {
+  const dispose = () => {
+    if (timeout) clearTimeout(timeout)
+    timeout = undefined
+    unsubscribe?.()
+    unsubscribe = undefined
+  }
+
+  const finish = async (
+    status: AutomatedRunStatus,
+    error?: string,
+    options?: { cancelSession?: boolean },
+  ) => {
     if (finished) return
     finished = true
-    if (timeout) clearTimeout(timeout)
-    unsubscribe?.()
+    dispose()
+    if (options?.cancelSession) {
+      const cancelSession = input.cancelSession ?? SessionPrompt.cancel
+      try {
+        cancelSession(input.sessionID)
+      } catch {
+        // The terminal callback must still run when cancellation cleanup fails.
+      }
+    }
     await input.onFinished?.({ status, error }).catch(() => undefined)
   }
 
@@ -139,11 +191,13 @@ export function startAutomatedRunMonitor(input: {
     if (eventSessionID !== input.sessionID) return
 
     if (event.type === "permission.asked") {
+      const permission = String(properties?.permission || "unknown")
       const allow = input.interactionPolicy.permission === "allow-session"
+        && !PermissionNext.isSecurityCritical(permission)
       const action = allow ? "allow-session" : "deny"
       const error = allow
         ? undefined
-        : `Permission request denied automatically: ${String(properties?.permission || "unknown")}`
+        : `Permission request denied automatically: ${permission}`
       await answerInteraction(String(properties?.id || ""), {
         kind: "permission",
         answer: action,
@@ -206,15 +260,20 @@ export function startAutomatedRunMonitor(input: {
   })
 
   timeout = setTimeout(() => {
-    finish("failed", input.timeoutMessage ?? "Automated run monitor timed out.").catch(() => undefined)
+    finish(
+      "failed",
+      input.timeoutMessage ?? "Automated run monitor timed out.",
+      { cancelSession: true },
+    ).catch(() => undefined)
   }, input.timeoutMs)
   timeout.unref?.()
 
   return {
-    stop() {
-      if (timeout) clearTimeout(timeout)
-      unsubscribe?.()
+    finish,
+    dispose() {
+      if (finished) return
       finished = true
+      dispose()
     },
   }
 }

@@ -3,9 +3,7 @@ name: platform.gitlab.security-agent
 description: GitLab review subagent for authentication, authorization, secret handling, webhook trust, command execution, and data exposure risks.
 mode: subagent
 permission:
-  edit: deny
-  bash: deny
-  task: deny
+  "*": deny
 ---
 
 # GitLab Review Security Agent

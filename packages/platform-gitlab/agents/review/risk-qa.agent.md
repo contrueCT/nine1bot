@@ -3,9 +3,7 @@ name: platform.gitlab.risk-qa
 description: GitLab review subagent for correctness, regression risk, test coverage, and verification gaps.
 mode: subagent
 permission:
-  edit: deny
-  bash: deny
-  task: deny
+  "*": deny
 ---
 
 # GitLab Review Risk QA

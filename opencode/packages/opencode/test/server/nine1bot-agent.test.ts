@@ -10,7 +10,12 @@ import { RuntimeContextEvents } from "../../src/runtime/context/events"
 import { RuntimePlatformAdapterRegistry } from "../../src/runtime/platform/adapter"
 import { RuntimeResourceResolver } from "../../src/runtime/resource/resolver"
 import { RuntimeToolRegistry } from "../../src/runtime/tool/registry"
+import { RuntimeSourceRegistry } from "../../src/runtime/source/registry"
 import { Log } from "../../src/util/log"
+import {
+  registerBuiltinPlatformAdapters,
+  resetBuiltinPlatformManagerForTesting,
+} from "../../../../../packages/nine1bot/src/platform/builtin"
 
 const projectRoot = path.join(__dirname, "../..")
 const jsonHeaders = {
@@ -41,8 +46,10 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  resetBuiltinPlatformManagerForTesting()
   RuntimePlatformAdapterRegistry.clearForTesting()
   RuntimeToolRegistry.clearForTesting()
+  RuntimeSourceRegistry.clearForTesting()
   await Instance.disposeAll().catch(() => undefined)
   restoreEnv(envSnapshot)
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
@@ -230,6 +237,77 @@ describe("nine1bot controller api", () => {
       },
     })
   })
+
+  test("creates a trusted GitLab review runtime profile through the real controller path", async () => {
+    registerBuiltinPlatformAdapters({
+      config: {
+        gitlab: { enabled: true },
+        feishu: { enabled: false },
+      },
+    })
+
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const created = await Server.App().request("/nine1bot/agent/sessions", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            title: "GitLab review runtime",
+            debug: { profileSnapshot: true },
+            sessionChoice: {
+              agent: "platform.gitlab.pm-coordinator",
+              resources: {
+                skills: {
+                  skills: [
+                    "platform.gitlab.gitlab-mr-review-workflow",
+                    "platform.gitlab.gitlab-review-security-policy",
+                  ],
+                },
+              },
+            },
+            entry: {
+              source: "webhook",
+              platform: "gitlab",
+              mode: "gitlab-code-review",
+              templateIds: ["browser-gitlab", "gitlab-mr"],
+            },
+            clientCapabilities: {
+              interactions: false,
+              permissionRequests: false,
+              questionRequests: false,
+            },
+          }),
+        })
+
+        expect(created.status).toBe(200)
+        const body = (await created.json()) as {
+          sessionId: string
+          agent?: string
+          profileSnapshot?: {
+            sourceTemplateIds: string[]
+            agent: { name: string; source: string }
+            resources: {
+              builtinTools: { enabledGroups?: string[] }
+            }
+          }
+        }
+        expect(body.agent).toBe("platform.gitlab.pm-coordinator")
+        expect(body.profileSnapshot?.agent).toEqual({
+          name: "platform.gitlab.pm-coordinator",
+          source: "internal-runtime",
+        })
+        expect(body.profileSnapshot?.sourceTemplateIds).toEqual(expect.arrayContaining([
+          "browser-gitlab",
+          "gitlab-mr",
+          RuntimeResourceResolver.resourceTemplateId(),
+        ]))
+        expect(body.profileSnapshot?.resources.builtinTools.enabledGroups).toContain("gitlab-context")
+
+        await Session.remove(body.sessionId)
+      },
+    })
+  }, 30_000)
 
   test("freezes the platform-recommended agent used for resource conditions into the session profile", async () => {
     await Instance.provide({

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { GITLAB_REVIEW_PROJECT_CONTEXT_MAX_LENGTH } from '@nine1bot/platform-gitlab/review/limits'
 import { CheckCircle2, CircleAlert, CircleSlash, Copy, Play, RefreshCw, Save, Trash2 } from 'lucide-vue-next'
 import { gitLabReviewApi, platformApi, webhookApi, type GitLabReviewRun, type WebhookStatus } from '../api/client'
 import type {
@@ -8,9 +9,37 @@ import type {
   PlatformDetail,
   PlatformSummary,
   PlatformActionResult,
+  Nine1BotProjectOption,
   Provider,
 } from '../api/client'
 import { copyText } from '../utils/clipboard'
+import {
+  createGitLabProjectProfile,
+  gitLabProjectIdentityKey,
+  optionalGitLabProfileNumber as optionalProfileNumber,
+  positiveGitLabProfileNumber as positiveProfileNumber,
+  validateGitLabProjectBindings,
+  type GitLabProjectProfile,
+  type GitLabProjectRef,
+} from '../lib/gitlab-project-profiles'
+import {
+  appendGitLabProjectProfileDocument,
+  gitLabProjectProfileDiagnosticKey,
+  gitLabProjectProfileDiagnosticLabel,
+  parseGitLabProjectProfileDocument,
+  removeGitLabProjectProfileDocument,
+  renderGitLabProjectProfileDocument,
+  serializeGitLabProjectProfileDocument,
+  updateGitLabProjectProfileDocument,
+  validateGitLabProjectProfileDocument,
+} from '../lib/gitlab-project-profile-document'
+import {
+  canRetryGitLabReviewRun as canRetryGitLabReviewRunPolicy,
+  isIgnoredGitLabReviewRun,
+  isOperationalGitLabReviewRun,
+  reviewRunStatusLabel,
+} from '../lib/gitlab-review-runs'
+import { gitLabCliGuide } from '../lib/gitlab-cli-guide'
 
 const props = defineProps<{
   platforms: PlatformSummary[]
@@ -22,6 +51,7 @@ const props = defineProps<{
   error: string
   actionResult: PlatformActionResult | null
   providers: Provider[]
+  projects: Nine1BotProjectOption[]
 }>()
 
 const emit = defineEmits<{
@@ -81,8 +111,8 @@ const configFormSections = computed(() => {
     },
     {
       id: 'gitlab-page-context',
-      title: '页面上下文',
-      description: '控制浏览器插件采集 GitLab 页面上下文时允许的实例和补充信息。',
+      title: '页面与 CLI 访问',
+      description: '控制浏览器插件页面上下文和 CLI wrapper 允许访问的 GitLab 实例。',
       keys: ['allowedHosts', 'apiEnrichment'],
     },
   ].map((group) => {
@@ -121,8 +151,8 @@ const gitLabMvpFields = computed(() => [
 const operationLocked = computed(() => props.saving || Boolean(props.actionRunning))
 const healthRefreshing = computed(() => props.actionRunning === 'health')
 const isGitLabPlatform = computed(() => props.selectedPlatform?.id === 'gitlab')
-const visibleGitLabRuns = computed(() => gitLabReviewRuns.value.filter((run) => run.status !== 'rejected').slice(0, 8))
-const visibleGitLabIgnoredEvents = computed(() => gitLabReviewRuns.value.filter((run) => run.status === 'rejected').slice(0, 8))
+const visibleGitLabRuns = computed(() => gitLabReviewRuns.value.filter(isOperationalGitLabReviewRun).slice(0, 8))
+const visibleGitLabIgnoredEvents = computed(() => gitLabReviewRuns.value.filter(isIgnoredGitLabReviewRun).slice(0, 8))
 const gitLabWebhookPath = '/webhooks/gitlab/{webhookSecret}'
 const gitLabWebhookSecretFieldKey = 'review.webhookSecretRef'
 const gitLabReviewModelProviderFieldKey = 'review.modelProviderId'
@@ -140,11 +170,7 @@ const gitLabIncludedProjectsFieldKey = 'review.includedProjects'
 const gitLabExcludedProjectsFieldKey = 'review.excludedProjects'
 const gitLabScopeModeFieldKey = 'review.scopeMode'
 const gitLabHookGroupsFieldKey = 'review.hookGroups'
-type GitLabProjectRef = {
-  id: string | number
-  pathWithNamespace?: string
-  webUrl?: string
-}
+const gitLabProjectProfilesFieldKey = 'review.projects'
 type GitLabGroupRef = {
   id: string | number
   fullPath?: string
@@ -156,6 +182,29 @@ const authenticatedModelCount = computed(() => {
 const gitLabIncludedProjects = computed(() => parseGitLabProjectRefs(textValue(gitLabIncludedProjectsFieldKey)))
 const gitLabExcludedProjects = computed(() => parseGitLabProjectRefs(textValue(gitLabExcludedProjectsFieldKey)))
 const gitLabHookGroups = computed(() => parseGitLabGroupRefs(textValue(gitLabHookGroupsFieldKey)))
+const gitLabProjectProfileDocument = computed(() => parseGitLabProjectProfileDocument(textValue(gitLabProjectProfilesFieldKey)))
+const gitLabProjectProfileDiagnostics = computed(() => validateGitLabProjectProfileDocument(gitLabProjectProfileDocument.value))
+const gitLabProjectProfiles = computed(() => gitLabProjectProfileDocument.value.editable.map((entry) => entry.profile))
+const gitLabProjectProfileFormError = computed(() => gitLabProjectProfilesValidationError())
+const gitLabDeactivationSave = computed(() => {
+  const platform = props.selectedPlatform
+  if (!isGitLabPlatform.value || !platform) return false
+  const disablesPlatform = platform.enabled && !enabledDraft.value
+  const disablesReview = platform.settings['review.enabled'] === true && formValues['review.enabled'] === false
+  return disablesPlatform || disablesReview
+})
+const gitLabProfileValidationRequired = computed(() => isGitLabPlatform.value && !gitLabDeactivationSave.value)
+const gitLabProfileSaveBlocked = computed(() => (
+  gitLabProfileValidationRequired.value && Boolean(gitLabProjectProfileFormError.value)
+))
+const gitLabSaveError = computed(() => {
+  if (!isGitLabPlatform.value) return ''
+  const fieldError = Object.entries(jsonErrors).find(([key]) => (
+    key !== gitLabProjectProfilesFieldKey || gitLabProfileValidationRequired.value
+  ))?.[1]
+  if (fieldError) return fieldError
+  return gitLabProfileValidationRequired.value ? gitLabProjectProfileFormError.value : ''
+})
 const gitLabScopeMode = computed(() => textValue(gitLabScopeModeFieldKey) || 'all-received')
 const gitLabRuntimeWebhookUrl = computed(() => {
   const actionWebhookUrl = props.actionResult?.data?.webhookUrl
@@ -169,6 +218,9 @@ const gitLabReviewWebhookUrl = computed(() => {
   const secret = textValue(gitLabWebhookSecretFieldKey).trim() || '{webhookSecret}'
   return `${baseUrl}/webhooks/gitlab/${encodeURIComponent(secret)}`
 })
+const gitLabCliGuideState = computed(() => gitLabCliGuide(
+  props.selectedPlatform?.runtimeStatus.cards?.find((card) => card.id === 'cli'),
+))
 
 watch(
   () => props.selectedPlatform,
@@ -262,18 +314,6 @@ function runtimeToolStatusClass(status: string) {
   if (status === 'registered') return statusClass('available')
   if (status === 'disabled') return statusClass('disabled')
   return statusClass('error')
-}
-
-function runStatusLabel(status: string) {
-  const labels: Record<string, string> = {
-    accepted: '已接受',
-    rejected: '已忽略',
-    blocked: '已拦截',
-    running: '运行中',
-    succeeded: '成功',
-    failed: '失败',
-  }
-  return labels[status] || status
 }
 
 function eventLevelLabel(level: string) {
@@ -397,11 +437,15 @@ function isGitLabProjectScopeJsonField(field: PlatformConfigField) {
   )
 }
 
+function isGitLabProjectProfilesJsonField(field: PlatformConfigField) {
+  return isGitLabPlatform.value && field.key === gitLabProjectProfilesFieldKey
+}
+
 function shouldShowGitLabGenericField(field: PlatformConfigField) {
   if (!isGitLabPlatform.value) return true
   if (!gitLabAdvancedConfig.value) return false
   if (gitLabMvpFieldKeys.has(field.key)) return false
-  return !isGitLabReviewModelProviderField(field) && !isGitLabProjectScopeJsonField(field)
+  return !isGitLabReviewModelProviderField(field) && !isGitLabProjectScopeJsonField(field) && !isGitLabProjectProfilesJsonField(field)
 }
 
 function gitLabMvpFieldClass(field: PlatformConfigField) {
@@ -480,6 +524,59 @@ function parseGitLabProjectRefs(input: string): GitLabProjectRef[] {
 
 function setGitLabProjectRefs(key: string, projects: GitLabProjectRef[]) {
   formValues[key] = JSON.stringify(projects, null, 2)
+}
+
+function setGitLabProjectProfileDocument(document: ReturnType<typeof parseGitLabProjectProfileDocument>) {
+  formValues[gitLabProjectProfilesFieldKey] = renderGitLabProjectProfileDocument(document)
+}
+
+function addGitLabProjectProfile(project: GitLabProjectRef) {
+  const document = gitLabProjectProfileDocument.value
+  const profiles = document.editable.map((entry) => entry.profile)
+  const profile = createGitLabProjectProfile(project, textValue('review.baseUrl'))
+  const identity = gitLabProjectIdentityKey(profile.host, profile.projectId)
+  if (profiles.some((candidate) => gitLabProjectIdentityKey(candidate.host, candidate.projectId) === identity)) return
+  setGitLabProjectProfileDocument(appendGitLabProjectProfileDocument(document, profile))
+}
+
+function updateGitLabProjectProfile(profile: GitLabProjectProfile, patch: Partial<GitLabProjectProfile>) {
+  const document = gitLabProjectProfileDocument.value
+  const entry = document.editable.find((candidate) => candidate.profile === profile)
+  if (!entry) return
+  setGitLabProjectProfileDocument(updateGitLabProjectProfileDocument(document, entry.index, {
+    ...profile,
+    ...patch,
+    ci: { ...profile.ci, ...patch.ci },
+  }))
+}
+
+function removeGitLabProjectProfile(profile: GitLabProjectProfile) {
+  const document = gitLabProjectProfileDocument.value
+  const entry = document.editable.find((candidate) => candidate.profile === profile)
+  if (!entry) return
+  setGitLabProjectProfileDocument(removeGitLabProjectProfileDocument(document, entry.index))
+}
+
+function hasNine1BotProject(projectID: string) {
+  return props.projects.some((project) => project.id === projectID)
+}
+
+function nine1botProjectLabel(project: Nine1BotProjectOption) {
+  return project.name || project.rootDirectory || project.worktree || project.id
+}
+
+function gitLabProfileBindingError(profile: GitLabProjectProfile) {
+  if (!profile.nine1botProjectID) return '请选择一个 Nine1Bot 项目。'
+  if (!hasNine1BotProject(profile.nine1botProjectID)) return '绑定的 Nine1Bot 项目已不存在，请重新选择。'
+  return ''
+}
+
+function profileLines(value: string[]) {
+  return value.join('\n')
+}
+
+function parseProfileLines(value: string) {
+  return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
 }
 
 function parseGitLabGroupRefs(input: string): GitLabGroupRef[] {
@@ -693,6 +790,9 @@ function buildSettingsPatch() {
   for (const key of Object.keys(jsonErrors)) delete jsonErrors[key]
 
   for (const field of configFields.value) {
+    if (isGitLabPlatform.value && gitLabDeactivationSave.value && field.key === gitLabProjectProfilesFieldKey) {
+      continue
+    }
     const parsed = parseField(field)
     if (parsed.error) {
       jsonErrors[field.key] = parsed.error
@@ -701,7 +801,33 @@ function buildSettingsPatch() {
     if (parsed.include) settings[field.key] = parsed.value
   }
 
+  if (
+    isGitLabPlatform.value
+    && gitLabProfileValidationRequired.value
+    && !jsonErrors[gitLabProjectProfilesFieldKey]
+  ) {
+    const serialized = serializeGitLabProjectProfileDocument(gitLabProjectProfileDocument.value)
+    if (!serialized.ok) {
+      jsonErrors[gitLabProjectProfilesFieldKey] = gitLabProjectProfileDiagnosticLabel(serialized.diagnostics[0])
+    } else {
+      settings[gitLabProjectProfilesFieldKey] = JSON.parse(serialized.value)
+      const profileError = gitLabProjectProfilesValidationError()
+      if (profileError) jsonErrors[gitLabProjectProfilesFieldKey] = profileError
+    }
+  }
+
   return Object.keys(jsonErrors).length > 0 ? undefined : settings
+}
+
+function gitLabProjectProfilesValidationError() {
+  const diagnostic = gitLabProjectProfileDiagnostics.value[0]
+  if (diagnostic) return gitLabProjectProfileDiagnosticLabel(diagnostic)
+  const bindingError = validateGitLabProjectBindings(gitLabProjectProfiles.value, props.projects)
+  if (bindingError) return bindingError
+  if (Boolean(formValues['review.enabled']) && !gitLabProjectProfiles.value.some((profile) => profile.enabled)) {
+    return '启用 GitLab Review 时，至少需要一个已启用并完成绑定的项目档案。'
+  }
+  return ''
 }
 
 function saveSettings() {
@@ -744,7 +870,7 @@ async function loadGitLabReviewRuns() {
 }
 
 function canRetryGitLabRun(run: GitLabReviewRun) {
-  return run.status === 'failed' && !run.publishedAt
+  return canRetryGitLabReviewRunPolicy(run, gitLabReviewRuns.value)
 }
 
 async function retryGitLabReviewRun(run: GitLabReviewRun) {
@@ -777,6 +903,8 @@ function reviewRunObject(run: GitLabReviewRun) {
 
 function reviewRunDetail(run: GitLabReviewRun) {
   const parts = [
+    `尝试 ${run.attempt}`,
+    run.retryOf ? `重试自 ${run.retryOf}` : '',
     run.sessionId ? `会话 ${run.sessionId}` : '',
     run.turnSnapshotId ? `轮次 ${run.turnSnapshotId}` : '',
     run.retryCount ? `重试 ${run.retryCount} 次` : '',
@@ -969,6 +1097,11 @@ function actionResultDetails(result: PlatformActionResult) {
               <strong>最小运行路径</strong>
               <span>填 GitLab base URL 和 API token，复制下方 webhook URL 到 GitLab Project/Group Hook，只勾选 Comments / Note events，然后在 MR 评论 `@Nine1bot review`。</span>
             </div>
+            <div class="gitlab-mvp-callout" :class="`tone-${gitLabCliGuideState.tone}`">
+              <strong>{{ gitLabCliGuideState.title }}</strong>
+              <span>{{ gitLabCliGuideState.text }}</span>
+              <span>CLI 交互使用受控 wrapper tools，不要求开启 webhook Review，也不会向模型暴露 token 或任意 CLI 命令。</span>
+            </div>
             <div class="gitlab-webhook-url-box">
               <span class="gitlab-guide-label">专用 Webhook URL</span>
               <code class="gitlab-webhook-url">{{ gitLabReviewWebhookUrl }}</code>
@@ -1077,10 +1210,13 @@ function actionResultDetails(result: PlatformActionResult) {
                 </label>
               </div>
               <div class="gitlab-webhook-actions">
-                <button class="btn btn-primary btn-sm" type="submit" :disabled="operationLocked">
+                <button class="btn btn-primary btn-sm" type="submit" :disabled="operationLocked || gitLabProfileSaveBlocked">
                   <Save :size="13" />
                   <span>{{ saving ? '保存中' : '保存 MVP 配置' }}</span>
                 </button>
+                <span v-if="gitLabSaveError" class="platform-field-error gitlab-save-error" role="alert">
+                  {{ gitLabSaveError }}
+                </span>
                 <button type="button" class="btn btn-ghost btn-sm" :disabled="operationLocked" @click="runGitLabAction('connection.test')">
                   <Play :size="13" />
                   <span>{{ actionRunning === 'connection.test' ? '测试中' : '测试 API token' }}</span>
@@ -1152,6 +1288,9 @@ function actionResultDetails(result: PlatformActionResult) {
                     <span class="text-muted text-sm">ID {{ project.id }}</span>
                   </div>
                   <div class="gitlab-project-actions">
+                    <button type="button" class="btn btn-ghost btn-sm" @click="addGitLabProjectProfile(project)">
+                      添加档案
+                    </button>
                     <button type="button" class="btn btn-ghost btn-sm" @click="addGitLabProject(gitLabIncludedProjectsFieldKey, project)">
                       加入包含
                     </button>
@@ -1195,6 +1334,195 @@ function actionResultDetails(result: PlatformActionResult) {
                   <span v-else class="text-muted text-sm">没有排除项目</span>
                 </div>
               </div>
+            </div>
+            <div v-if="gitLabAdvancedConfig" class="gitlab-scope-picker">
+              <div class="platform-section-heading-row">
+                <h5 class="platform-section-title">项目审查档案</h5>
+                <span class="gitlab-guide-text">每个可审查仓库都必须建档并绑定已有的 Nine1Bot 项目；档案只补充 review 策略。</span>
+              </div>
+              <div v-if="props.projects.length === 0" class="platform-alert warning">
+                当前没有可绑定的 Nine1Bot 项目，请先在项目页添加仓库。
+              </div>
+              <div v-if="jsonErrors[gitLabProjectProfilesFieldKey]" class="platform-alert error">
+                {{ jsonErrors[gitLabProjectProfilesFieldKey] }}
+              </div>
+              <div v-if="gitLabProjectProfileFormError && !gitLabProjectProfileDiagnostics.length" class="platform-alert error">
+                {{ gitLabProjectProfileFormError }}
+              </div>
+              <div v-if="gitLabProjectProfileDiagnostics.length" class="platform-alert error">
+                <div
+                  v-for="diagnostic in gitLabProjectProfileDiagnostics"
+                  :key="gitLabProjectProfileDiagnosticKey(diagnostic)"
+                >
+                  {{ gitLabProjectProfileDiagnosticLabel(diagnostic) }}
+                </div>
+              </div>
+              <label v-if="gitLabProjectProfileDiagnostics.length" class="platform-field">
+                <span class="platform-field-label">项目档案原始 JSON</span>
+                <textarea
+                  :value="textValue(gitLabProjectProfilesFieldKey)"
+                  class="input platform-input platform-textarea"
+                  rows="10"
+                  @input="formValues[gitLabProjectProfilesFieldKey] = ($event.target as HTMLTextAreaElement).value"
+                />
+              </label>
+              <div v-if="gitLabProjectProfiles.length" class="gitlab-profile-list">
+                <article v-for="(profile, profileIndex) in gitLabProjectProfiles" :key="`${profile.id}:${profileIndex}`" class="gitlab-profile-card">
+                  <div class="gitlab-profile-heading">
+                    <div>
+                      <strong>{{ profile.displayName || profile.pathWithNamespace || profile.id }}</strong>
+                      <span class="text-muted text-sm">项目 ID {{ profile.projectId }}</span>
+                    </div>
+                    <div class="gitlab-project-actions">
+                      <label class="platform-switch inline">
+                        <input
+                          :checked="profile.enabled"
+                          type="checkbox"
+                          @change="updateGitLabProjectProfile(profile, { enabled: ($event.target as HTMLInputElement).checked })"
+                        />
+                        <span>启用</span>
+                      </label>
+                      <button type="button" class="btn btn-ghost btn-sm" @click="removeGitLabProjectProfile(profile)">
+                        <Trash2 :size="13" />
+                        <span>移除</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="gitlab-profile-grid">
+                    <label class="platform-field">
+                      <span class="platform-field-label">显示名称</span>
+                      <input
+                        :value="profile.displayName || ''"
+                        class="input platform-input"
+                        @input="updateGitLabProjectProfile(profile, { displayName: ($event.target as HTMLInputElement).value || undefined })"
+                      />
+                    </label>
+                    <label class="platform-field">
+                      <span class="platform-field-label">Nine1Bot 项目</span>
+                      <span class="platform-field-desc text-muted text-sm">Review runtime 使用该项目的工作目录和通用项目说明。</span>
+                      <select
+                        :value="profile.nine1botProjectID"
+                        class="input platform-input"
+                        required
+                        @change="updateGitLabProjectProfile(profile, { nine1botProjectID: ($event.target as HTMLSelectElement).value })"
+                      >
+                        <option value="">请选择项目</option>
+                        <option
+                          v-if="profile.nine1botProjectID && !hasNine1BotProject(profile.nine1botProjectID)"
+                          :value="profile.nine1botProjectID"
+                        >
+                          已失效 · {{ profile.nine1botProjectID }}
+                        </option>
+                        <option v-for="project in props.projects" :key="project.id" :value="project.id">
+                          {{ nine1botProjectLabel(project) }}
+                        </option>
+                      </select>
+                      <span v-if="gitLabProfileBindingError(profile)" class="platform-field-error">
+                        {{ gitLabProfileBindingError(profile) }}
+                      </span>
+                    </label>
+                    <label class="platform-field wide">
+                      <span class="platform-field-label">审查关注点</span>
+                      <textarea
+                        :value="profileLines(profile.reviewFocus)"
+                        class="input platform-input platform-textarea"
+                        rows="3"
+                        placeholder="每行一个关注点，例如：鉴权边界"
+                        @input="updateGitLabProjectProfile(profile, { reviewFocus: parseProfileLines(($event.target as HTMLTextAreaElement).value) })"
+                      />
+                    </label>
+                  </div>
+                  <label class="platform-field">
+                    <span class="platform-field-label">Review 补充上下文</span>
+                    <span class="platform-field-desc text-muted text-sm">只补充该仓库的审查约束；通用项目说明在 Nine1Bot 项目页维护。</span>
+                    <textarea
+                      :value="profile.reviewContextMarkdown || ''"
+                      class="input platform-input platform-textarea"
+                      rows="5"
+                      :maxlength="GITLAB_REVIEW_PROJECT_CONTEXT_MAX_LENGTH"
+                      placeholder="例如：UF 的模块边界、关键约束、不可回归的兼容性要求"
+                      @input="updateGitLabProjectProfile(profile, { reviewContextMarkdown: ($event.target as HTMLTextAreaElement).value || undefined })"
+                    />
+                  </label>
+                  <div class="gitlab-profile-grid">
+                    <label class="platform-field">
+                      <span class="platform-field-label">优先审查路径</span>
+                      <span class="platform-field-desc text-muted text-sm">每行一个目录前缀；留空时按普通优先级处理全部文件。</span>
+                      <textarea
+                        :value="profileLines(profile.includePathPrefixes)"
+                        class="input platform-input platform-textarea"
+                        rows="3"
+                        placeholder="src/security/"
+                        @input="updateGitLabProjectProfile(profile, { includePathPrefixes: parseProfileLines(($event.target as HTMLTextAreaElement).value) })"
+                      />
+                    </label>
+                    <label class="platform-field">
+                      <span class="platform-field-label">排除路径</span>
+                      <span class="platform-field-desc text-muted text-sm">每行一个 glob；匹配文件不会进入审查证据。</span>
+                      <textarea
+                        :value="profileLines(profile.excludePathPatterns)"
+                        class="input platform-input platform-textarea"
+                        rows="3"
+                        placeholder="**/*.generated.ts"
+                        @input="updateGitLabProjectProfile(profile, { excludePathPatterns: parseProfileLines(($event.target as HTMLTextAreaElement).value) })"
+                      />
+                    </label>
+                  </div>
+                  <div class="gitlab-profile-limit-grid">
+                    <label class="platform-field">
+                      <span class="platform-field-label">上下文预算（字节）</span>
+                      <input
+                        :value="profile.maxContextBytes ?? ''"
+                        type="number"
+                        min="1"
+                        step="1"
+                        class="input platform-input"
+                        placeholder="使用全局值"
+                        @input="updateGitLabProjectProfile(profile, { maxContextBytes: optionalProfileNumber(Number(($event.target as HTMLInputElement).value)) })"
+                      />
+                    </label>
+                    <label class="platform-field">
+                      <span class="platform-field-label">文件上限</span>
+                      <input
+                        :value="profile.maxFiles ?? ''"
+                        type="number"
+                        min="1"
+                        step="1"
+                        class="input platform-input"
+                        placeholder="使用全局值"
+                        @input="updateGitLabProjectProfile(profile, { maxFiles: optionalProfileNumber(Number(($event.target as HTMLInputElement).value)) })"
+                      />
+                    </label>
+                  </div>
+                  <div class="gitlab-profile-ci">
+                    <div class="gitlab-profile-limit-grid">
+                      <label class="platform-field">
+                        <span class="platform-field-label">单次审查最多读取日志数</span>
+                        <input
+                          :value="profile.ci.maxJobLogs"
+                          type="number"
+                          min="1"
+                          step="1"
+                          class="input platform-input"
+                          @input="updateGitLabProjectProfile(profile, { ci: { ...profile.ci, maxJobLogs: positiveProfileNumber(Number(($event.target as HTMLInputElement).value), 3) } })"
+                        />
+                      </label>
+                      <label class="platform-field">
+                        <span class="platform-field-label">单个任务日志最大字节数</span>
+                        <input
+                          :value="profile.ci.maxJobLogBytes"
+                          type="number"
+                          min="1"
+                          step="1"
+                          class="input platform-input"
+                          @input="updateGitLabProjectProfile(profile, { ci: { ...profile.ci, maxJobLogBytes: positiveProfileNumber(Number(($event.target as HTMLInputElement).value), 8000) } })"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </article>
+              </div>
+              <p v-else class="text-muted text-sm">先从上面的 GitLab 项目搜索结果添加档案，再绑定 Nine1Bot 项目。项目范围控制是否接收，项目档案控制在哪里、如何审查。</p>
             </div>
             <div v-if="gitLabAdvancedConfig" class="gitlab-scope-picker">
               <div class="platform-section-heading-row">
@@ -1324,7 +1652,7 @@ function actionResultDetails(result: PlatformActionResult) {
               </button>
             </div>
             <p class="text-muted text-sm">
-              最近 8 条 review run。这里用于观察触发、运行、发布和失败回写状态；失败且尚未发布的 run 可以重试。
+              最近 8 条 review run。修复项目绑定或 token 配置后，可重试最新的可恢复配置拒绝。
             </p>
             <div v-if="gitLabRunsError" class="platform-alert warning">
               {{ gitLabRunsError }}
@@ -1333,11 +1661,12 @@ function actionResultDetails(result: PlatformActionResult) {
               <div v-for="run in visibleGitLabRuns" :key="run.id" class="gitlab-run-row">
                 <div class="gitlab-run-main">
                   <span class="gitlab-run-title">{{ reviewRunObject(run) }}</span>
+                  <span v-if="run.project" class="gitlab-run-meta">{{ run.project.displayName || run.project.pathWithNamespace || run.project.id }}</span>
                   <span class="gitlab-run-meta">{{ run.id }} · {{ formatRunTime(run.updatedAt) }}</span>
                   <span class="gitlab-run-meta">{{ reviewRunDetail(run) }}</span>
                 </div>
                 <details
-                  v-if="run.error || run.warnings?.length || run.idempotencyKey"
+                  v-if="run.error || run.warnings?.length || run.idempotencyKey || run.ci?.pipeline || run.ci?.diagnostics?.length"
                   class="gitlab-run-details"
                 >
                   <summary>详情</summary>
@@ -1356,6 +1685,19 @@ function actionResultDetails(result: PlatformActionResult) {
                         <li v-for="warning in run.warnings" :key="warning">{{ warning }}</li>
                       </ul>
                     </div>
+                    <div v-if="run.ci?.pipeline" class="gitlab-run-detail-line">
+                      <span>CI pipeline</span>
+                      <a v-if="run.ci.pipeline.web_url" :href="run.ci.pipeline.web_url" target="_blank" rel="noreferrer">
+                        #{{ run.ci.pipeline.id }} · {{ run.ci.pipeline.status || 'unknown' }}
+                      </a>
+                      <code v-else>#{{ run.ci.pipeline.id }} · {{ run.ci.pipeline.status || 'unknown' }}</code>
+                    </div>
+                    <div v-if="run.ci?.diagnostics?.length" class="gitlab-run-detail-line">
+                      <span>CI diagnostics</span>
+                      <ul>
+                        <li v-for="diagnostic in run.ci.diagnostics" :key="diagnostic">{{ diagnostic }}</li>
+                      </ul>
+                    </div>
                   </div>
                 </details>
                 <div class="gitlab-run-side">
@@ -1369,7 +1711,7 @@ function actionResultDetails(result: PlatformActionResult) {
                     <span>{{ retryingGitLabRunIds.has(run.id) ? '重试中' : '重试' }}</span>
                   </button>
                   <span class="platform-status-pill" :class="statusClass(run.status === 'succeeded' ? 'available' : run.status === 'failed' ? 'error' : 'degraded')">
-                    {{ runStatusLabel(run.status) }}
+                    {{ reviewRunStatusLabel(run) }}
                   </span>
                   <span v-if="run.publishedAt" class="gitlab-run-published">已发布</span>
                 </div>
@@ -1502,10 +1844,13 @@ function actionResultDetails(result: PlatformActionResult) {
             </div>
 
             <div class="platform-actions-row">
-              <button class="btn btn-primary btn-sm" type="submit" :disabled="operationLocked">
+              <button class="btn btn-primary btn-sm" type="submit" :disabled="operationLocked || gitLabProfileSaveBlocked">
                 <Save :size="14" />
                 <span>{{ saving ? '保存中' : '保存配置' }}</span>
               </button>
+              <span v-if="gitLabSaveError" class="platform-field-error gitlab-save-error" role="alert">
+                {{ gitLabSaveError }}
+              </span>
             </div>
           </form>
 
@@ -1887,6 +2232,59 @@ function actionResultDetails(result: PlatformActionResult) {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+}
+
+.gitlab-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.gitlab-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-primary);
+}
+
+.gitlab-profile-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.gitlab-profile-heading > div:first-child {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.gitlab-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.gitlab-profile-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.gitlab-profile-ci {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-sm);
+  padding-top: var(--space-xs);
+}
+
+.gitlab-profile-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
 }
 
 .gitlab-project-row {
@@ -2320,8 +2718,15 @@ function actionResultDetails(result: PlatformActionResult) {
   }
 
   .gitlab-guide-grid,
-  .gitlab-hook-mode-grid {
+  .gitlab-hook-mode-grid,
+  .gitlab-profile-grid,
+  .gitlab-profile-limit-grid,
+  .gitlab-selected-project-grid {
     grid-template-columns: 1fr;
+  }
+
+  .gitlab-profile-heading {
+    align-items: flex-start;
   }
 }
 </style>

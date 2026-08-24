@@ -14,6 +14,7 @@ import type {
   PlatformSecretAccess,
   PlatformSecretRef,
 } from '@nine1bot/platform-protocol'
+import { gitLabCliToolIds } from '@nine1bot/platform-gitlab'
 import { RuntimePlatformAdapterRegistry } from '../../../../opencode/packages/opencode/src/runtime/platform/adapter'
 import { RuntimeSourceRegistry } from '../../../../opencode/packages/opencode/src/runtime/source/registry'
 import { RuntimeToolRegistry } from '../../../../opencode/packages/opencode/src/runtime/tool/registry'
@@ -1413,6 +1414,9 @@ describe('PlatformAdapterManager', () => {
     registerBuiltinPlatformAdapters()
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).toContain('gitlab')
+    expect(RuntimeToolRegistry.listOwner('gitlab').tools.map((tool) => tool.id)).toEqual(
+      Object.values(gitLabCliToolIds),
+    )
   })
 
   it('registers built-in Feishu through the manager', () => {
@@ -1456,6 +1460,7 @@ describe('PlatformAdapterManager', () => {
     })
 
     expect(RuntimePlatformAdapterRegistry.list().map((adapter) => adapter.id)).not.toContain('gitlab')
+    expect(RuntimeToolRegistry.listOwner('gitlab').tools).toEqual([])
   })
 
   it('skips built-in Feishu templates when config disables it', () => {

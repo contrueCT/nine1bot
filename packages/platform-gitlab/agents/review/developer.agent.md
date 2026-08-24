@@ -3,9 +3,7 @@ name: platform.gitlab.developer
 description: GitLab review subagent reserved for fix-mode implementation planning; denied by default in normal read-only reviews.
 mode: subagent
 permission:
-  edit: deny
-  bash: deny
-  task: deny
+  "*": deny
 ---
 
 # GitLab Review Developer

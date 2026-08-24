@@ -8,6 +8,8 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { TodoWriteTool, TodoReadTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
+import { GitLabCiInspectTool } from "./gitlab-ci-inspect"
+import { GitLabRepositoryInspectTool } from "./gitlab-repository-inspect"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
@@ -58,6 +60,11 @@ import { getBridgeServer } from "../browser/bridge"
 
 export namespace ToolRegistry {
   const log = Log.create({ service: "tool.registry" })
+
+  type Candidate = {
+    implementation: Tool.Info
+    kind: "builtin" | "custom"
+  }
 
   export const state = Instance.state(async () => {
     const custom = [] as Tool.Info[]
@@ -122,8 +129,10 @@ export namespace ToolRegistry {
     custom.push(tool)
   }
 
-  async function all(): Promise<Tool.Info[]> {
-    const custom = await state().then((x) => x.custom)
+  async function all(options?: { includeCustom?: boolean }): Promise<Candidate[]> {
+    const custom = options?.includeCustom === false
+      ? []
+      : await state().then((x) => x.custom)
     const config = await Config.get()
     const browserTools = getBridgeServer()
       ? [
@@ -145,7 +154,7 @@ export namespace ToolRegistry {
       ]
       : []
 
-    return [
+    const builtin = [
       InvalidTool,
       ...(["app", "cli", "desktop"].includes(Flag.OPENCODE_CLIENT) ? [QuestionTool] : []),
       BashTool,
@@ -156,6 +165,8 @@ export namespace ToolRegistry {
       WriteTool,
       TaskTool,
       WebFetchTool,
+      GitLabCiInspectTool,
+      GitLabRepositoryInspectTool,
       TodoWriteTool,
       TodoReadTool,
       WebSearchTool,
@@ -174,26 +185,48 @@ export namespace ToolRegistry {
       ...(config.experimental?.batch_tool === true ? [BatchTool] : []),
       ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [PlanExitTool, PlanEnterTool] : []),
       ...browserTools,
-      ...custom,
+    ]
+    return [
+      ...builtin.map((implementation) => ({ implementation, kind: "builtin" as const })),
+      ...custom.map((implementation) => ({ implementation, kind: "custom" as const })),
     ]
   }
 
-  export async function ids() {
-    return all().then((x) => x.map((t) => t.id))
+  async function catalog(options?: { includeCustom?: boolean }) {
+    const candidates = await all(options)
+    const counts = new Map<string, number>()
+    for (const candidate of candidates) {
+      const id = candidate.implementation.id
+      counts.set(id, (counts.get(id) ?? 0) + 1)
+    }
+    const conflicts = [...counts]
+      .filter(([, count]) => count > 1)
+      .map(([id]) => id)
+      .sort((left, right) => left.localeCompare(right))
+    const conflictIDs = new Set(conflicts)
+    return {
+      candidates: candidates.filter((candidate) => !conflictIDs.has(candidate.implementation.id)),
+      conflicts,
+      declaredIDs: [...counts.keys()].sort((left, right) => left.localeCompare(right)),
+    }
   }
 
-  export async function tools(
+  export async function ids() {
+    return catalog().then((x) => x.candidates.map((candidate) => candidate.implementation.id))
+  }
+
+  export async function resolve(
     model: {
       providerID: string
       modelID: string
     },
     agent?: Agent.Info,
-    options?: Pick<Tool.InitContext, "skills">,
+    options?: Pick<Tool.InitContext, "skills"> & { includeCustom?: boolean },
   ) {
-    const tools = await all()
-    const result = await Promise.all(
-      tools
-        .filter((t) => {
+    const resolved = await catalog(options)
+    const tools = await Promise.all(
+      resolved.candidates
+        .filter(({ implementation: t }) => {
           // Enable websearch/codesearch for zen users OR via enable flag
           if (t.id === "codesearch" || t.id === "websearch") {
             return model.providerID === "opencode" || Flag.OPENCODE_ENABLE_EXA
@@ -207,14 +240,33 @@ export namespace ToolRegistry {
 
           return true
         })
-        .map(async (t) => {
+        .map(async ({ implementation, kind }) => {
+          const t = implementation
           using _ = log.time(t.id)
           return {
             id: t.id,
+            requireExplicitEnable: t.requireExplicitEnable,
+            provenance: { kind, implementation },
             ...(await t.init({ agent, skills: options?.skills })),
           }
         }),
     )
-    return result
+    return {
+      tools,
+      conflicts: resolved.conflicts,
+      declaredIDs: resolved.declaredIDs,
+    }
+  }
+
+  export async function tools(
+    model: {
+      providerID: string
+      modelID: string
+    },
+    agent?: Agent.Info,
+    options?: Pick<Tool.InitContext, "skills"> & { includeCustom?: boolean },
+  ) {
+    const resolved = await resolve(model, agent, options)
+    return resolved.tools.map(({ provenance: _provenance, ...tool }) => tool)
   }
 }

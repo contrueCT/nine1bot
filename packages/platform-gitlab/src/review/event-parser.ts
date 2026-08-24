@@ -1,4 +1,9 @@
-import { isGitLabReviewProjectInScope, type GitLabReviewSettings } from './settings'
+import {
+  GITLAB_REVIEW_INVALID_CONFIGURATION,
+  isGitLabReviewProjectInScope,
+  type GitLabReviewSettings,
+} from './settings'
+import { gitLabAuthorityFromUrl, normalizeGitLabAuthority } from './host'
 import type { GitLabReviewTrigger } from './types'
 
 export type GitLabParsedEvent =
@@ -7,6 +12,9 @@ export type GitLabParsedEvent =
 
 export function parseGitLabWebhookEvent(payload: unknown, settings: GitLabReviewSettings): GitLabParsedEvent {
   if (!settings.enabled) return { ok: false, reason: 'gitlab-review-disabled' }
+  if (settings.configurationErrors.includes('allowed_hosts_invalid')) {
+    return { ok: false, reason: GITLAB_REVIEW_INVALID_CONFIGURATION }
+  }
   if (!isRecord(payload)) return { ok: false, reason: 'invalid-payload' }
 
   const objectKind = stringValue(payload.object_kind)
@@ -21,10 +29,12 @@ function parseMergeRequestWebhook(payload: Record<string, unknown>, settings: Gi
   const attrs = recordValue(payload.object_attributes)
   const projectId = idValue(project?.id ?? attrs?.target_project_id)
   const mrIid = idValue(attrs?.iid)
-  const host = hostFromUrl(stringValue(project?.web_url) ?? stringValue(project?.git_http_url) ?? stringValue(project?.homepage))
+  const host = gitLabAuthorityFromUrl(stringValue(project?.web_url) ?? stringValue(project?.git_http_url) ?? stringValue(project?.homepage))
   const headSha = stringValue(attrs?.last_commit && recordValue(attrs.last_commit)?.id) ?? stringValue(attrs?.last_commit_id) ?? stringValue(attrs?.sha)
   if (!projectId || !mrIid || !host || !headSha) return { ok: false, reason: 'missing-merge-request-identity' }
-  if (!isAllowed(settings, host, projectId, stringValue(project?.path_with_namespace))) return { ok: false, reason: 'project-not-allowed' }
+  if (!isGitLabReviewTargetAllowed(settings, host, projectId, stringValue(project?.path_with_namespace))) {
+    return { ok: false, reason: 'project-not-allowed' }
+  }
 
   return {
     ok: true,
@@ -56,9 +66,11 @@ function parseNoteWebhook(payload: Record<string, unknown>, settings: GitLabRevi
   if (intent.kind !== 'review') return { ok: false, reason: `mention-${intent.kind}` }
 
   const projectId = idValue(project?.id ?? note?.project_id)
-  const host = hostFromUrl(stringValue(project?.web_url) ?? stringValue(project?.git_http_url) ?? stringValue(project?.homepage))
+  const host = gitLabAuthorityFromUrl(stringValue(project?.web_url) ?? stringValue(project?.git_http_url) ?? stringValue(project?.homepage))
   if (!projectId || !host) return { ok: false, reason: 'missing-project-identity' }
-  if (!isAllowed(settings, host, projectId, stringValue(project?.path_with_namespace))) return { ok: false, reason: 'project-not-allowed' }
+  if (!isGitLabReviewTargetAllowed(settings, host, projectId, stringValue(project?.path_with_namespace))) {
+    return { ok: false, reason: 'project-not-allowed' }
+  }
 
   if (mergeRequest) {
     const mrIid = idValue(mergeRequest.iid)
@@ -282,22 +294,21 @@ function isBotAuthor(author: string | undefined, botMention: string) {
   return author.trim().toLowerCase() === botName
 }
 
-function isAllowed(settings: GitLabReviewSettings, host: string, projectId: string | number, projectPath?: string) {
-  const hostAllowed = settings.allowedHosts.length === 0 || settings.allowedHosts.includes(host)
+export function isGitLabReviewTargetAllowed(
+  settings: GitLabReviewSettings,
+  host: string,
+  projectId: string | number,
+  projectPath?: string,
+) {
+  const normalizedHost = normalizeGitLabAuthority(host)
+  const hostAllowed = settings.allowedHosts.length === 0 || settings.allowedHosts.some((candidate) =>
+    normalizeGitLabAuthority(candidate) === normalizedHost,
+  )
   const projectAllowed = isGitLabReviewProjectInScope(settings, {
     id: projectId,
     pathWithNamespace: projectPath,
   })
   return hostAllowed && projectAllowed
-}
-
-function hostFromUrl(input?: string) {
-  if (!input) return undefined
-  try {
-    return new URL(input).hostname
-  } catch {
-    return undefined
-  }
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

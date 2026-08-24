@@ -1,18 +1,15 @@
 import type { GitLabDiffManifest, GitLabRawChange, GitLabRawChangesResponse, GitLabSkippedFile } from './types'
-
-const BLACKLISTED_PATH_PATTERNS = [
-  /(^|\/)(package-lock|npm-shrinkwrap)\.json$/i,
-  /(^|\/)(yarn|pnpm-lock|bun)\.lock$/i,
-  /(^|\/)(dist|build|coverage|\.next|\.nuxt|vendor)\//i,
-  /\.min\.(js|css)$/i,
-  /\.(map|svg|png|jpe?g|gif|webp|avif|ico|pdf|zip|tar|gz|mp4|mov|mp3|wav|woff2?|ttf|otf)$/i,
-  /(^|\/)generated\//i,
-]
+import {
+  decideGitLabReviewPathAccess,
+  isBlacklistedReviewPath,
+} from './path-policy'
 
 export type BuildGitLabDiffManifestOptions = {
   maxDiffBytes?: number
   maxFiles?: number
   blockOnOverflow?: boolean
+  includePathPrefixes?: string[]
+  excludePathPatterns?: string[]
 }
 
 export function buildGitLabDiffManifest(
@@ -35,8 +32,13 @@ export function buildGitLabDiffManifest(
   const skipped: GitLabSkippedFile[] = []
   let includedBytes = 0
 
-  for (const change of changes) {
+  for (const change of prioritizedChanges(changes, options.includePathPrefixes ?? [])) {
     const path = displayPath(change)
+    const pathAccess = decideGitLabReviewPathAccess(path, options)
+    if (!pathAccess.allowed && pathAccess.reason === 'profile-excluded') {
+      skipped.push({ path, reason: 'profile-excluded' })
+      continue
+    }
     if (change.generated_file) {
       skipped.push({ path, reason: 'generated' })
       continue
@@ -87,8 +89,17 @@ export function buildGitLabDiffManifest(
   }
 }
 
-export function isBlacklistedReviewPath(path: string) {
-  return BLACKLISTED_PATH_PATTERNS.some((pattern) => pattern.test(path))
+function prioritizedChanges(changes: GitLabRawChange[], includePathPrefixes: string[]) {
+  return changes
+    .map((change, index) => ({ change, index, priority: pathPriority(displayPath(change), includePathPrefixes) }))
+    .sort((left, right) => left.priority - right.priority || left.index - right.index)
+    .map((entry) => entry.change)
+}
+
+function pathPriority(path: string, includePathPrefixes: string[]) {
+  if (includePathPrefixes.some((prefix) => prefix && path.startsWith(prefix))) return 0
+  if (/(^|\/)(auth|security|permissions?|rbac|database|migrations?|config|ci|\.gitlab)(\/|\.|$)/i.test(path)) return 1
+  return 2
 }
 
 function blockedManifest(

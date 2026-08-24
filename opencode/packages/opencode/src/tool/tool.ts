@@ -32,6 +32,7 @@ export namespace Tool {
   }
   export interface Info<Parameters extends z.ZodType = z.ZodType, M extends Metadata = Metadata> {
     id: string
+    requireExplicitEnable?: boolean
     init: (ctx?: InitContext) => Promise<{
       description: string
       parameters: Parameters
@@ -53,6 +54,7 @@ export namespace Tool {
 
   export interface DefineOptions {
     truncation?: Truncate.Options
+    requireExplicitEnable?: boolean
   }
 
   export function define<Parameters extends z.ZodType, Result extends Metadata>(
@@ -62,6 +64,7 @@ export namespace Tool {
   ): Info<Parameters, Result> {
     return {
       id,
+      requireExplicitEnable: options.requireExplicitEnable,
       init: async (initCtx) => {
         const toolInfo = init instanceof Function ? await init(initCtx) : init
         const execute = toolInfo.execute

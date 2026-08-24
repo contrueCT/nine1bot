@@ -57,21 +57,27 @@ export function changedLineRanges(diff: string) {
   const contextOldToNew = new Map<number, number>()
   let oldLine = 0
   let newLine = 0
+  let insideHunk = false
 
   for (const line of diffLines(diff)) {
     const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
     if (hunk) {
       oldLine = Number(hunk[1])
       newLine = Number(hunk[2])
+      insideHunk = true
       continue
     }
-    if (!oldLine && !newLine) continue
-    if (line.startsWith('+') && !line.startsWith('+++')) {
+    if (line.startsWith('diff --git ')) {
+      insideHunk = false
+      continue
+    }
+    if (!insideHunk) continue
+    if (line.startsWith('+')) {
       newLines.add(newLine)
       newLine += 1
       continue
     }
-    if (line.startsWith('-') && !line.startsWith('---')) {
+    if (line.startsWith('-')) {
       oldLines.add(oldLine)
       oldLine += 1
       continue

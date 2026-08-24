@@ -401,6 +401,25 @@ test("evaluate - merges multiple rulesets", () => {
   expect(result.action).toBe("deny")
 })
 
+test("evaluateWithSessionGrants - final base rule wins before session grants", () => {
+  const base = PermissionNext.fromConfig({
+    "*": "deny",
+    task: { "platform.gitlab.*": "allow" },
+  })
+
+  expect(
+    PermissionNext.evaluateWithSessionGrants("task", "platform.gitlab.risk-qa", base, []).action,
+  ).toBe("allow")
+  expect(
+    PermissionNext.evaluateWithSessionGrants(
+      "bash",
+      "*",
+      base,
+      [{ permission: "bash", pattern: "*", action: "allow" }],
+    ).action,
+  ).toBe("deny")
+})
+
 // disabled tests
 
 test("disabled - returns empty set when all tools allowed", () => {
@@ -530,6 +549,49 @@ test("ask - resolves immediately when action is allow", async () => {
   })
 })
 
+test("ask - autonomous mode does not auto-allow GitLab publication permissions", async () => {
+  await using tmp = await tmpdir({
+    git: true,
+    config: {
+      autonomous: {
+        enabled: true,
+        maxRetries: 3,
+        askAfterRetries: true,
+        allowDoomLoop: true,
+      },
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await expect(PermissionNext.ask({
+        sessionID: "session_autonomous_read",
+        permission: "gitlab_cli_read",
+        patterns: ["gitlab.example.com/group/project"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "gitlab_cli_read", pattern: "*", action: "ask" }],
+      })).resolves.toBeUndefined()
+
+      const publication = PermissionNext.ask({
+        id: "permission_gitlab_publish_test",
+        sessionID: "session_autonomous_publish",
+        permission: "gitlab_cli_publish_review_note",
+        patterns: ["gitlab.example.com/group/project"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "gitlab_cli_publish_review_note", pattern: "*", action: "ask" }],
+      })
+      await waitForPendingPermission("permission_gitlab_publish_test")
+      await PermissionNext.reply({ requestID: "permission_gitlab_publish_test", reply: "reject" })
+
+      await expect(publication).rejects.toBeInstanceOf(PermissionNext.RejectedError)
+      expect(PermissionNext.isSecurityCritical("gitlab_cli_publish_review_discussion")).toBe(true)
+      expect(PermissionNext.isSecurityCritical("gitlab_cli_read")).toBe(false)
+    },
+  })
+})
+
 test("ask - throws RejectedError when action is deny", async () => {
   await using tmp = await tmpdir({ git: true })
   await Instance.provide({
@@ -563,7 +625,6 @@ test("ask - returns pending promise when action is ask", async () => {
         always: [],
         ruleset: [{ permission: "external_directory", pattern: "*", action: "ask" }],
       })
-      // Promise should be pending, not resolved
       expect(promise).toBeInstanceOf(Promise)
       await waitForPendingPermission("permission_pending_promise_test")
       await PermissionNext.reply({ requestID: "permission_pending_promise_test", reply: "reject" })

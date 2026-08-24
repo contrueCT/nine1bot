@@ -3,9 +3,7 @@ name: platform.gitlab.frontend-designer
 description: GitLab review subagent for web settings, review run UI, status surfaces, and user-facing configuration flows.
 mode: subagent
 permission:
-  edit: deny
-  bash: deny
-  task: deny
+  "*": deny
 ---
 
 # GitLab Review Frontend Designer

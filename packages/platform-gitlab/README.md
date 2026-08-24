@@ -16,11 +16,29 @@ Nine1Bot Runtime core.
 
 ## Code Review Plugin
 
-See [GITLAB_CODE_REVIEW_PLUGIN_DESIGN.md](./GITLAB_CODE_REVIEW_PLUGIN_DESIGN.md)
-for the initial design of the `@Nine1bot` merge request review flow. The design
-keeps GitLab webhook parsing, MR context loading, review orchestration, and
-comment publishing inside this platform package while exposing only generic
-context/resource contributions to the controller and runtime.
+See the [implementation documentation index](./docs/review-implementation/README.md)
+for the current architecture and the
+[GitLab CLI platform tool migration](./docs/review-implementation/24-gitlab-cli-platform-tools-migration.md)
+for the interactive workflow. GitLab webhook parsing, MR context loading,
+review orchestration, and comment publishing stay inside this platform package
+while only generic context/resource contributions are exposed to the controller
+and runtime.
+
+## GitLab CLI Assisted Workflows
+
+Interactive GitLab page sessions can use declared wrapper tools backed by the
+local `glab` installation. The model cannot run arbitrary CLI commands and does
+not receive the GitLab token or auth configuration.
+
+Supported entry points include bounded repository health inspection, merge
+request review, commit review, and permission-gated review publishing. Install
+`glab`, authenticate the host with `glab auth login`, configure `allowedHosts`
+when host restriction is required, and verify the GitLab CLI card on the
+platform status page.
+
+Automatic webhook Review remains a separate workflow. It continues to use the
+frozen ReviewRun/context pipeline and the bounded `gitlab_ci_inspect` REST tool;
+it does not receive the interactive CLI wrappers.
 
 ## Adding Another Platform
 

@@ -133,9 +133,13 @@ export namespace PermissionNext {
     }
   })
 
-  // Permissions that should never be auto-allowed in autonomous mode
-  // These are security-critical permissions that require explicit user consent
-  const NEVER_AUTO_ALLOW = ["sandbox", "external_directory"]
+  const SECURITY_CRITICAL_PERMISSIONS = new Set(["sandbox", "external_directory"])
+  const SECURITY_CRITICAL_PREFIXES = ["gitlab_cli_publish_"]
+
+  export function isSecurityCritical(permission: string) {
+    return SECURITY_CRITICAL_PERMISSIONS.has(permission)
+      || SECURITY_CRITICAL_PREFIXES.some((prefix) => permission.startsWith(prefix))
+  }
 
   export const ask = fn(
     Request.partial({ id: true }).extend({
@@ -160,9 +164,7 @@ export namespace PermissionNext {
           throw new DeniedError(runtimeRuleset.filter((r) => Wildcard.match(request.permission, r.permission)))
 
         if (rule.action === "ask") {
-          // In autonomous mode, auto-allow certain permissions to reduce human intervention
-          // Never auto-allow security-critical permissions (sandbox, external_directory)
-          if (isAutonomous && !NEVER_AUTO_ALLOW.includes(request.permission)) {
+          if (isAutonomous && !isSecurityCritical(request.permission)) {
             log.info("auto-allowed in autonomous mode", {
               permission: request.permission,
               pattern,
@@ -319,11 +321,8 @@ export namespace PermissionNext {
     ruleset: Ruleset,
     sessionGrants: Ruleset,
   ): Rule {
-    const baseDeny = merge(ruleset).findLast(
-      (rule) =>
-        rule.action === "deny" && Wildcard.match(permission, rule.permission) && Wildcard.match(pattern, rule.pattern),
-    )
-    if (baseDeny) return baseDeny
+    const base = evaluate(permission, pattern, ruleset)
+    if (base.action === "deny") return base
     return evaluate(permission, pattern, ruleset, sessionGrants)
   }
 

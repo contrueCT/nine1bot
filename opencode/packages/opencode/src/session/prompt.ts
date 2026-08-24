@@ -24,6 +24,7 @@ import MAX_STEPS from "../session/prompt/max-steps.txt"
 import { defer } from "../util/defer"
 import { clone } from "remeda"
 import { ToolRegistry } from "../tool/registry"
+import { toolSelectionAllows } from "../tool/selection"
 import { MCP } from "../mcp"
 import { LSP } from "../lsp"
 import { ListTool } from "../tool/ls"
@@ -39,6 +40,8 @@ import { NamedError } from "@opencode-ai/util/error"
 import { fn } from "@/util/fn"
 import { SessionProcessor } from "./processor"
 import { TaskTool } from "@/tool/task"
+import { GitLabCiInspectTool } from "@/tool/gitlab-ci-inspect"
+import { GitLabRepositoryInspectTool } from "@/tool/gitlab-repository-inspect"
 import { Tool } from "@/tool/tool"
 import { PermissionNext } from "@/permission/next"
 import { LLM } from "./llm"
@@ -1323,6 +1326,10 @@ export namespace SessionPrompt {
   }) {
     using _ = log.time("resolveTools")
     const tools: Record<string, AITool> = {}
+    const permissions = PermissionNext.merge(input.agent.permission, input.session.permission ?? [])
+    const gitLabReviewBoundary = isGitLabReviewSession(input.session)
+    const trustedGitLabReviewCoordinator = !gitLabReviewBoundary
+      || await isTrustedGitLabReviewCoordinator(input.session, input.agent)
 
     const context = (args: any, options: ToolCallOptions): Tool.Context => ({
       sessionID: input.session.id,
@@ -1360,11 +1367,19 @@ export namespace SessionPrompt {
       },
     })
 
-    for (const item of await ToolRegistry.tools(
+    const registry = await ToolRegistry.resolve(
       { modelID: input.model.api.id, providerID: input.model.providerID },
       input.agent,
-      { skills: input.resources?.skills.availableSkills },
-    )) {
+      {
+        skills: input.resources?.skills.availableSkills,
+        includeCustom: !gitLabReviewBoundary,
+      },
+    )
+    const registryDeclaredIDs = new Set(registry.declaredIDs)
+    const conflictIDs = new Set(registry.conflicts)
+    for (const item of registry.tools) {
+      if (gitLabReviewBoundary && (!trustedGitLabReviewCoordinator || !isTrustedGitLabReviewBuiltin(item))) continue
+      if (!toolSelectionAllows(item, input.tools, permissions)) continue
       const schema = ProviderTransform.schema(input.model, z.toJSONSchema(item.parameters))
       tools[item.id] = tool({
         id: item.id as any,
@@ -1372,27 +1387,31 @@ export namespace SessionPrompt {
         inputSchema: jsonSchema(schema as any),
         async execute(args, options) {
           const ctx = context(args, options)
-          await Plugin.trigger(
-            "tool.execute.before",
-            {
-              tool: item.id,
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-            },
-            {
-              args,
-            },
-          )
+          if (!gitLabReviewBoundary) {
+            await Plugin.trigger(
+              "tool.execute.before",
+              {
+                tool: item.id,
+                sessionID: ctx.sessionID,
+                callID: ctx.callID,
+              },
+              {
+                args,
+              },
+            )
+          }
           const result = await item.execute(args, ctx)
-          await Plugin.trigger(
-            "tool.execute.after",
-            {
-              tool: item.id,
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-            },
-            result,
-          )
+          if (!gitLabReviewBoundary) {
+            await Plugin.trigger(
+              "tool.execute.after",
+              {
+                tool: item.id,
+                sessionID: ctx.sessionID,
+                callID: ctx.callID,
+              },
+              result,
+            )
+          }
           return result
         },
       })
@@ -1400,31 +1419,42 @@ export namespace SessionPrompt {
 
     // Get MCP tools within session directory's Instance context
     // This ensures local MCP processes use session directory as cwd
-    const mcpTools = await Instance.provide({
-      directory: input.session.directory,
-      fn: () =>
-        MCP.tools({
-          servers: input.resources?.mcp.availableServers,
-          onFailure: async (failure) => {
-            await Bus.publish(RuntimeResourceResolver.Failed, {
-              sessionID: input.session.id,
-              resourceType: "mcp",
-              resourceID: failure.server,
-              status: failure.stage === "auth" ? "auth-required" : "unavailable",
-              stage: failure.stage,
-              reason: failure.reason,
-              message: failure.message,
-              recoverable: true,
-              action: {
-                type: "retry",
-                label: "Retry MCP connection",
-              },
-            })
-          },
-        }),
-    })
+    let mcpTools = {} as Awaited<ReturnType<typeof MCP.tools>>
+    if (!gitLabReviewBoundary) {
+      mcpTools = await Instance.provide({
+        directory: input.session.directory,
+        fn: () =>
+          MCP.tools({
+            servers: input.resources?.mcp.availableServers,
+            onFailure: async (failure) => {
+              await Bus.publish(RuntimeResourceResolver.Failed, {
+                sessionID: input.session.id,
+                resourceType: "mcp",
+                resourceID: failure.server,
+                status: failure.stage === "auth" ? "auth-required" : "unavailable",
+                stage: failure.stage,
+                reason: failure.reason,
+                message: failure.message,
+                recoverable: true,
+                action: {
+                  type: "retry",
+                  label: "Retry MCP connection",
+                },
+              })
+            },
+          }),
+      })
+    }
+    const mcpDeclaredIDs = new Set(Object.keys(mcpTools))
 
     for (const [key, item] of Object.entries(mcpTools)) {
+      if (registryDeclaredIDs.has(key)) {
+        delete tools[key]
+        conflictIDs.add(key)
+        continue
+      }
+      if (gitLabReviewBoundary) continue
+      if (!toolSelectionAllows({ id: key }, input.tools, permissions)) continue
       const execute = item.execute
       if (!execute) continue
 
@@ -1515,7 +1545,20 @@ export namespace SessionPrompt {
       tools[key] = item
     }
 
-    const occupiedToolIDs = new Set(Object.keys(tools))
+    const registeredIDs = new Set(
+      input.resources?.registeredTools.availableTools.map((reference) => reference.id) ?? [],
+    )
+    for (const id of registeredIDs) {
+      if (!registryDeclaredIDs.has(id) && !mcpDeclaredIDs.has(id)) continue
+      delete tools[id]
+      conflictIDs.add(id)
+    }
+    const occupiedToolIDs = new Set([
+      ...Object.keys(tools),
+      ...registryDeclaredIDs,
+      ...mcpDeclaredIDs,
+      ...conflictIDs,
+    ])
     const finalizedResources = input.resources
       ? RuntimeResourceResolver.applyToolConflicts(input.resources, occupiedToolIDs)
       : undefined
@@ -1524,10 +1567,12 @@ export namespace SessionPrompt {
         references: finalizedResources.registeredTools.availableTools,
         occupiedToolIDs,
         model: input.model,
-        isExposureDenied: (toolID) => isToolExposureDenied(
-          toolID,
-          PermissionNext.merge(input.agent.permission, input.session.permission ?? []),
-        ),
+        isExposureDenied: (toolID) => gitLabReviewBoundary
+          || !toolSelectionAllows({ id: toolID }, input.tools, permissions)
+          || isToolExposureDenied(
+            toolID,
+            PermissionNext.merge(input.agent.permission, input.session.permission ?? []),
+          ),
         executionInput(reference, rawInput, options) {
           const ctx = context(rawInput, options)
           const hookContext = {
@@ -1581,9 +1626,12 @@ export namespace SessionPrompt {
               signal,
             }),
             isExposureDenied: async (toolID) => {
+              if (gitLabReviewBoundary) return true
+              const ruleset = await currentRuleset()
+              if (!toolSelectionAllows({ id: toolID }, input.tools, ruleset)) return true
               return isToolExposureDenied(
                 toolID,
-                await currentRuleset(),
+                ruleset,
               )
             },
             isPermissionDenied: async (request) => {
@@ -1616,6 +1664,48 @@ export namespace SessionPrompt {
 
   function isToolExposureDenied(toolID: string, ruleset: PermissionNext.Ruleset) {
     return PermissionNext.disabled([toolID], ruleset).has(toolID)
+  }
+
+  function isGitLabReviewSession(session: Session.Info) {
+    return session.client?.source === "webhook"
+      && session.client.platform === "gitlab"
+      && session.client.mode === "gitlab-code-review"
+  }
+
+  async function isTrustedGitLabReviewCoordinator(session: Session.Info, agent: Agent.Info) {
+    if (
+      agent.name !== "platform.gitlab.pm-coordinator"
+      || session.runtime?.agent !== agent.name
+      || agent.source?.owner.id !== "gitlab"
+      || agent.source.owner.kind !== "platform"
+      || agent.source.sourceID !== "gitlab-review-agents"
+      || agent.source.visibility !== "recommendable"
+    ) return false
+
+    const profile = await SessionRuntimeProfile.read(session)
+    if (!profile) return false
+    const templates = new Set(profile.sourceTemplateIds)
+    return profile.id === session.runtime.profileSnapshotId
+      && profile.sessionId === session.id
+      && profile.agent.name === agent.name
+      && profile.agent.source === "internal-runtime"
+      && templates.has("browser-gitlab")
+      && (templates.has("gitlab-mr") || templates.has("gitlab-commit"))
+      && templates.has(RuntimeResourceResolver.resourceTemplateId())
+      && (profile.resources.builtinTools.enabledGroups ?? []).includes("gitlab-context")
+  }
+
+  function isTrustedGitLabReviewBuiltin(item: Awaited<ReturnType<typeof ToolRegistry.resolve>>["tools"][number]) {
+    const expected = item.id === "task"
+      ? TaskTool
+      : item.id === "gitlab_ci_inspect"
+        ? GitLabCiInspectTool
+        : item.id === "gitlab_repository_inspect"
+          ? GitLabRepositoryInspectTool
+          : undefined
+    return expected !== undefined
+      && item.provenance.kind === "builtin"
+      && item.provenance.implementation === expected
   }
 
   async function resolveUserMessageAgent(input: PromptInput, session: Session.Info) {

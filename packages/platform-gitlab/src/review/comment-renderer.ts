@@ -53,23 +53,27 @@ export function renderReviewSummaryComment(input: {
     for (const group of groupFindingsByFile(input.findings)) {
       lines.push('', `#### ${group.file ? `\`${group.file}\`` : 'General'}`)
       for (const finding of group.findings) {
-        const location = findingLocation(finding)
-        lines.push(
-          '',
-          `- **${finding.severity.toUpperCase()}** ${finding.title}${location ? ` (${location})` : ''}`,
-          '',
-          finding.body,
-        )
-        if (finding.sources.length > 1) {
-          lines.push('', `Sources: ${finding.sources.map((source) => `\`${source}\``).join(', ')}`)
-        }
-        if (finding.suggestion?.replacement) {
-          lines.push('', 'Suggested replacement:', '', safeCodeBlock(finding.suggestion.replacement))
-        }
+        lines.push('', renderReviewFindingItem(finding))
       }
     }
   }
 
+  return lines.join('\n')
+}
+
+export function renderReviewFindingItem(finding: AggregatedReviewFinding) {
+  const location = findingLocation(finding)
+  const lines = [
+    `- **${finding.severity.toUpperCase()}** ${finding.title}${location ? ` (${location})` : ''}`,
+    '',
+    finding.body,
+  ]
+  if (finding.sources.length > 1) {
+    lines.push('', `Sources: ${finding.sources.map((source) => `\`${source}\``).join(', ')}`)
+  }
+  if (finding.suggestion?.replacement) {
+    lines.push('', 'Suggested replacement:', '', safeCodeBlock(finding.suggestion.replacement))
+  }
   return lines.join('\n')
 }
 
