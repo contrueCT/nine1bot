@@ -11,6 +11,8 @@ import { LLM } from "../../src/session/llm"
 import { SessionSummary } from "../../src/session/summary"
 import type { Provider } from "../../src/provider/provider"
 import { tmpdir } from "../fixture/fixture"
+import path from "node:path"
+import { RuntimeSourceRegistry } from "../../src/runtime/source/registry"
 
 test("tool repair stays within the supplied catalog and preserves an available fallback", async () => {
   const request: Parameters<typeof LLM.repairToolCall>[0] = {
@@ -33,6 +35,14 @@ test("invalid SDK tool inputs remain tool errors and a corrected call can comple
     directory: directory.path,
     fn: async () => {
       const session = await Session.create({})
+      RuntimeSourceRegistry.registerOwner({
+        owner: { id: "gitlab", kind: "platform", enabled: true },
+        sources: { agents: [{
+          id: "gitlab-review-agents",
+          directory: path.resolve(import.meta.dir, "../../../../../packages/platform-gitlab/agents/review"),
+          namespace: "gitlab", visibility: "recommendable", lifecycle: "platform-enabled",
+        }] },
+      })
       const model = {
         id: "test", providerID: "test",
         api: { id: "test", npm: "@ai-sdk/openai-compatible", url: "https://example.invalid" },
@@ -41,14 +51,14 @@ test("invalid SDK tool inputs remain tool errors and a corrected call can comple
       } as Provider.Model
       const message: MessageV2.Assistant = {
         id: Identifier.ascending("message"), parentID: Identifier.ascending("message"),
-        sessionID: session.id, role: "assistant", agent: "build", mode: "build",
+        sessionID: session.id, role: "assistant", agent: "platform.gitlab.pm-coordinator", mode: "build",
         modelID: model.id, providerID: model.providerID,
         path: { cwd: directory.path, root: directory.path },
         time: { created: Date.now() }, cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       }
       await Session.updateMessage(message)
-      const invalidInputs = ['{"action":', '"not an object"', 'null', '[]', '{"action":"wrong"}']
+      const invalidInputs = ['{"action":', '"not an object"', 'null', '[]', '{"action":"wrong"}', '{"action":', '{"action":', '{"action":']
       const calls = [...invalidInputs, '{"action":"list"}']
       let executions = 0
       const tools = {
@@ -87,7 +97,7 @@ test("invalid SDK tool inputs remain tool errors and a corrected call can comple
         expect(await processor.process({} as LLM.StreamInput)).toBe("continue")
         expect(processor.message.error).toBeUndefined()
         expect(executions).toBe(1)
-        expect(SessionProcessor.getDoomLoopCount(session.id)).toBeGreaterThan(0)
+        expect(SessionProcessor.getDoomLoopCount(session.id)).toBe(1)
         const parts = (await MessageV2.parts(message.id)).filter((p): p is MessageV2.ToolPart => p.type === "tool")
         expect(parts).toHaveLength(calls.length)
         for (const [index] of invalidInputs.entries()) {
@@ -105,6 +115,7 @@ test("invalid SDK tool inputs remain tool errors and a corrected call can comple
         summary.mockRestore()
         SessionProcessor.resetDoomLoopCount(session.id)
         await Session.remove(session.id)
+        RuntimeSourceRegistry.clearForTesting()
       }
     },
   })

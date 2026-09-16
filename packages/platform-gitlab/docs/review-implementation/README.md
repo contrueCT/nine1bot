@@ -99,6 +99,8 @@
 
 ## 收口状态
 
+2026-09-16 部署联调发现的工具输入状态异常及修复、验证结果，见 [工具参数异常恢复记录](./26-tool-input-runtime-recovery.md)。该记录区分自动化验证与真实 GitLab 审查结果。
+
 二次审查加固 Task 1--8 已完成（`c6df20a..54c3be6`，含 Task 6 的 CPU 补充修复 `3a5f60e`、`9c905ce`、`873ce7d`、`33b3393`）。2026-08-15 fresh 自动化验证：聚焦 `350 pass / 0 fail / 1217 expect()`，根测试 `554 pass / 0 fail / 2040 expect()`，根与 OpenCode typecheck、Web build 均为 exit 0。自动化覆盖旧 HEAD 零发布、并发发布、部分恢复、stale binding retry、CI 配额/输出和 attempt 链修复。
 
 真实 self-managed GitLab 的 webhook、可信 CI、远端 marker 对账与评论回写尚未在本批次执行，全部为 **待人工联调**；自动化测试不构成 live-integration 证据。
