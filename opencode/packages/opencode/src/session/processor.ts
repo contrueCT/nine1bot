@@ -21,6 +21,13 @@ import { RuntimeMetricsEvents } from "@/runtime/metrics/events"
 import { ProgressWatchdog } from "./progress-watchdog"
 import { PartUpdateBuffer } from "./part-update-buffer"
 
+function toolStateInput(value: unknown, fallback: Record<string, unknown> = {}) {
+  // Invalid SDK calls can carry unparsed JSON. This is state storage, not argument repair.
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : fallback
+}
+
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
   const DOOM_LOOP_FORCE_ASK_THRESHOLD = 3
@@ -251,20 +258,32 @@ export namespace SessionProcessor {
                   await partUpdates.flushAll()
                   const match = toolcalls[value.toolCallId]
                   if (match) {
+                    const toolInput = toolStateInput(value.input)
+                    const now = Date.now()
                     const part = await Session.updatePart({
                       ...match,
                       tool: value.toolName,
-                      state: {
+                      state: value.invalid ? {
+                        status: "error",
+                        input: toolInput,
+                        error: String(value.error),
+                        time: { start: now, end: now },
+                      } : {
                         status: "running",
-                        input: value.input,
+                        input: toolInput,
                         time: {
-                          start: Date.now(),
+                          start: now,
                         },
                       },
                       metadata: value.providerMetadata,
                     })
                     toolcalls[value.toolCallId] = part as MessageV2.ToolPart
-                    await publishToolStarted(toolcalls[value.toolCallId]!)
+                    if (value.invalid) {
+                      await publishToolFailed(toolcalls[value.toolCallId]!, value.error)
+                      delete toolcalls[value.toolCallId]
+                    } else {
+                      await publishToolStarted(toolcalls[value.toolCallId]!)
+                    }
 
                     const parts = await MessageV2.parts(input.assistantMessage.id)
                     const lastThree = parts.slice(-DOOM_LOOP_THRESHOLD)
@@ -276,7 +295,7 @@ export namespace SessionProcessor {
                           p.type === "tool" &&
                           p.tool === value.toolName &&
                           p.state.status !== "pending" &&
-                          JSON.stringify(p.state.input) === JSON.stringify(value.input),
+                          JSON.stringify(p.state.input) === JSON.stringify(toolInput),
                       )
                     ) {
                       const doomLoopCount = incrementDoomLoopCount(input.sessionID)
@@ -349,7 +368,7 @@ Possible questions to ask:
                       ...match,
                       state: {
                         status: "completed",
-                        input: value.input ?? match.state.input,
+                        input: toolStateInput(value.input, match.state.input),
                         output: value.output.output,
                         metadata: value.output.metadata,
                         title: value.output.title,
@@ -377,7 +396,7 @@ Possible questions to ask:
                       ...match,
                       state: {
                         status: "error",
-                        input: value.input ?? match.state.input,
+                        input: toolStateInput(value.input, match.state.input),
                         error: (value.error as any).toString(),
                         time: {
                           start: match.state.time.start,
