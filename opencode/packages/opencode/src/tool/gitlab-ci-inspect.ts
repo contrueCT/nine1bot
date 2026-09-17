@@ -15,13 +15,25 @@ type GitLabCiInspectDependencies = {
 const MAX_GITLAB_CI_TOOL_OUTPUT_BYTES = 32 * 1024
 const GITLAB_CI_TOOL_OUTPUT_TRUNCATED = "ci_tool_output_truncated"
 
-const parameters = z.discriminatedUnion("action", [
+const requestParameters = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list") }).strict(),
   z.object({
     action: z.literal("read_job_log"),
     jobId: z.number().int().positive(),
   }).strict(),
 ])
+
+// Some model gateways lose field types inside root anyOf schemas.
+// Advertise a flat object while retaining strict action-specific validation.
+const parameters = z.object({
+  action: z.enum(["list", "read_job_log"]),
+  jobId: z.number().int().positive().optional(),
+}).strict().superRefine((args, context) => {
+  const result = requestParameters.safeParse(args)
+  if (!result.success) {
+    for (const issue of result.error.issues) context.addIssue({ code: "custom", path: issue.path, message: issue.message })
+  }
+})
 
 export function createGitLabCiInspectTool(dependencies: GitLabCiInspectDependencies): Tool.Info<typeof parameters> {
   return Tool.define(
@@ -41,7 +53,7 @@ export function createGitLabCiInspectTool(dependencies: GitLabCiInspectDependenc
       async execute(args, context) {
         let result: GitLabCiToolOutput
         try {
-          result = await dependencies.inspect(context.sessionID, args, context.abort)
+          result = await dependencies.inspect(context.sessionID, requestParameters.parse(args), context.abort)
         } catch (error) {
           result = {
             ok: false,

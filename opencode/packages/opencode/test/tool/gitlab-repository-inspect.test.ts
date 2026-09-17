@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import z from "zod"
 import { createGitLabRepositoryInspectTool } from "../../src/tool/gitlab-repository-inspect"
 import type { Tool } from "../../src/tool/tool"
 
@@ -23,6 +24,16 @@ describe("gitlab_repository_inspect tool", () => {
         return { ok: false, action: request.action, diagnostic: "test" }
       },
     }).init()
+    const schema = z.toJSONSchema(tool.parameters)
+    expect(schema.type).toBe("object")
+    expect(schema.anyOf).toBeUndefined()
+    expect(schema.properties?.startLine).toMatchObject({ type: "integer" })
+    for (const args of [
+      { action: "read_file" },
+      { action: "search_text" },
+      { action: "read_file", path: "src/a.ts", query: "extra" },
+      { action: "search_text", query: "needle", startLine: 1 },
+    ]) expect(tool.parameters.safeParse(args).success).toBe(false)
     for (const args of [{ startLine: "1" }, { maxLines: "80" }, { maxLines: 201 }, { startLine: 0 }]) {
       await expect(tool.execute({ action: "read_file", path: "src/a.ts", ...args } as any, context)).rejects.toThrow("JSON integers")
     }
