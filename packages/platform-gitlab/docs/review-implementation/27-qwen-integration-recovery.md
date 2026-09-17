@@ -47,12 +47,25 @@
 
 本地验证结果：GitLab/review 与 CI 契约测试 423 项通过；运行时 CI 257 项及独立 registry 1 项通过；补充迟到回调隔离后，webhook/monitor 39 项复测通过。Nine1Bot 与 OpenCode 类型检查均通过。
 
-## 待验证
+## 首次本地交付状态
 
-本次只修改本地代码并执行自动化测试，尚未部署到联调服务器。下一次真实 Qwen 联调需确认数字参数纠错效果、CI 日志读取、缓存计费和最终发布；提示词无法保证任意模型始终遵守协议，自动化通过不能替代该验证。
+首次交付仅完成本地代码与自动化测试；后续真实部署和复测结果记录在下文。提示词无法保证任意模型始终遵守协议，自动化通过不能替代真实验证。
 
 ## 部署复测与 schema 兼容性补充
 
 `e6cbb7f` 已部署至测试服务器，Linux 针对性回归 51 项及仓库检查器 17 项通过。复测 `review_mu5dqo86_a` 仍出现字符串 jobId，证明仅增加提示词不足。
 
 同一已配置 Qwen API 的最小对照请求中，根级 `anyOf` 工具 schema 返回 `"jobId":"8"`，根级对象 schema 返回 `"jobId":8`。后续将 CI/仓库工具对模型展示的 schema 改为根级对象，使字段类型直接可见；执行层仍通过原有严格判别联合校验 action 对应的必填字段和禁止字段。字符串不转换、额外字段不放行，数字及输出额度保持原值。新增测试固定模型可见 schema 与各分支校验边界。
+
+## 最终实测结果
+
+- 修复提交 `e6cbb7f`、schema 补充提交 `d96dba2` 均已推送到 `feat/gitlab-tool-input-recovery`。
+- 已拉取 fork 与上游 `main`，最新均为 `f12226c`，当前分支已经包含，无冲突或额外 merge commit。
+- 第一轮 `review_mu5dqo86_a` 通过一次禁用工具的格式纠正后成功发布摘要，GitLab note 234。CI 日志读取失败未阻断审查发布。
+- `d96dba2` 部署后，第二轮 `review_mu5e2498_c` 约 378 秒完成，状态 `succeeded`、publication 状态 `published`。
+- CI list 1 次、job log 读取 2 次、仓库 search 1 次、片段读取 3 次，全部成功，无工具参数错误。实际使用数字 jobId 8/9、startLine 30、maxLines 45。
+- 两份 CI trace 均为空，GitLab job 元数据为 `stuck_or_timeout_failure`，started_at 为空；没有把无代码证据的 CI 失败作为代码 finding。
+- 仓库计数为 query 4、fileFetch 23、apiRequest 27、fetchedBytes 63899，未触及读取上限。
+- 第二轮也通过一次格式纠正完成发布，摘要 note 236、行内评论 note 237。链路通过不代表模型的每条审查建议都经过人工确认；本轮 minor 建议涉及当前无调用方的包装函数，仍需维护者判断价值。
+- 最终服务器运行代码为 `d96dba2`，GitLab review 模型保持 Qwen，全局默认模型未改，自动 MR 审查仍关闭，无遗留运行中的审查。
+- schema 补充后本地运行时 CI 257+1 项通过，OpenCode 类型检查通过；Linux 工具测试 12 项通过。服务器 GitHub 拉取补充提交超时后，通过 SSH 传输并校验 Git bundle，再 fast-forward 到相同提交。
