@@ -119,6 +119,55 @@ describe('GitLab review repository inspector', () => {
     expect(requestedRefs).toEqual([commitSha])
   })
 
+  test('reuses complete frozen blobs across searches and reads while charging output and query budgets', async () => {
+    createReviewRun('session-cache')
+    let downloads = 0
+    const fetcher = (async (input) => {
+      if (String(input).includes('/repository/tree')) return Response.json([{ id: 'blob-a', name: 'a.ts', path: 'src/a.ts', type: 'blob', mode: '100644' }])
+      downloads++
+      return new Response('alpha\nbeta\n')
+    }) as typeof fetch
+    for (const query of ['alpha', 'beta']) {
+      expect(await inspectRepository('session-cache', { action: 'search_text', query, pathPrefix: 'src' }, fetcher)).toMatchObject({ ok: true, matches: [{ text: query }] })
+    }
+    expect(await inspectRepository('session-cache', { action: 'read_file', path: 'src/a.ts', startLine: 2 }, fetcher)).toMatchObject({ ok: true, content: 'beta\n' })
+    expect(downloads).toBe(1)
+    expect(ReviewRunStore.findBySessionId('session-cache')?.repository).toMatchObject({ queryCount: 3, fileFetchCount: 1 })
+    createReviewRun('session-cache-other')
+    await inspectRepository('session-cache-other', { action: 'read_file', path: 'src/a.ts' }, fetcher)
+    expect(downloads).toBe(2)
+    const run = ReviewRunStore.findBySessionId('session-cache')!
+    ReviewRunStore.update(run.id, { status: 'failed' })
+    expect(await inspectRepository('session-cache', { action: 'read_file', path: 'src/a.ts' }, fetcher)).toMatchObject({ ok: false })
+    expect(downloads).toBe(2)
+  })
+
+  test('does not reuse truncated search blobs as complete file contents', async () => {
+    createReviewRun('session-cache-truncated')
+    let downloads = 0
+    const fetcher = (async (input) => {
+      if (String(input).includes('/repository/tree')) return Response.json([{ id: 'blob-a', name: 'a.ts', path: 'src/a.ts', type: 'blob', mode: '100644' }])
+      downloads++
+      return new Response('x'.repeat(70 * 1024))
+    }) as typeof fetch
+    await inspectRepository('session-cache-truncated', { action: 'search_text', query: 'missing', pathPrefix: 'src' }, fetcher)
+    await inspectRepository('session-cache-truncated', { action: 'read_file', path: 'src/a.ts' }, fetcher)
+    expect(downloads).toBe(2)
+  })
+
+  test('rechecks abort and credentials before serving a cached frozen file', async () => {
+    createReviewRun('session-cache-auth')
+    let downloads = 0
+    const fetcher = (async () => { downloads++; return new Response('cached\n') }) as typeof fetch
+    const input = { sessionId: 'session-cache-auth', request: { action: 'read_file', path: 'src/a.ts' } as const, platforms, secrets, fetch: fetcher }
+    expect(await inspectGitLabRepositoryForSession(input)).toMatchObject({ ok: true })
+    expect(await inspectGitLabRepositoryForSession({ ...input, signal: AbortSignal.abort() })).toMatchObject({ ok: false })
+    expect(await inspectGitLabRepositoryForSession({ ...input, secrets: { ...secrets, async get() { return undefined } } })).toMatchObject({ ok: false, diagnostic: 'repository_token_missing' })
+    expect(downloads).toBe(1)
+    expect(await inspectGitLabRepositoryForSession({ ...input, secrets: { ...secrets, async get() { return 'rotated-token' } } })).toMatchObject({ ok: true })
+    expect(downloads).toBe(2)
+  })
+
   test('rejects profile-excluded and blacklisted paths before making a GitLab request', async () => {
     const run = createReviewRun('session-policy', {
       excludePathPatterns: ['secrets/**'],

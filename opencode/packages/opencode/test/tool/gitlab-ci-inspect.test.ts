@@ -15,6 +15,21 @@ const context: Tool.Context = {
 }
 
 describe("gitlab_ci_inspect tool", () => {
+  test("guides numeric correction without coercing invalid inputs or executing them", async () => {
+    const requests: unknown[] = []
+    const tool = await createGitLabCiInspectTool({
+      async inspect(_session, request) {
+        requests.push(request)
+        return { ok: false, action: request.action, diagnostic: "test" }
+      },
+    }).init()
+    for (const jobId of ["8", "", true, null, 0, -1, 1.5]) {
+      await expect(tool.execute({ action: "read_job_log", jobId } as any, context)).rejects.toThrow("without quotes")
+    }
+    expect(requests).toHaveLength(0)
+    await tool.execute({ action: "read_job_log", jobId: 8 }, context)
+    expect(requests).toEqual([{ action: "read_job_log", jobId: 8 }])
+  })
   test("derives review identity from the tool session and exposes only bounded actions", async () => {
     const calls: Array<{ sessionId: string; request: unknown; signal: AbortSignal }> = []
     const tool = createGitLabCiInspectTool({

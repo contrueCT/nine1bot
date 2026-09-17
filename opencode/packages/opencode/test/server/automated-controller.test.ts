@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Bus } from "../../src/bus"
 import { Instance } from "../../src/project/instance"
 import { SessionStatus } from "../../src/session/status"
+import { MessageV2 } from "../../src/session/message-v2"
 import { PermissionNext } from "../../src/permission/next"
 import {
   createAndSendAutomatedControllerTurn,
@@ -19,6 +20,29 @@ const interactionPolicy: AutomatedInteractionPolicy = {
 }
 
 describe("automated controller session startup", () => {
+  test("drains in-flight output before finishing an idle turn", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({ directory: tmp.path, fn: async () => {
+      const events: string[] = []
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      const monitor = startAutomatedRunMonitor({
+        sessionID: "session-output-drain", timeoutMs: 1000, interactionPolicy,
+        async onRuntimeOutput() { await gate; events.push("output") },
+        async onFinished() { events.push("finished") },
+      })
+      const output = Bus.publish(MessageV2.Event.PartUpdated, {
+        part: { id: "prt_drain", sessionID: "session-output-drain", messageID: "msg_drain", type: "text", text: "final output" },
+      })
+      const idle = Bus.publish(SessionStatus.Event.Idle, { sessionID: "session-output-drain" })
+      await Bun.sleep(1)
+      expect(events).toEqual([])
+      release()
+      await Promise.all([output, idle])
+      expect(events).toEqual(["output", "finished"])
+      monitor.dispose()
+    } })
+  })
   test("binds the created session before sending the first message", async () => {
     const events: string[] = []
     let boundSession: string | undefined

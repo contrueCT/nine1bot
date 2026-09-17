@@ -68,6 +68,7 @@ describe('CI workflow contract', () => {
     expect(scripts['ci:test:opencode-runtime']).toContain('test/resource/resource-resolver.test.ts')
     expect(scripts['ci:test:opencode-runtime']).toContain('test/tool/platform-tool-executor.test.ts')
     expect(scripts['ci:test:opencode-runtime']).toContain('test/server/config-routes.test.ts')
+    expect(scripts['ci:test:opencode-runtime']).toContain('test/server/automated-controller.test.ts')
     expect(scripts['ci:test:opencode-runtime']).toContain('test/server/nine1bot-platforms.test.ts')
     for (const path of [
       'test/session/processor-tool-input.test.ts',

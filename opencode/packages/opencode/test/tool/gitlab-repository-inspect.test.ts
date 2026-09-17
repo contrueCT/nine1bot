@@ -15,6 +15,22 @@ const context: Tool.Context = {
 }
 
 describe("gitlab_repository_inspect tool", () => {
+  test("guides line-number correction while keeping strict bounds", async () => {
+    const requests: unknown[] = []
+    const tool = await createGitLabRepositoryInspectTool({
+      async inspect(_session, request) {
+        requests.push(request)
+        return { ok: false, action: request.action, diagnostic: "test" }
+      },
+    }).init()
+    for (const args of [{ startLine: "1" }, { maxLines: "80" }, { maxLines: 201 }, { startLine: 0 }]) {
+      await expect(tool.execute({ action: "read_file", path: "src/a.ts", ...args } as any, context)).rejects.toThrow("JSON integers")
+    }
+    expect(requests).toHaveLength(0)
+    await tool.execute({ action: "read_file", path: "src/a.ts", startLine: 1, maxLines: 80 }, context)
+    await tool.execute({ action: "read_file", path: "src/a.ts" }, context)
+    expect(requests).toHaveLength(2)
+  })
   test("derives the repository target from the current review session without exposing cwd", async () => {
     const calls: Array<{ sessionId: string; request: unknown; signal: AbortSignal }> = []
     const tool = createGitLabRepositoryInspectTool({

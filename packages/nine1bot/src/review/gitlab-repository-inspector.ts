@@ -8,6 +8,7 @@ import {
   type GitLabRepositoryTreeEntry,
 } from '@nine1bot/platform-gitlab/review'
 import type { PlatformSecretAccess, PlatformSecretRef } from '@nine1bot/platform-protocol'
+import { createHash } from 'node:crypto'
 import type { PlatformManagerConfig } from '../platform/manager'
 import {
   ReviewRunStore,
@@ -91,6 +92,62 @@ const MAX_SEARCH_SOURCE_BYTES = 512 * 1024
 const MAX_GIT_PATH_BYTES = 1_024
 const MAX_SEARCH_QUERY_BYTES = 256
 
+type FrozenFileCache = { files: Map<string, Uint8Array>; bytes: number; touchedAt: number; identity: ReviewRunIdentity }
+const frozenFileCaches = new Map<string, FrozenFileCache>()
+const MAX_CACHED_RUNS = 16
+const CACHE_TTL_MS = 10 * 60_000
+
+function frozenFileCache(identity: ReviewRunIdentity, target: GitLabRepositoryTarget, baseUrl: string, token: string) {
+  const now = Date.now()
+  for (const [key, cache] of frozenFileCaches) {
+    if (now - cache.touchedAt > CACHE_TTL_MS || repositoryLifecycleFailure(cache.identity)) frozenFileCaches.delete(key)
+  }
+  const key = JSON.stringify([identity, target, baseUrl, createHash('sha256').update(token).digest('hex')])
+  const existing = frozenFileCaches.get(key)
+  if (existing) {
+    existing.touchedAt = now
+    frozenFileCaches.delete(key)
+    frozenFileCaches.set(key, existing)
+    return existing
+  }
+  while (frozenFileCaches.size >= MAX_CACHED_RUNS) frozenFileCaches.delete(frozenFileCaches.keys().next().value!)
+  const cache: FrozenFileCache = { files: new Map(), bytes: 0, touchedAt: now, identity }
+  frozenFileCaches.set(key, cache)
+  return cache
+}
+
+// Cache only complete blobs for a frozen head; query/output budgets still apply on every hit.
+async function readRepositoryBlob(input: {
+  identity: ReviewRunIdentity
+  client: GitLabApiClient
+  target: GitLabRepositoryTarget
+  cache: FrozenFileCache
+  path: string
+  maxBytes: number
+  requestGuard: () => void
+  signal?: AbortSignal
+}) {
+  input.requestGuard()
+  const cached = input.cache.files.get(input.path)
+  if (cached) return { content: cached.slice(0, input.maxBytes), truncated: cached.byteLength > input.maxBytes }
+  const budget = repositoryFileRequestBoundary(input.identity, input.maxBytes)
+  const raw = await input.client.getRepositoryFileRaw(input.target.projectId, input.path, input.target.headSha, input.maxBytes, {
+    signal: input.signal,
+    requestGuard: input.requestGuard,
+    beforeRequest: budget.beforeRequest,
+  })
+  const diagnostic = settleRepositoryFileRequest(input.identity, budget.reservedBytes(), raw.content.byteLength)
+  if (diagnostic) throw new GitLabRepositoryBoundaryError(diagnostic)
+  input.requestGuard()
+  if (!raw.truncated && !input.cache.files.has(input.path)
+    && input.cache.files.size < MAX_REPOSITORY_FILE_FETCHES
+    && input.cache.bytes + raw.content.byteLength <= MAX_REPOSITORY_FETCHED_BYTES) {
+    input.cache.files.set(input.path, raw.content.slice())
+    input.cache.bytes += raw.content.byteLength
+  }
+  return raw
+}
+
 export async function inspectGitLabRepositoryForSession(input: {
   sessionId: string
   request: GitLabRepositorySessionRequest
@@ -151,12 +208,14 @@ export async function inspectGitLabRepositoryForSession(input: {
     token,
     fetch: input.fetch,
   })
+  const cache = frozenFileCache(identity, target, resolvedBaseUrl.baseUrl, token)
   if (validatedRequest.request.action === 'read_file') {
     const requestState: GitLabRepositoryRequestState = {}
     const requestGuard = repositoryRequestGuard(identity, input.signal, requestState)
     return await readFrozenFile({
       identity,
       client,
+      cache,
       target,
       request: validatedRequest.request,
       maxOutputBytes: reservation.maxOutputBytes,
@@ -177,6 +236,7 @@ export async function inspectGitLabRepositoryForSession(input: {
     return await searchFrozenRepository({
       identity,
       client,
+      cache,
       target,
       run,
       request: validatedRequest.request,
@@ -193,6 +253,7 @@ export async function inspectGitLabRepositoryForSession(input: {
 async function readFrozenFile(input: {
   identity: ReviewRunIdentity
   client: GitLabApiClient
+  cache: FrozenFileCache
   target: GitLabRepositoryTarget
   request: Extract<GitLabRepositorySessionRequest, { action: 'read_file' }>
   maxOutputBytes: number
@@ -200,29 +261,12 @@ async function readFrozenFile(input: {
   requestState: GitLabRepositoryRequestState
   signal?: AbortSignal
 }): Promise<GitLabRepositoryToolOutput> {
-  const requestBudget = repositoryFileRequestBoundary(input.identity, MAX_FILE_BLOB_BYTES + 1)
   let raw
   try {
-    raw = await input.client.getRepositoryFileRaw(
-      input.target.projectId,
-      input.request.path,
-      input.target.headSha,
-      MAX_FILE_BLOB_BYTES + 1,
-      {
-        signal: input.signal,
-        requestGuard: input.requestGuard,
-        beforeRequest: requestBudget.beforeRequest,
-      },
-    )
+    raw = await readRepositoryBlob({ ...input, path: input.request.path, maxBytes: MAX_FILE_BLOB_BYTES + 1 })
   } catch (error) {
     return failure('read_file', repositoryApiDiagnostic('read_file', error, input.requestState, input.identity, input.signal))
   }
-  const settlementFailure = settleRepositoryFileRequest(
-    input.identity,
-    requestBudget.reservedBytes(),
-    raw.content.byteLength,
-  )
-  if (settlementFailure) return failure('read_file', settlementFailure)
   if (raw.truncated || raw.content.byteLength > MAX_FILE_BLOB_BYTES) {
     return failure('read_file', 'repository_file_too_large')
   }
@@ -264,6 +308,7 @@ async function readFrozenFile(input: {
 async function searchFrozenRepository(input: {
   identity: ReviewRunIdentity
   client: GitLabApiClient
+  cache: FrozenFileCache
   target: GitLabRepositoryTarget
   run: ReviewRunRecord
   request: Extract<GitLabRepositorySessionRequest, { action: 'search_text' }>
@@ -301,29 +346,12 @@ async function searchFrozenRepository(input: {
     }
     const remainingBytes = MAX_SEARCH_SOURCE_BYTES - inspectedBytes
     const maxBytes = Math.min(MAX_SEARCH_FILE_BYTES, remainingBytes)
-    const requestBudget = repositoryFileRequestBoundary(input.identity, maxBytes + 1)
     let raw
     try {
-      raw = await input.client.getRepositoryFileRaw(
-        input.target.projectId,
-        entry.path,
-        input.target.headSha,
-        maxBytes + 1,
-        {
-          signal: input.signal,
-          requestGuard: input.requestGuard,
-          beforeRequest: requestBudget.beforeRequest,
-        },
-      )
+      raw = await readRepositoryBlob({ ...input, path: entry.path, maxBytes: maxBytes + 1 })
     } catch (error) {
       return failure('search_text', repositoryApiDiagnostic('search_text', error, input.requestState, input.identity, input.signal))
     }
-    const settlementFailure = settleRepositoryFileRequest(
-      input.identity,
-      requestBudget.reservedBytes(),
-      raw.content.byteLength,
-    )
-    if (settlementFailure) return failure('search_text', settlementFailure)
 
     let content = raw.content
     if (content.byteLength > maxBytes) content = content.slice(0, maxBytes)

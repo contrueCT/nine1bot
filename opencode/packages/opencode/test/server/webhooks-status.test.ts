@@ -402,6 +402,83 @@ describe("webhook status URL selection", () => {
       .toBe("gitlab_review_runtime_finished_failed")
   })
 
+  test.each([false, true])("retries invalid output once in the bound session (corrected=%s)", async (corrected) => {
+    const directory = await mkdtemp(join(tmpdir(), "nine1bot-output-retry-"))
+    const previousConfig = process.env.NINE1BOT_CONFIG_PATH
+    const previousSecrets = process.env.NINE1BOT_PLATFORM_SECRETS_PATH
+    const previousFetch = globalThis.fetch
+    let posts = 0
+    globalThis.fetch = (async (_url, init) => {
+      if (init?.method === "POST") { posts++; return Response.json({ id: 123 }) }
+      return Response.json({ sha: "a".repeat(40), diff_refs: { head_sha: "a".repeat(40), base_sha: "b".repeat(40), start_sha: "b".repeat(40) }, changes: [] })
+    }) as typeof fetch
+    const configPath = join(directory, "config.json")
+    await writeFile(configPath, JSON.stringify({ platforms: corrected ? { gitlab: { enabled: true, settings: {
+      "review.enabled": true, "review.dryRun": false, "review.baseUrl": "https://gitlab.example.com",
+      "review.tokenSecretRef": { provider: "nine1bot-local", key: "test-token" },
+    } } } : {} }))
+    process.env.NINE1BOT_CONFIG_PATH = configPath
+    process.env.NINE1BOT_PLATFORM_SECRETS_PATH = join(directory, "secrets.json")
+    await writeFile(process.env.NINE1BOT_PLATFORM_SECRETS_PATH, JSON.stringify({ secrets: { "test-token": "test-only-token" } }))
+    ReviewRunStore.setPathForTesting(join(directory, "review-runs.json"))
+    ReviewRunStore.clearForTesting()
+    const run = ReviewRunStore.create({
+      platform: "gitlab", status: "running",
+      trigger: { host: "gitlab.example.com", projectId: 3, objectType: "mr", objectIid: 4, headSha: "a".repeat(40) },
+    })
+    const inputs: any[] = []
+    const reviewContext = {
+      project: { nine1botProjectID: "test-project" },
+      diff: { files: [], skipped: [], blocked: false, diffRefs: { headSha: "a".repeat(40), baseSha: "b".repeat(40), startSha: "b".repeat(40) }, stats: { fileCount: 0, includedFileCount: 0, skippedFileCount: 0, includedBytes: 0, truncated: false } },
+      contextBlocks: [],
+    }
+    ReviewRunStore.update(run.id, { context: reviewContext })
+    const validOutput = ['```json', 'GITLAB_REVIEW_RESULT:', JSON.stringify({ stage: "closed", status: "ok", summary: "Verified diff", findings: [], nextActions: [] }), '```'].join("\n")
+    try {
+      await startGitLabReviewRuntimeRun({
+        runId: run.id, idempotencyKey: "output-retry", trigger: run.trigger,
+        context: {
+          project: { nine1botProjectID: "test-project" },
+          diff: { files: [], skipped: [], blocked: false, stats: { fileCount: 0, includedFileCount: 0, skippedFileCount: 0, includedBytes: 0, truncated: false } },
+          contextBlocks: [],
+        },
+      } as any, directory, {
+        platforms: {},
+        runner: async (input) => {
+          inputs.push(input)
+          expect(inputs.length).toBeLessThanOrEqual(2)
+          await input.onSessionCreated?.({ sessionID: "session-output-retry" })
+          await input.onRuntimeOutput?.({ kind: "part", sessionID: "session-output-retry", payload: {}, text: validOutput })
+          expect(posts).toBe(0)
+          await input.onRuntimeOutput?.({ kind: "part", sessionID: "session-output-retry", payload: {}, text: inputs.length === 2 && corrected ? validOutput : validOutput + "\nExtra prose" })
+          if (inputs.length === 2) {
+            expect(input.existingSessionID).toBe("session-output-retry")
+            expect(Object.values(input.tools!)).toEqual([false, false, false, false])
+            expect(input.parts[0]).toMatchObject({ type: "text", text: expect.stringContaining("only format-correction attempt") })
+            expect(input.timeoutMs).toBeLessThanOrEqual(inputs[0].timeoutMs)
+            await inputs[0].onControllerResponse({ accepted: false })
+            await inputs[0].onRuntimeOutput({ kind: "part", text: "late invalid output" })
+            await inputs[0].onFinished({ status: "failed", error: "late error" })
+            expect(ReviewRunStore.get(run.id)?.status).toBe("running")
+          }
+          await input.onFinished?.({ status: "succeeded" })
+          return { accepted: true, sessionID: "session-output-retry", status: 202, response: {} } as any
+        },
+      })
+      expect(inputs).toHaveLength(2)
+      expect(ReviewRunStore.get(run.id)).toMatchObject({ status: corrected ? "succeeded" : "failed", sessionId: "session-output-retry", generation: run.generation })
+      if (!corrected) expect(ReviewRunStore.get(run.id)?.error).toBe("gitlab_review_result_missing")
+      expect(posts).toBe(corrected ? 1 : 0)
+    } finally {
+      globalThis.fetch = previousFetch
+      if (previousSecrets === undefined) delete process.env.NINE1BOT_PLATFORM_SECRETS_PATH
+      else process.env.NINE1BOT_PLATFORM_SECRETS_PATH = previousSecrets
+      if (previousConfig === undefined) delete process.env.NINE1BOT_CONFIG_PATH
+      else process.env.NINE1BOT_CONFIG_PATH = previousConfig
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("uses configured local URL when provided", () => {
     expect(webhookLocalOrigin({
       requestOrigin: "http://127.0.0.1:4096",
