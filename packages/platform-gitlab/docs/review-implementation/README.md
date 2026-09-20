@@ -72,7 +72,7 @@
 
 ## 当前交付目标
 
-FOG 综合报告对接的确认边界、联调事实及实施批次见 [FOG 对接计划](./28-fog-report-integration.md)，配置与恢复方式见 [FOG 实现与运维](./29-fog-report-outbox.md)。MR 出站链路已实现，默认关闭；缺少最终 CI 时暂缓发送，不阻断 GitLab 评论。测试服务器已启用并真实投递，目前被接收端项目注册策略拒绝，详见 [真实联调记录](./30-fog-live-integration.md)。
+FOG 综合报告对接的确认边界、联调事实及实施批次见 [FOG 对接计划](./28-fog-report-integration.md)，配置与恢复方式见 [FOG 实现与运维](./29-fog-report-outbox.md)。MR 出站链路已实现，默认关闭；缺少最终 CI 时暂缓发送，不阻断 GitLab 评论。测试服务器已启用，公开地址映射修复后取得真实 FOG 接收回执，详见 [真实联调记录](./30-fog-live-integration.md)。
 
 当前交付包含两条隔离的内部 wrapper 路线：
 

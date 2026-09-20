@@ -45,3 +45,18 @@ FOG 的真实响应为：`项目不存在或未启用: topview-studio/restructur
 接收端配置修复后，通过已认证的 Nine1Bot 管理接口 `POST /webhooks/gitlab/fog-reports/review_mu9anns3_l/retry` 显式重试。保留原始请求体和幂等键，不需要重新触发模型或发布 GitLab 评论。随后查询报告状态，只有 `sent` 且存在有效回执才算接收验收通过。
 
 GitLab MR 自动事件未因本次 FOG 联调而开启。
+
+## 公开地址修复与验收通过
+
+同日确认 FOG 自动注册白名单仅接受公开 GitLab 域名。提交 `ded8540` 已部署到测试服务，并增加独立 `31-fog-public.conf`：API origin 保持 `http://10.21.76.81:8929`，公开 origin 为 `https://gitlab.topviewclub.cn`。原 Token 文件和 FOG 目的地址未改动。
+
+使用真实 GitLab API 核对公开域名的项目 ID、完整路径、MR IID 和 HEAD SHA 后，显式调用运维修复函数。原失败记录和请求体保持不变，新建关联投递 `review_mu9anns3_l:public-url`，使用新的幂等键。仅修改 MR URL、pipeline URL 和幂等键；审查正文、发生时间、CI 和 revision 保持原值，未调用模型、未重复发布 GitLab 评论。
+
+后台首次投递即成功：
+
+- 状态：`sent`，诊断为空，attempts 为 `1`。
+- workItemId：`work_01M2YK36DRDB48FVDDJ2W8J4KV`。
+- reportId：`report_01M2YK36E5G68Y1XNMSDD835BJ`。
+- 原记录仍为 `blocked / fog_http_400`，由 `parentRunId` 保留关联，不再需要重试原记录。
+
+验证：本地及服务器 Linux FOG 专项测试各 59 pass；完整 review/GitLab/CI 合约回归 484 pass、0 fail；Nine1Bot 类型检查通过。至此该 MR 的真实 FOG 接收验收通过。
