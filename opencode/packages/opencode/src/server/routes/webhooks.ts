@@ -33,6 +33,7 @@ import { buildGitLabReviewRuntimePrompt } from "../../../../../../packages/nine1
 import { ReviewRunStore, type ReviewRunRecord } from "../../../../../../packages/nine1bot/src/review/run-store"
 import { readPlatformManagerConfig } from "../../../../../../packages/nine1bot/src/platform/config-store"
 import { FilePlatformSecretStore } from "../../../../../../packages/nine1bot/src/platform/secrets"
+import { fogDeliveryStatus, retryFogDelivery } from "../../../../../../packages/nine1bot/src/review/fog-runtime"
 import { registerBuiltinPlatformAdapters } from "../../../../../../packages/nine1bot/src/platform/builtin"
 import {
   GITLAB_REVIEW_PUBLICATION_INPUT_TOO_LARGE,
@@ -1020,6 +1021,19 @@ export const WebhookPublicRoutes = lazy(() => createWebhookPublicRoutes())
 
 export const WebhookRoutes = lazy(() =>
   new Hono()
+    .get("/gitlab/fog-reports", validator("query", z.object({
+      limit: z.coerce.number().int().min(1).max(100).default(100),
+      offset: z.coerce.number().int().min(0).max(10000).default(0),
+    })), (c) => {
+      const { limit, offset } = c.req.valid("query")
+      return c.json(fogDeliveryStatus(limit, offset))
+    })
+    .post("/gitlab/fog-reports/:runId/retry", validator("param", z.object({ runId: z.string().min(1).max(128) })), (c) => {
+      try {
+        const retried = retryFogDelivery(c.req.valid("param").runId)
+        return c.json({ retried }, retried ? 202 : 409)
+      } catch { return c.json({ error: "fog_store_unavailable" }, 503) }
+    })
     .get(
       "/status",
       describeRoute({

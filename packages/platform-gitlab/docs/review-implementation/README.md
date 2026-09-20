@@ -72,6 +72,8 @@
 
 ## 当前交付目标
 
+FOG 综合报告对接的确认边界、联调事实及实施批次见 [FOG 对接计划](./28-fog-report-integration.md)，配置与恢复方式见 [FOG 实现与运维](./29-fog-report-outbox.md)。MR 出站链路已实现，默认关闭；缺少最终 CI 时暂缓发送，不阻断 GitLab 评论。真实 FOG 接收仍待 Token 和部署验证。
+
 当前交付包含两条隔离的内部 wrapper 路线：
 
 ```text

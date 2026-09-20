@@ -32,6 +32,7 @@ import {
   type GitLabReviewTrigger,
 } from '@nine1bot/platform-gitlab/review'
 import { ReviewRunStore, type ReviewRunIdentity, type ReviewRunRecord } from './run-store'
+import { captureFogReview, confirmFogPublication } from './fog-runtime'
 import type { PlatformManagerConfig } from '../platform/manager'
 import type { PlatformSecretAccess, PlatformSecretRef } from '@nine1bot/platform-protocol'
 
@@ -856,6 +857,7 @@ export async function publishGitLabReviewRunResult(input: {
     }
   }
 
+  const fogWarning = captureFogReview({ run, trigger, context, settings, result: parsed, payloadHash })
   let published: Awaited<ReturnType<typeof publishGitLabReviewResult>>
   try {
     assertPublicationClaimCurrent(claimIdentity)
@@ -909,6 +911,7 @@ export async function publishGitLabReviewRunResult(input: {
       error: message,
     }
   }
+  if (fogWarning) published.warnings.push(fogWarning)
   if (!ReviewRunStore.completePublication({
     ...claimIdentity,
     status: reviewRunStatusForStageResult(parsed.status),
@@ -916,6 +919,7 @@ export async function publishGitLabReviewRunResult(input: {
   })) {
     return { published: false, runId: input.runId, error: 'review_run_publication_finalize_failed' }
   }
+  confirmFogPublication(run.id, run.generation, payloadHash)
 
   return {
     published: true,

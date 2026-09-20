@@ -27,6 +27,8 @@ import {
   validateGitLabDedicatedWebhookSecret,
 } from './gitlab-controller'
 import { ReviewRunStore, type CreateReviewRunInput } from './run-store'
+import { stopFogDelivery } from './fog-runtime'
+import { FogOutbox } from './fog-store'
 import type { PlatformSecretAccess, PlatformSecretRef } from '@nine1bot/platform-protocol'
 
 const memorySecrets: PlatformSecretAccess = {
@@ -453,6 +455,50 @@ describe('GitLab review controller', () => {
       ].join('\n'),
     ]) {
       expect(extractGitLabReviewStageResultFromRuntimeText(text)).toBeUndefined()
+    }
+  })
+
+  test.each([false, true])('publishes GitLab independently of FOG queue failure=%s', async (queueFailure) => {
+    const oldEnabled = process.env.FOG_REPORTS_ENABLED
+    const oldPath = process.env.FOG_OUTBOX_PATH
+    const oldUrl = process.env.FOG_AGENT_REPORT_URL
+    const directory = await mkdtemp(join(tmpdir(), 'fog-publication-'))
+    tempDirs.push(directory)
+    const path = queueFailure ? directory : join(directory, 'outbox.sqlite')
+    await stopFogDelivery()
+    process.env.FOG_REPORTS_ENABLED = 'true'
+    process.env.FOG_AGENT_REPORT_URL = 'https://fog.example.com/api/v1/agent-reports'
+    process.env.FOG_OUTBOX_PATH = path
+    try {
+      const headSha = 'a'.repeat(40)
+      const run = createPublishableReviewRun({ headSha })
+      let posts = 0
+      const result = await publishGitLabReviewRunResult({
+        runId: run.id,
+        stageResult: { stage: 'closed', status: 'ok', summary: 'Done', findings: [] },
+        platforms: publishingPlatforms(), secrets: liveSecrets,
+        fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+          if (init?.method === 'POST') { posts++; return Response.json({ id: 1 }) }
+          return Response.json({ diff_refs: { base_sha: 'base', start_sha: 'start', head_sha: headSha } })
+        }) as unknown as typeof fetch,
+      })
+      expect(result.published).toBe(true)
+      expect(posts).toBe(1)
+      expect(ReviewRunStore.get(run.id)?.publishedAt).toBeDefined()
+      if (queueFailure) expect(result.warnings?.join(' ')).toContain('fog_capture_failed')
+      else {
+        const queued = new FogOutbox(path)
+        try {
+          expect(queued.get(run.id)).toMatchObject({ published: true, state: 'waiting_publication', attempts: 0 })
+          expect(queued.get(run.id)?.seed.result.summary).toBe('Done')
+        } finally { queued.close() }
+      }
+    } finally {
+      await stopFogDelivery()
+      for (const [key, value] of Object.entries({ FOG_REPORTS_ENABLED: oldEnabled, FOG_OUTBOX_PATH: oldPath, FOG_AGENT_REPORT_URL: oldUrl })) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
     }
   })
 

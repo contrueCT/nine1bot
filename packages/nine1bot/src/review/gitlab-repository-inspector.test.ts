@@ -158,7 +158,7 @@ describe('GitLab review repository inspector', () => {
   test('rechecks abort and credentials before serving a cached frozen file', async () => {
     createReviewRun('session-cache-auth')
     let downloads = 0
-    const fetcher = (async () => { downloads++; return new Response('cached\n') }) as typeof fetch
+    const fetcher = (async () => { downloads++; return new Response('cached\n') }) as unknown as typeof fetch
     const input = { sessionId: 'session-cache-auth', request: { action: 'read_file', path: 'src/a.ts' } as const, platforms, secrets, fetch: fetcher }
     expect(await inspectGitLabRepositoryForSession(input)).toMatchObject({ ok: true })
     expect(await inspectGitLabRepositoryForSession({ ...input, signal: AbortSignal.abort() })).toMatchObject({ ok: false })

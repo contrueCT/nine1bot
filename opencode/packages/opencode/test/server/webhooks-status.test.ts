@@ -42,6 +42,23 @@ import {
 } from "../../src/server/routes/webhooks"
 
 describe("public GitLab webhook request limits", () => {
+  test("FOG status and retry are management-only routes", async () => {
+    const previous = process.env.FOG_REPORTS_ENABLED
+    process.env.FOG_REPORTS_ENABLED = "false"
+    try {
+      expect((await WebhookPublicRoutes().request("http://localhost/gitlab/fog-reports")).status).toBe(404)
+      expect((await WebhookPublicRoutes().request("http://localhost/gitlab/fog-reports/run-1/retry", { method: "POST" })).status).toBe(404)
+      const status = await WebhookRoutes().request("http://localhost/gitlab/fog-reports")
+      expect(status.status).toBe(200)
+      expect(await status.json()).toMatchObject({ enabled: false, configured: false, reports: [] })
+      expect((await WebhookRoutes().request("http://localhost/gitlab/fog-reports?limit=1000")).status).toBe(400)
+      expect((await WebhookRoutes().request("http://localhost/gitlab/fog-reports/run-1/retry", { method: "POST" })).status).toBe(409)
+    } finally {
+      if (previous === undefined) delete process.env.FOG_REPORTS_ENABLED
+      else process.env.FOG_REPORTS_ENABLED = previous
+    }
+  })
+
   test("failure notification recovery is a management route and reconciles commit comments", async () => {
     const dir = await mkdtemp(join(tmpdir(), "failure-recovery-route-"))
     const previousConfig = process.env.NINE1BOT_CONFIG_PATH
