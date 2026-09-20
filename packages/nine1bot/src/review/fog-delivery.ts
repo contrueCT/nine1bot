@@ -29,7 +29,7 @@ export class FogDiagnostic extends Error {
   constructor(readonly diagnostic: string, readonly state: FogState = 'blocked') { super(diagnostic) }
 }
 
-export type FogEvidence = { project: GitLabProjectSummary; mr: GitLabMergeRequestMetadata; ci: GitLabCiListResult }
+export type FogEvidence = { project: GitLabProjectSummary; mr: GitLabMergeRequestMetadata; ci: GitLabCiListResult; publicBaseUrl?: string }
 export type FogDeliveryDependencies = {
   config: () => FogConfig
   publication: (seed: FogSeed) => 'confirmed' | 'pending' | 'unavailable'

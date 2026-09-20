@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { GitLabApiClient } from '@nine1bot/platform-gitlab/review'
 import { buildFogReport, fogResultSnapshot, type FogSeed } from './fog-report'
 import { FogOutbox } from './fog-store'
+import { fogPublicBase, verifyFogPublicBase } from './fog-public-url'
 import { FogDeliveryWorker, FogDiagnostic, readFogConfig, type FogDeliveryDependencies, type FogEvidence } from './fog-delivery'
 
 const sha = 'a'.repeat(40)
@@ -43,6 +44,36 @@ beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'nine1bot-fog-')) })
 afterEach(() => { for (const store of stores.splice(0)) store.close(); rmSync(directory, { recursive: true, force: true }) })
 
 describe('FOG protocol', () => {
+  test('verifies the configured public project, MR and exact HEAD before mapping', async () => {
+    const env = { FOG_GITLAB_API_BASE_URL: seed().baseUrl, FOG_GITLAB_PUBLIC_BASE_URL: 'https://public.example.com' }
+    const data = evidence()
+    const fetcher = (async (url: any, init: any) => {
+      expect(new URL(String(url)).origin).toBe('https://public.example.com')
+      expect(init.redirect).toBe('manual')
+      return Response.json(String(url).includes('merge_requests') ? data.mr : data.project)
+    }) as typeof fetch
+    expect(await verifyFogPublicBase(seed(), 'secret', new AbortController().signal, env, fetcher)).toBe(env.FOG_GITLAB_PUBLIC_BASE_URL)
+    data.mr.diff_refs!.head_sha = 'f'.repeat(40)
+    await expect(verifyFogPublicBase(seed(), 'secret', new AbortController().signal, env, fetcher)).rejects.toThrow('fog_public_identity_mismatch')
+    data.mr = evidence().mr; data.project.path_with_namespace = 'other/project'
+    await expect(verifyFogPublicBase(seed(), 'secret', new AbortController().signal, env, fetcher)).rejects.toThrow('fog_public_identity_mismatch')
+  })
+  test('public URLs do not alter API identity or CI evidence', () => {
+    const original = report()
+    const mapped = report({ idempotencyKey: original.idempotencyKey, publicBaseUrl: 'https://public.example.com' })
+    expect(mapped.source.url).toBe('https://public.example.com/studio/backend/-/merge_requests/4')
+    expect(mapped.source.pipelineUrl).toBe('https://public.example.com/studio/backend/-/pipelines/448')
+    expect({ ...mapped, source: original.source }).toEqual(original)
+  })
+  test('public mapping requires an explicit exact API binding and HTTPS origin', () => {
+    expect(fogPublicBase(seed(), {})).toBeUndefined()
+    const env = { FOG_GITLAB_API_BASE_URL: seed().baseUrl, FOG_GITLAB_PUBLIC_BASE_URL: 'https://public.example.com/' }
+    expect(fogPublicBase(seed(), env)).toBe('https://public.example.com')
+    expect(() => fogPublicBase(seed(), { ...env, FOG_GITLAB_API_BASE_URL: 'https://other.example.com' })).toThrow()
+    for (const value of ['http://public.example.com', 'https://user:pass@public.example.com', 'https://public.example.com/path', 'https://public.example.com/?x=1', 'https://public.example.com/#x', '']) {
+      expect(() => fogPublicBase(seed(), { ...env, FOG_GITLAB_PUBLIC_BASE_URL: value })).toThrow()
+    }
+  })
   test('maps MR identity, actual title, Beijing time and executed jobs', () => {
     const value = report()
     expect(value).toMatchObject({
@@ -150,6 +181,24 @@ describe('FOG configuration and metadata', () => {
 })
 
 describe('FOG durable outbox', () => {
+  test('URL correction preserves rejected report and creates a single linked immutable delivery', () => {
+    const store = open()
+    const original = store.enqueue(seed(), endpoint)
+    const claim = store.claim(Date.now())!
+    Object.assign(original, { published: true, state: 'blocked', diagnostic: 'fog_http_400', payload: JSON.stringify(report({ idempotencyKey: original.idempotencyKey })), attempts: 1 })
+    store.save(original, claim.lease)
+    const before = JSON.stringify(store.get(original.runId))
+    const child = store.correctPublicUrls(original.runId, 'https://public.example.com')
+    expect(JSON.stringify(store.get(original.runId))).toBe(before)
+    expect(child.parentRunId).toBe(original.runId)
+    expect(child.seed.runId).toBe(original.runId)
+    expect(child.idempotencyKey).not.toBe(original.idempotencyKey)
+    expect(JSON.parse(child.payload!).source.url).toStartWith('https://public.example.com/')
+    expect(store.correctPublicUrls(original.runId, 'https://public.example.com').idempotencyKey).toBe(child.idempotencyKey)
+    expect(store.list()).toHaveLength(2)
+    expect(() => store.correctPublicUrls(child.runId, 'https://other.example.com')).toThrow()
+    expect(() => store.correctPublicUrls('missing', 'https://public.example.com')).toThrow()
+  })
   test('deduplicates a run across store instances and rejects a conflicting attempt', () => {
     const first = open().enqueue(seed(), endpoint)
     expect(open().enqueue(seed(), endpoint).idempotencyKey).toBe(first.idempotencyKey)

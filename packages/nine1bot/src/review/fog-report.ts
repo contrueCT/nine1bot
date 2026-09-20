@@ -85,6 +85,7 @@ export function buildFogReport(input: {
   ci: GitLabCiListResult
   now: number
   secrets?: string[]
+  publicBaseUrl?: string
 }): FogReport {
   const { seed, project, mr, ci } = input
   const pipeline = ci.pipeline
@@ -110,7 +111,7 @@ export function buildFogReport(input: {
     : seed.result.status
   const reportStatus = reviewStatus === 'completed' && (pipeline.status === 'failed' || uncovered.length)
     ? 'needs_attention' : reviewStatus
-  const projectUrl = `${seed.baseUrl.replace(/\/$/, '')}/${project.path_with_namespace.split('/').map(encodeURIComponent).join('/')}`
+  const projectUrl = `${(input.publicBaseUrl ?? seed.baseUrl).replace(/\/$/, '')}/${project.path_with_namespace.split('/').map(encodeURIComponent).join('/')}`
   const evidence = `GitLab pipeline #${pipeline.id}: ${pipeline.status}; SHA ${pipeline.sha}. Job statuses describe execution, not unobserved test cases.`
   const severity = { blocker: 'high', critical: 'high', major: 'medium', minor: 'low', info: 'info' } as const
   const report = FogReportSchema.parse({

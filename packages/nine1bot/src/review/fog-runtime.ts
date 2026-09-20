@@ -11,6 +11,7 @@ import { ReviewRunStore, type ReviewRunRecord } from './run-store'
 import { fogResultSnapshot, type FogSeed } from './fog-report'
 import { FogDeliveryWorker, FogDiagnostic, readFogConfig } from './fog-delivery'
 import { FogOutbox } from './fog-store'
+import { verifyFogPublicBase } from './fog-public-url'
 
 let outbox: FogOutbox | undefined
 let worker: FogDeliveryWorker | undefined
@@ -83,7 +84,7 @@ function deliveryWorker() {
     },
     authorize: authorizedClient,
     async evidence(seed, signal) {
-      const { client } = await authorizedClient(seed)
+      const { client, token } = await authorizedClient(seed)
       const project = await client.getProject(seed.projectId, { signal })
       const mr = await client.getMergeRequest(seed.projectId, seed.mrIid, { signal })
       if (String(project.id) !== String(seed.projectId) || String(mr.project_id) !== String(seed.projectId)
@@ -92,7 +93,8 @@ function deliveryWorker() {
         throw new FogDiagnostic('fog_source_identity_mismatch')
       }
       const ci = await inspectGitLabCi({ client, projectId: seed.projectId, mrIid: seed.mrIid, headSha: seed.headSha, signal })
-      return { project, mr, ci }
+      const publicBaseUrl = await verifyFogPublicBase({ ...seed, projectPath: project.path_with_namespace }, token, signal)
+      return { project, mr, ci, publicBaseUrl }
     },
   })
 }
@@ -123,7 +125,7 @@ export function fogDeliveryStatus(limit = 100, offset = 0) {
   if (!config.enabled) return { ...summary, reports: [] }
   try {
     return { ...summary, reports: store().list(limit, offset).map((record) => ({
-      runId: record.runId, idempotencyKey: record.idempotencyKey, state: record.state,
+      runId: record.runId, parentRunId: record.parentRunId, idempotencyKey: record.idempotencyKey, state: record.state,
       diagnostic: record.diagnostic, createdAt: record.createdAt, updatedAt: record.updatedAt,
       nextAt: record.nextAt, attempts: record.attempts, receipt: record.receipt,
     })) }
@@ -135,4 +137,16 @@ export function retryFogDelivery(runId: string) {
   const retried = store().retry(runId)
   startFogDelivery()
   return retried
+}
+
+// Explicit operator repair only, never an automatic response to a rejected report.
+export async function correctFogPublicUrls(runId: string) {
+  const config = readFogConfig()
+  if (!config.enabled || !config.endpoint || !config.token) throw new Error('fog_not_configured')
+  const record = store().get(runId)
+  if (!record || record.destination !== config.endpoint) throw new Error('fog_correction_unavailable')
+  const { token } = await authorizedClient(record.seed)
+  const publicBase = await verifyFogPublicBase(record.seed, token, AbortSignal.timeout(30_000))
+  if (!publicBase) throw new Error('fog_public_mapping_missing')
+  return store().correctPublicUrls(runId, publicBase).runId
 }

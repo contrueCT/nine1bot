@@ -44,6 +44,14 @@ FOG Token 尚未提供时，可以完成本地测试。启用但缺少 Token 时
 
 ## 管理接口
 
+### GitLab 公开地址映射
+
+可同时设置 `FOG_GITLAB_API_BASE_URL=http://10.21.76.81:8929` 与 `FOG_GITLAB_PUBLIC_BASE_URL=https://gitlab.topviewclub.cn`。两者必须为不含凭证、路径、查询参数或 fragment 的 origin，公开地址必须为 HTTPS，API origin 必须与报告来源配置完全一致。未配置时保持原行为。
+
+公开 origin 是管理员显式信任的凭证目标。生成新报告前，使用禁止重定向的 GitLab 客户端核对公开实例的项目 ID、完整路径、MR IID 和 HEAD SHA，失败不降级生成公开链接。API 仍使用内网地址；报告 MR 和 pipeline 链接采用公开地址。
+
+已冻结的报告不随配置变化改写。针对已确认 HTTP 400、已发布且无活动租约的原始报告，可在服务环境下调用 `correctFogPublicUrls(runId)` 显式修复：重新核对公开身份，保留旧记录，创建 `parentRunId` 关联的新投递，使用新幂等键，只修改两个展示 URL 与幂等键。重复调用返回同一子记录；不重新 review，不自动修改已接受或结果不确定的报告。该能力仅供服务器运维调用，未新增公开 HTTP 接口。
+
 以下路径挂在现有管理路由，使用 Nine1Bot 的管理访问认证，不使用 FOG Bearer Token，也不是公开 webhook 路由。
 
 ```text

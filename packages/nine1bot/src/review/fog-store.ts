@@ -2,11 +2,12 @@ import { Database } from 'bun:sqlite'
 import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { FOG_MAX_BYTES, type FogSeed } from './fog-report'
+import { FOG_MAX_BYTES, FogReportSchema, type FogSeed } from './fog-report'
 
 export type FogState = 'waiting_publication' | 'waiting_ci' | 'waiting_config' | 'ready' | 'retry' | 'blocked' | 'sent'
 export type FogRecord = {
   runId: string
+  parentRunId?: string
   idempotencyKey: string
   seed: FogSeed
   destination: string
@@ -120,4 +121,39 @@ export class FogOutbox {
   }
 
   close() { this.db.close() }
+
+  correctPublicUrls(runId: string, publicBase: string) {
+    return this.db.transaction(() => {
+      const original = this.get(runId)
+      const locked = this.db.query<{ lease_until: number }, [string]>('SELECT lease_until FROM fog_reports WHERE run_id=?').get(runId)
+      if (!original || original.state !== 'blocked' || original.diagnostic !== 'fog_http_400'
+        || !original.published || !original.payload || original.parentRunId || !locked || locked.lease_until > Date.now()) throw new Error('fog_correction_unavailable')
+      const base = new URL(publicBase)
+      if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash || base.pathname !== '/') throw new Error('fog_public_mapping_invalid')
+      const childId = `${runId}:public-url`
+      const existing = this.get(childId)
+      if (existing) return existing
+      const count = this.db.query<{ count: number }, []>('SELECT count(*) AS count FROM fog_reports').get()!.count
+      if (count >= this.limit) throw new Error('fog_outbox_full')
+      const payload = FogReportSchema.parse(JSON.parse(original.payload))
+      for (const key of ['url', 'pipelineUrl'] as const) {
+        const value = payload.source[key]
+        if (!value) continue
+        const url = new URL(value)
+        if (url.origin !== new URL(original.seed.baseUrl).origin) throw new Error('fog_correction_source_mismatch')
+        payload.source[key] = `${base.origin}${url.pathname}`
+      }
+      if (payload.source.url === JSON.parse(original.payload).source.url) throw new Error('fog_correction_unchanged')
+      payload.idempotencyKey = randomUUID()
+      const record: FogRecord = { ...original, runId: childId, parentRunId: runId,
+        idempotencyKey: payload.idempotencyKey, payload: JSON.stringify(FogReportSchema.parse(payload)),
+        state: 'ready', diagnostic: '', attempts: 0, receipt: undefined,
+        createdAt: Date.now(), updatedAt: Date.now(), nextAt: Date.now() }
+      if (Buffer.byteLength(JSON.stringify(record)) > 2 * FOG_MAX_BYTES + 16_384
+        || Buffer.byteLength(record.payload!) > FOG_MAX_BYTES) throw new Error('fog_record_too_large')
+      this.db.query('INSERT INTO fog_reports(run_id,data,state,next_at) VALUES (?,?,?,?)')
+        .run(childId, JSON.stringify(record), record.state, record.nextAt)
+      return record
+    }).immediate()
+  }
 }
