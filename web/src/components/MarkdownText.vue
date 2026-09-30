@@ -15,13 +15,26 @@ const props = defineProps<{ text: string; streaming?: boolean }>()
 
 const host = ref<HTMLDivElement>()
 const renderer = new marked.Renderer()
-renderer.code = ({ text, lang }) => `<pre><button type="button" class="copy-code" aria-label="复制代码">复制</button><code${lang ? ` class="language-${escapeHtml(lang.split(/\s/)[0])}"` : ''}>${escapeHtml(text)}</code></pre>`
+renderer.code = ({ text, lang }) => {
+  const language = lang ? escapeHtml(lang.split(/\s/)[0]) : ''
+  return `<pre${language ? ` data-lang="${language}"` : ''}><button type="button" class="copy-code" aria-label="复制代码">复制</button><code${language ? ` class="language-${language}"` : ''}>${escapeHtml(text)}</code></pre>`
+}
+
+/* 复制结果停留一会儿再复原，避免按钮一直写着「已复制」 */
+const COPY_FEEDBACK_MS = 1600
 
 async function handleClick(event: MouseEvent) {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.copy-code')
   const code = button?.closest('pre')?.querySelector('code')
   if (!button || !code) return
-  button.textContent = await copyText(code.textContent || '') ? '已复制' : '复制失败'
+  const copied = await copyText(code.textContent || '')
+  button.textContent = copied ? '已复制' : '复制失败'
+  button.classList.toggle('copied', copied)
+  window.setTimeout(() => {
+    if (!button.isConnected) return
+    button.textContent = '复制'
+    button.classList.remove('copied')
+  }, COPY_FEEDBACK_MS)
 }
 
 const renderBlocks = createMarkdownBlockRenderer({

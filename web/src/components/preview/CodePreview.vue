@@ -116,7 +116,6 @@ const lineNumbers = computed(() => {
   font-size: var(--text-xs);
   font-weight: 600;
   border-radius: var(--radius-sm);
-  text-transform: uppercase;
 }
 
 .line-count {
@@ -176,7 +175,7 @@ const lineNumbers = computed(() => {
   flex: 1;
   display: flex;
   overflow: auto;
-  font-family: var(--font-mono, 'JetBrains Mono', 'Fira Code', monospace);
+  font-family: var(--font-mono);
   font-size: var(--text-13);
   line-height: 1.5;
 }

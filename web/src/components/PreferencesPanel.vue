@@ -331,8 +331,6 @@ onMounted(() => {
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 .section-title .count {

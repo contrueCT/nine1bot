@@ -196,8 +196,6 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--warning);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 .permission-content {
@@ -256,7 +254,7 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
 
 .btn-danger:hover:not(:disabled) {
   background: var(--error);
-  color: white;
+  color: var(--solid-fg);
 }
 
 .permission-responded {
@@ -294,7 +292,7 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
   gap: var(--space-xs);
   margin-top: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(239, 68, 68, 0.1);
+  background: var(--error-subtle);
   border: 1px solid var(--error);
   border-radius: var(--radius-sm);
   color: var(--error);

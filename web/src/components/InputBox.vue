@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { Send, Square, Paperclip, X, FileText, ClipboardList, Plus, ChevronDown, Check, Server, Zap, Minimize2, ListTodo } from 'lucide-vue-next'
+import { Send, Square, Paperclip, X, FileText, ClipboardList, Plus, ChevronDown, Check, Server, Zap, Minimize2, ListTodo, ScrollText } from 'lucide-vue-next'
 import { getComposerDraft, beginSend, finishSend, restoreAttempt, type ComposerDraft, type SendAttempt } from '../composables/composer-drafts'
 import type { Provider } from '../api/client'
 
@@ -100,6 +100,19 @@ function togglePlanMode() {
   showPlusMenu.value = false
 }
 
+/* 起手任务只填进输入框、不直接发送：用户通常还要补一句具体要求 */
+function fillDraft(text: string) {
+  input.value = text
+  void nextTick(() => {
+    const el = textareaRef.value
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  })
+}
+
+defineExpose({ fillDraft })
+
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     if (e.isComposing || e.keyCode === 229) return
@@ -109,11 +122,29 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 function adjustHeight() {
-  if (textareaRef.value) {
-    textareaRef.value.style.height = 'auto'
-    textareaRef.value.style.height = Math.min(textareaRef.value.scrollHeight, 200) + 'px'
-  }
+  const el = textareaRef.value
+  if (!el) return
+  el.style.height = 'auto'
+  // 空输入不量 scrollHeight：挂载瞬间布局很窄时占位文字会折成很多行，
+  // 框被撑到 200px 后，直到下次输入都回不来
+  if (!el.value) return
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px'
 }
+
+// 宽度变化（折叠侧栏、打开右侧面板、窗口缩放）会改变折行，需要重新量高
+let textareaResizeObserver: ResizeObserver | undefined
+let lastTextareaWidth = 0
+watch(textareaRef, (el) => {
+  textareaResizeObserver?.disconnect()
+  if (!el || typeof ResizeObserver === 'undefined') return
+  textareaResizeObserver = new ResizeObserver(([entry]) => {
+    const width = Math.round(entry.contentRect.width)
+    if (width === lastTextareaWidth) return
+    lastTextareaWidth = width
+    adjustHeight()
+  })
+  textareaResizeObserver.observe(el)
+}, { flush: 'post' })
 
 watch(input, () => nextTick(adjustHeight), { flush: 'post' })
 watch(() => props.draftKey, () => {
@@ -198,6 +229,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  textareaResizeObserver?.disconnect()
 })
 
 // Format file size
@@ -253,7 +285,7 @@ function formatSize(bytes: number): string {
           </div>
           <span v-if="file.status === 'selected'" class="attachment-status processing">队列中</span>
           <span v-else-if="file.status === 'uploading'" class="attachment-status processing">{{ file.progress }}%</span>
-          <span v-else-if="file.status === 'error'" class="attachment-status error">!</span>
+          <span v-else-if="file.status === 'error'" class="attachment-status error">上传失败</span>
           <button @click.stop="removeFile(file.id)" class="attachment-remove" title="移除">
             <X :size="14" />
           </button>
@@ -269,14 +301,14 @@ function formatSize(bytes: number): string {
     <!-- Plan Mode 指示器 -->
     <div v-if="isPlanMode" class="plan-mode-indicator">
       <ClipboardList :size="14" />
-      <span>规划模式已启用 - AI 将先制定计划再执行</span>
+      <span>先规划：Nine1Bot 会先列出计划，等你确认后再动手</span>
       <button class="plan-mode-close" @click="isPlanMode = false" title="关闭规划模式">
         <X :size="14" />
       </button>
     </div>
 
     <!-- Input Box -->
-    <div class="input-glass-wrapper" :class="{ 'plan-mode-active': isPlanMode }">
+    <div class="input-glass-wrapper">
       <!-- Hidden file input -->
       <input
         ref="fileInputRef"
@@ -292,8 +324,9 @@ function formatSize(bytes: number): string {
           ref="textareaRef"
           v-model="input"
           :disabled="disabled && !isStreaming"
-          :placeholder="isStreaming ? '可以继续输入，回复结束后发送…' : '有什么可以帮你的？'"
+          :placeholder="isStreaming ? '可以继续输入，回复结束后发送…' : '描述要做的事，可以拖入文件或粘贴图片'"
           rows="1"
+          aria-label="消息内容"
           @keydown="handleKeydown"
           @paste="handlePaste"
           class="custom-textarea"
@@ -310,6 +343,8 @@ function formatSize(bytes: number): string {
               @click.stop="showPlusMenu = !showPlusMenu"
               :disabled="disabled && !isStreaming"
               title="添加文件和更多功能"
+              aria-label="添加文件和更多功能"
+              :aria-expanded="showPlusMenu"
             >
               <Plus :size="18" />
             </button>
@@ -333,33 +368,41 @@ function formatSize(bytes: number): string {
                 <Minimize2 :size="16" />
                 <span>压缩会话</span>
               </button>
-              <div class="plus-menu-divider"></div>
-              <button class="plus-menu-item" :class="{ active: isPlanMode }" @click="togglePlanMode">
-                <ClipboardList :size="16" />
-                <span>Plan 模式</span>
-                <span v-if="isPlanMode" class="plus-menu-check">
-                  <Check :size="14" />
-                </span>
-              </button>
             </div>
           </div>
 
-          <!-- Plan Button -->
+          <!-- 规划开关：原来藏在 + 菜单里，打开后只能靠输入框变色猜状态 -->
+          <button
+            type="button"
+            class="plan-toggle"
+            :class="{ active: isPlanMode }"
+            :aria-pressed="isPlanMode"
+            :disabled="disabled && !isStreaming"
+            title="先列计划，确认后再执行"
+            @click="togglePlanMode"
+          >
+            <ClipboardList :size="15" />
+            <span>先规划</span>
+          </button>
+
+          <span class="toolbar-divider" aria-hidden="true"></span>
+
           <button
             class="toolbar-btn icon-btn"
             @click="emit('toggle-plan')"
             title="查看计划"
+            aria-label="查看计划"
           >
-            <ClipboardList :size="18" />
+            <ScrollText :size="17" />
           </button>
 
-          <!-- Todo Button -->
           <button
             class="toolbar-btn icon-btn"
             @click="emit('toggle-todo')"
             title="待办列表"
+            aria-label="待办列表"
           >
-            <ListTodo :size="18" />
+            <ListTodo :size="17" />
           </button>
         </div>
 
@@ -409,6 +452,7 @@ function formatSize(bytes: number): string {
             :disabled="(!canSend && !isStreaming) || (disabled && !isStreaming)"
             @click="isStreaming ? emit('abort') : handleSend()"
             :title="isStreaming ? '停止' : '发送'"
+            :aria-label="isStreaming ? '停止生成' : '发送'"
           >
             <Square v-if="isStreaming" :size="16" fill="currentColor" />
             <Send v-else :size="18" />
@@ -418,8 +462,8 @@ function formatSize(bytes: number): string {
     </div>
 
     <div class="input-footer">
-      <div class="input-hint text-xs text-muted">
-        Nine1Bot 可能显示不准确的信息（包括与人相关的内容），请核对后再采用。
+      <div class="input-hint">
+        <kbd>Enter</kbd> 发送，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行。改动文件前请核对结果。
       </div>
     </div>
   </div>
@@ -591,13 +635,8 @@ function formatSize(bytes: number): string {
 }
 
 .input-glass-wrapper:focus-within {
-  border-color: var(--input-border-color-hover);
-  box-shadow: var(--input-shadow), 0 0 0 1px var(--input-border-color-hover);
-}
-
-.input-glass-wrapper.plan-mode-active {
-  border-color: var(--accent);
-  box-shadow: var(--input-shadow), 0 0 0 1px var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.45);
+  box-shadow: var(--input-shadow), 0 0 0 3px var(--accent-subtle);
 }
 
 /* Textarea area */
@@ -612,7 +651,7 @@ function formatSize(bytes: number): string {
   outline: none;
   resize: none;
   color: var(--text-primary);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: var(--text-md);
   font-weight: 400;
   line-height: 1.5;
@@ -709,7 +748,8 @@ function formatSize(bytes: number): string {
   bottom: calc(100% + 8px);
   left: 0;
   min-width: 220px;
-  background: var(--bg-primary);
+  padding: 4px;
+  background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
@@ -733,13 +773,14 @@ function formatSize(bytes: number): string {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 14px;
+  padding: 7px 10px;
   width: 100%;
   border: none;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font-family: var(--font-sans);
-  font-size: var(--text-base);
+  font-size: var(--text-13);
   cursor: pointer;
   transition: background var(--transition-fast);
   text-align: left;
@@ -750,19 +791,52 @@ function formatSize(bytes: number): string {
   color: var(--text-primary);
 }
 
-.plus-menu-item.active {
-  color: var(--accent);
-}
-
-.plus-menu-check {
-  margin-left: auto;
-  color: var(--accent);
-}
-
 .plus-menu-divider {
   height: 1px;
   background: var(--border-subtle);
   margin: 4px 0;
+}
+
+/* 规划开关 */
+.plan-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  margin-left: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-13);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.plan-toggle:hover:not(:disabled) {
+  background: var(--hover-overlay);
+  color: var(--text-primary);
+}
+
+.plan-toggle.active,
+.plan-toggle.active:hover:not(:disabled) {
+  background: var(--accent-subtle);
+  border-color: rgba(var(--accent-rgb), 0.35);
+  color: var(--accent);
+}
+
+.plan-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--border-default);
 }
 
 /* Plan Mode Indicator */
@@ -770,10 +844,9 @@ function formatSize(bytes: number): string {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 7px 12px;
   margin-bottom: 8px;
   background: var(--accent-subtle);
-  border: 1px solid var(--accent);
   border-radius: var(--radius-md);
   font-size: var(--text-sm);
   color: var(--accent);
@@ -858,7 +931,7 @@ function formatSize(bytes: number): string {
   bottom: calc(100% + 8px);
   right: 0;
   min-width: 240px;
-  background: var(--bg-primary);
+  background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
@@ -872,10 +945,8 @@ function formatSize(bytes: number): string {
 .model-dropdown-label {
   padding: 8px 12px 4px;
   font-size: var(--text-xs);
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
 }
 
 .model-dropdown-label:not(:first-child) {
@@ -906,8 +977,9 @@ function formatSize(bytes: number): string {
 }
 
 .model-dropdown-item.active {
-  background: var(--accent-subtle);
-  color: var(--accent);
+  background: var(--hover-overlay);
+  color: var(--text-primary);
+  font-weight: 500;
 }
 
 .check-icon {
@@ -944,7 +1016,7 @@ function formatSize(bytes: number): string {
 
 .abort-btn:hover {
   background: var(--error);
-  color: white;
+  color: var(--solid-fg);
 }
 
 .abort-btn:active {
@@ -953,12 +1025,32 @@ function formatSize(bytes: number): string {
 
 /* Footer */
 .input-footer {
-  text-align: center;
-  margin-top: 10px;
+  margin-top: 8px;
+  padding: 0 4px;
 }
 
 .input-hint {
   font-size: var(--text-xs);
   color: var(--text-muted);
+}
+
+.input-hint kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--border-default);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+  font-family: var(--font-sans);
+  font-size: 0.95em;
+  line-height: 16px;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .input-footer { display: none; }
+  .plan-toggle span { display: none; }
+  .plan-toggle { width: 32px; padding: 0; justify-content: center; }
 }
 </style>

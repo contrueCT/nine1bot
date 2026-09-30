@@ -64,12 +64,16 @@ const toolTarget = computed(() => {
   return ''
 })
 
-// Tool display name
-const displayName = computed(() => {
-  const title = props.tool.state?.title
-  if (title) return title
+/* 名字固定用动作名（「读取」「搜索」），不拿 state.title 顶替：
+   title 要等工具跑完才到，一换行里的字就从「读取 README.md」跳成「README.md」 */
+const displayName = computed(() => getToolDisplayName(toolName.value))
 
-  return getToolDisplayName(toolName.value)
+// 目标优先取入参（运行中就有）；没有入参目标的工具（如 MCP）才退回到 title
+const visibleTarget = computed(() => {
+  const target = String(toolTarget.value || '')
+  if (target) return target
+  const title = props.tool.state?.title || ''
+  return title && title !== displayName.value ? title : ''
 })
 
 // Output preview
@@ -215,7 +219,7 @@ function formatSize(bytes: number): string {
 
       <span class="tool-call-name">{{ displayName }}</span>
 
-      <span v-if="toolTarget" class="tool-call-target truncate">{{ toolTarget }}</span>
+      <span v-if="visibleTarget" class="tool-call-target truncate" :title="visibleTarget">{{ visibleTarget }}</span>
 
       <span v-if="executionTime" class="tool-call-time text-xs text-muted">{{ executionTime }}</span>
 
@@ -320,6 +324,12 @@ function formatSize(bytes: number): string {
 
 .tool-call-time {
   flex-shrink: 0;
+  margin-left: auto;
+}
+
+.tool-call-target + .tool-call-time,
+.tool-call-time + .tool-call-toggle {
+  margin-left: 0;
 }
 
 .detail-section {
@@ -334,8 +344,6 @@ function formatSize(bytes: number): string {
   font-size: 0.6875rem;
   font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
   margin-bottom: var(--space-xs);
 }
 

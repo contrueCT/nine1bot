@@ -180,8 +180,6 @@ const rejectQuestion = () => {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--accent);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 .question-item {

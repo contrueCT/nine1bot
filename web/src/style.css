@@ -1,6 +1,7 @@
 /* ============================================
-   Nine1Bot Design System V3
-   Warm, Elegant, Minimal
+   Nine1Bot Design System V4 · Workbench
+   白底 + 中性灰层次 + 亮蓝强调色；IBM Plex 单一字族。
+   强调色只留给「Agent 正在做事」与主操作：发送、运行中、焦点。当前项用明度区分，不上色。
    ============================================ */
 
 /* === Design Tokens: Shared === */
@@ -22,11 +23,12 @@
   --radius-2xl: 20px;
   --radius-full: 9999px;
 
-  /* Typography - Serif for the refined aesthetic */
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
-  --font-display: 'Source Serif 4', Georgia, 'Times New Roman', serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  /* Typography：Plex Sans 管界面与正文，Plex Mono 只给真正的代码、路径、命令。
+     字体随包自托管（main.ts 引入），不再依赖 Google Fonts；中文回落到系统黑体。 */
+  --font-cjk: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', 'Source Han Sans SC';
+  --font-sans: 'IBM Plex Sans', var(--font-cjk), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-sans);
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, var(--font-cjk), monospace;
   --font-weight-normal: 400;
 
   /* Type scale (html base = 14px; use these instead of px font-sizes) */
@@ -53,9 +55,9 @@
   --input-max-width: 768px;
 
   /* Input Box Shadow */
-  --input-shadow: 0 0.25rem 1.25rem rgba(0, 0, 0, 0.035);
-  --input-border-color: rgba(0, 0, 0, 0.08);
-  --input-border-color-hover: rgba(0, 0, 0, 0.15);
+  --input-shadow: 0 1px 2px rgba(17, 18, 22, 0.04), 0 6px 20px rgba(17, 18, 22, 0.05);
+  --input-border-color: rgba(17, 18, 22, 0.12);
+  --input-border-color-hover: rgba(17, 18, 22, 0.22);
 
   /* Semantic aliases (resolve per-theme) */
   --surface-1: var(--bg-primary);
@@ -85,173 +87,181 @@
 /* === Theme: Light (Default) === */
 :root,
 :root[data-theme="light"] {
-  /* Backgrounds - Cream/warm */
-  --bg-primary: #F5F5F0;
-  --bg-secondary: #F5F5F0;
-  --bg-tertiary: #eae8e1;
-  --bg-elevated: #ffffff;
+  color-scheme: light;
+
+  /* Backgrounds：纯白画布。侧栏、代码块是极浅的中性灰「槽」，不带色相 */
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F7F7F8;
+  --bg-tertiary: #EFEFF1;
+  --bg-elevated: #FFFFFF;
 
   /* Composer/Input specific */
-  --bg-composer: #ffffff;
+  --bg-composer: #FFFFFF;
 
   /* Glassmorphism */
-  --glass-bg: rgba(255, 255, 255, 0.75);
+  --glass-bg: rgba(255, 255, 255, 0.82);
 
   /* Text */
-  --text-primary: #1a1a18;
-  --text-secondary: #4a4a47;
-  /* 4.5:1 on --bg-primary (#F5F5F0), readable at small sizes */
-  --text-muted: #71716b;
+  --text-primary: #1A1B1F;
+  --text-secondary: #46474C;
+  /* ≥4.5:1 on 白底、--bg-secondary、--bg-tertiary 与用户气泡 */
+  --text-muted: #6B6C72;
   /* Decorative-only text (separators, hints) — below contrast threshold by design */
-  --text-subtle: #9d9c95;
-
-  /* Borders - Very subtle */
-  --border-subtle: rgba(0, 0, 0, 0.06);
-  --border-default: rgba(0, 0, 0, 0.08);
-  --border-hover: rgba(0, 0, 0, 0.15);
-
-  /* Hover overlay */
-  --hover-overlay: rgba(0, 0, 0, 0.04);
-
-  /* Active (pressed) overlay */
-  --active-overlay: rgba(0, 0, 0, 0.07);
-
-  /* Terminal palette (deepened ANSI for light background) */
-  --terminal-bg: #f2f0e9;
-  --terminal-fg: #2b2a26;
-  --terminal-cursor: #ae5630;
-  --terminal-selection: rgba(174, 86, 48, 0.18);
-  --terminal-black: #3a3a35;
-  --terminal-red: #a83a2c;
-  --terminal-green: #24714d;
-  --terminal-yellow: #9a6b1a;
-  --terminal-blue: #3a5f8a;
-  --terminal-magenta: #96405c;
-  --terminal-cyan: #2a7a6e;
-  --terminal-white: #d6d3c9;
-  --terminal-bright-black: #71716b;
-  --terminal-bright-red: #c44536;
-  --terminal-bright-green: #2d8a5f;
-  --terminal-bright-yellow: #c68a28;
-  --terminal-bright-blue: #4a76a8;
-  --terminal-bright-magenta: #b04a68;
-  --terminal-bright-cyan: #339586;
-  --terminal-bright-white: #8b8a83;
-
-  /* Accents - Terracotta #ae5630 */
-  --accent: #ae5630;
-  --accent-rgb: 174, 86, 48;
-  --accent-hover: #c4633a;
-  --accent-fg: #ffffff;
-  --accent-subtle: rgba(174, 86, 48, 0.08);
-  --accent-glow: rgba(174, 86, 48, 0.20);
-
-  /* User message bubble */
-  --user-bubble: #DDD9CE;
-
-  /* Status */
-  --success: #2D8A5F;
-  --success-subtle: rgba(45, 138, 95, 0.1);
-  --warning: #C68A28;
-  --warning-subtle: rgba(198, 138, 40, 0.1);
-  --error: #C44536;
-  --error-subtle: rgba(196, 69, 54, 0.1);
-  --info: #4A76A8;
-  --info-subtle: rgba(74, 118, 168, 0.1);
-
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.10);
-  --scrollbar-thumb: #D8D4CF;
-}
-
-/* === Theme: Dark (Warm dark) === */
-:root[data-theme="dark"] {
-  /* Backgrounds - Warm dark #2b2a27 */
-  --bg-primary: #2b2a27;
-  --bg-secondary: #2b2a27;
-  --bg-tertiary: #393937;
-  --bg-elevated: #333230;
-
-  /* Composer/Input */
-  --bg-composer: #1f1e1b;
-
-  /* Glassmorphism */
-  --glass-bg: rgba(51, 50, 48, 0.75);
-
-  /* Text */
-  --text-primary: #eeeeee;
-  --text-secondary: #a8a8a4;
-  /* ≈4.5:1 on --bg-primary (#2b2a27) */
-  --text-muted: #93928c;
-  /* Decorative-only text (separators, hints) */
-  --text-subtle: #6b6a66;
+  --text-subtle: #A3A4AA;
 
   /* Borders */
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-default: rgba(255, 255, 255, 0.08);
-  --border-hover: rgba(255, 255, 255, 0.15);
+  --border-subtle: rgba(17, 18, 22, 0.06);
+  --border-default: rgba(17, 18, 22, 0.10);
+  --border-hover: rgba(17, 18, 22, 0.18);
 
   /* Hover overlay */
-  --hover-overlay: rgba(255, 255, 255, 0.06);
+  --hover-overlay: rgba(17, 18, 22, 0.04);
 
   /* Active (pressed) overlay */
-  --active-overlay: rgba(255, 255, 255, 0.09);
+  --active-overlay: rgba(17, 18, 22, 0.07);
 
-  /* Terminal palette (softened ANSI for warm dark background) */
-  --terminal-bg: #211f1c;
-  --terminal-fg: #e3e1da;
-  --terminal-cursor: #e8835a;
-  --terminal-selection: rgba(232, 131, 90, 0.22);
-  --terminal-black: #171613;
-  --terminal-red: #e0654f;
-  --terminal-green: #45b383;
-  --terminal-yellow: #e0a83c;
-  --terminal-blue: #7a9ec9;
-  --terminal-magenta: #c97b9b;
-  --terminal-cyan: #54b3a4;
-  --terminal-white: #b8b6ae;
-  --terminal-bright-black: #5c5b56;
-  --terminal-bright-red: #ec7d64;
-  --terminal-bright-green: #5fc494;
-  --terminal-bright-yellow: #f0b95a;
-  --terminal-bright-blue: #8fb3d9;
-  --terminal-bright-magenta: #d98fae;
-  --terminal-bright-cyan: #6cc4b5;
-  --terminal-bright-white: #f0eee8;
+  /* Terminal palette (deepened ANSI for light background) */
+  --terminal-bg: #F7F7F8;
+  --terminal-fg: #1F2024;
+  --terminal-cursor: #2F6FEB;
+  --terminal-selection: rgba(47, 111, 235, 0.18);
+  --terminal-black: #2E2F34;
+  --terminal-red: #A83A2C;
+  --terminal-green: #24714D;
+  --terminal-yellow: #8F6412;
+  --terminal-blue: #3A5A9A;
+  --terminal-magenta: #8E4069;
+  --terminal-cyan: #0E6F7C;
+  --terminal-white: #D2D3D7;
+  --terminal-bright-black: #6B6C72;
+  --terminal-bright-red: #C04A36;
+  --terminal-bright-green: #2F8A5A;
+  --terminal-bright-yellow: #B07F1E;
+  --terminal-bright-blue: #4C6FB5;
+  --terminal-bright-magenta: #A8517F;
+  --terminal-bright-cyan: #168598;
+  --terminal-bright-white: #8E8F95;
+
+  /* Accent：亮蓝。白字对比 4.6:1，作为文字在白底上 4.6:1 */
+  --accent: #2F6FEB;
+  --accent-rgb: 47, 111, 235;
+  --accent-hover: #2459CC;
+  --accent-fg: #FFFFFF;
+  --accent-subtle: rgba(47, 111, 235, 0.08);
+  --accent-glow: rgba(47, 111, 235, 0.22);
+
+  /* User message bubble：白底上的浅灰块，靠明度而不是颜色区分发言人 */
+  --user-bubble: #F1F2F4;
+
+  /* Status：success 偏绿、info 用紫，都和强调蓝拉开色相，
+     避免「运行中」和「已完成」「提示」读成同一种颜色 */
+  --success: #2A7347;
+  --success-subtle: rgba(42, 115, 71, 0.10);
+  --warning: #8F5C0C;
+  --warning-subtle: rgba(143, 92, 12, 0.11);
+  --error: #B8412F;
+  --error-subtle: rgba(184, 65, 47, 0.09);
+  --info: #6E4FC9;
+  --info-subtle: rgba(110, 79, 201, 0.09);
+  /* 实心状态色（error / success 底）上的文字 */
+  --solid-fg: #FFFFFF;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(17, 18, 22, 0.06);
+  --shadow-md: 0 4px 14px rgba(17, 18, 22, 0.08);
+  --shadow-lg: 0 16px 40px rgba(17, 18, 22, 0.12);
+  --scrollbar-thumb: #D4D5D9;
+}
+
+/* === Theme: Dark (Graphite) === */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Backgrounds：中性炭灰，不走近黑；侧栏与代码块更深一档 */
+  --bg-primary: #1E1F22;
+  --bg-secondary: #18191B;
+  --bg-tertiary: #2B2C30;
+  --bg-elevated: #26272B;
+
+  /* Composer/Input */
+  --bg-composer: #26272B;
+
+  /* Glassmorphism */
+  --glass-bg: rgba(38, 39, 43, 0.82);
+
+  /* Text */
+  --text-primary: #ECECEE;
+  --text-secondary: #B5B6BC;
+  /* ≥4.5:1 on 所有深色背景与用户气泡 */
+  --text-muted: #9A9BA2;
+  /* Decorative-only text (separators, hints) */
+  --text-subtle: #606167;
+
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-default: rgba(255, 255, 255, 0.10);
+  --border-hover: rgba(255, 255, 255, 0.18);
+
+  /* Hover overlay */
+  --hover-overlay: rgba(255, 255, 255, 0.05);
+
+  /* Active (pressed) overlay */
+  --active-overlay: rgba(255, 255, 255, 0.085);
+
+  /* Terminal palette (softened ANSI for graphite background) */
+  --terminal-bg: #161719;
+  --terminal-fg: #E0E0E4;
+  --terminal-cursor: #6AA5FF;
+  --terminal-selection: rgba(106, 165, 255, 0.24);
+  --terminal-black: #101113;
+  --terminal-red: #E2705E;
+  --terminal-green: #4FB37A;
+  --terminal-yellow: #D9A24A;
+  --terminal-blue: #7F9BE0;
+  --terminal-magenta: #CC86AE;
+  --terminal-cyan: #4DB3C2;
+  --terminal-white: #BBBCC2;
+  --terminal-bright-black: #606167;
+  --terminal-bright-red: #EE8A77;
+  --terminal-bright-green: #6CC794;
+  --terminal-bright-yellow: #E9B866;
+  --terminal-bright-blue: #9BB2EA;
+  --terminal-bright-magenta: #DDA0C2;
+  --terminal-bright-cyan: #6CC6D3;
+  --terminal-bright-white: #F2F2F4;
 
   /* Accents */
-  --accent: #E8835A;
-  --accent-rgb: 232, 131, 90;
-  --accent-hover: #F09A78;
-  --accent-fg: #1a1a18;
-  --accent-subtle: rgba(232, 131, 90, 0.12);
-  --accent-glow: rgba(232, 131, 90, 0.25);
+  --accent: #6AA5FF;
+  --accent-rgb: 106, 165, 255;
+  --accent-hover: #86B6FF;
+  --accent-fg: #0B1426;
+  --accent-subtle: rgba(106, 165, 255, 0.13);
+  --accent-glow: rgba(106, 165, 255, 0.28);
 
   /* User message bubble */
-  --user-bubble: #393937;
+  --user-bubble: #2E3034;
 
   /* Input shadow (dark) */
-  --input-shadow: 0 0.25rem 1.25rem rgba(0, 0, 0, 0.15);
-  --input-border-color: rgba(255, 255, 255, 0.08);
-  --input-border-color-hover: rgba(255, 255, 255, 0.15);
+  --input-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 10px 28px rgba(0, 0, 0, 0.22);
+  --input-border-color: rgba(255, 255, 255, 0.11);
+  --input-border-color-hover: rgba(255, 255, 255, 0.20);
 
   /* Status */
-  --success: #10b981;
-  --success-subtle: rgba(16, 185, 129, 0.12);
-  --warning: #f59e0b;
-  --warning-subtle: rgba(245, 158, 11, 0.12);
-  --error: #ef4444;
-  --error-subtle: rgba(239, 68, 68, 0.12);
-  --info: #3b82f6;
-  --info-subtle: rgba(59, 130, 246, 0.12);
+  --success: #4FB37A;
+  --success-subtle: rgba(79, 179, 122, 0.13);
+  --warning: #D9A24A;
+  --warning-subtle: rgba(217, 162, 74, 0.13);
+  --error: #E2705E;
+  --error-subtle: rgba(226, 112, 94, 0.13);
+  --info: #A994EE;
+  --info-subtle: rgba(169, 148, 238, 0.13);
+  --solid-fg: #111214;
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
-  --scrollbar-thumb: #4a4a47;
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.45);
+  --scrollbar-thumb: #3E3F44;
 }
 
 /* === Reset & Base === */
@@ -275,6 +285,9 @@ body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.6;
+  /* Plex 的连字与表格数字：计数、耗时、行号在列表里对齐 */
+  font-feature-settings: 'kern', 'liga';
+  font-variant-numeric: tabular-nums;
   overflow: hidden;
   transition: background-color var(--transition-normal), color var(--transition-normal);
 }
@@ -348,12 +361,13 @@ a:hover {
 }
 
 /* === Sidebar === */
+/* 侧栏是「槽」：比 canvas 深一档，和对话区分开，不再靠一条边线硬切 */
 .sidebar {
   width: var(--sidebar-width);
   min-width: var(--sidebar-width);
   height: 100vh;
-  background: var(--bg-primary);
-  border-right: 1px solid var(--border-default);
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   transition: width var(--transition-normal), min-width var(--transition-normal), opacity var(--transition-normal);
@@ -465,8 +479,9 @@ a:hover {
 }
 
 .session-item.active {
-  background: var(--accent-subtle);
-  border-color: var(--border-subtle);
+  background: var(--bg-elevated);
+  border-color: var(--border-default);
+  box-shadow: var(--shadow-sm);
 }
 
 /* === Chat Panel === */
@@ -608,14 +623,20 @@ a:hover {
   }
 }
 
+/* 工具名是给人读的动作（「读取」「匹配」），用正文字体；目标路径和命令才用等宽 */
 .tool-call-name {
-  flex: 1;
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-sans);
+  font-size: var(--text-13);
   color: var(--text-secondary);
 }
 
 .tool-call-toggle {
+  margin-left: auto;
   color: var(--text-muted);
   font-size: 0.75rem;
   transition: transform var(--transition-fast);
@@ -708,7 +729,7 @@ a:hover {
 
 .btn-danger {
   background: var(--danger);
-  color: white;
+  color: var(--solid-fg);
   border: none;
 }
 
@@ -744,7 +765,7 @@ a:hover {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(10, 10, 12, 0.40);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
@@ -813,7 +834,7 @@ a:hover {
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(10, 10, 12, 0.40);
   backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
@@ -1161,10 +1182,10 @@ a:hover {
   color: var(--text-primary);
 }
 
-.markdown-content h1 { font-size: 1.5rem; }
-.markdown-content h2 { font-size: 1.25rem; }
-.markdown-content h3 { font-size: 1.125rem; }
-.markdown-content h4 { font-size: 1rem; }
+.markdown-content h1 { font-size: var(--text-2xl); letter-spacing: -0.01em; }
+.markdown-content h2 { font-size: var(--text-lg); letter-spacing: -0.005em; }
+.markdown-content h3 { font-size: var(--text-md); }
+.markdown-content h4 { font-size: var(--text-base); }
 
 .markdown-content h1:first-child,
 .markdown-content h2:first-child,
@@ -1215,23 +1236,23 @@ a:hover {
 
 .markdown-content blockquote {
   margin: 1em 0;
-  padding-left: 1em;
-  border-left: 2px solid var(--accent);
-  font-style: italic;
-  color: var(--text-muted);
+  padding: 0.25em 0 0.25em 1em;
+  border-left: 3px solid var(--border-hover);
+  color: var(--text-secondary);
 }
 
 .markdown-content blockquote p {
   margin: 0;
 }
 
+/* 行内代码不再用强调色：强调色只属于「正在做事」和主操作 */
 .markdown-content code {
   font-family: var(--font-mono);
-  font-size: 0.875em;
+  font-size: 0.86em;
   background: var(--bg-tertiary);
-  padding: 0.15em 0.4em;
-  border-radius: var(--radius-sm);
-  color: var(--accent);
+  padding: 0.12em 0.38em;
+  border-radius: var(--radius-xs);
+  color: var(--text-primary);
 }
 
 .markdown-content pre {
@@ -1240,7 +1261,7 @@ a:hover {
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
   overflow-x: auto;
-  border: 1px solid var(--border-default);
+  border: 1px solid var(--border-subtle);
 }
 
 .markdown-content pre code {
@@ -1252,6 +1273,7 @@ a:hover {
   border: none;
 }
 
+/* 表格只留横线：竖线在窄列上会把文字切成格子，读起来比内容还吵 */
 .markdown-content table {
   display: block;
   overflow-x: auto;
@@ -1264,22 +1286,51 @@ a:hover {
 .markdown-content th,
 .markdown-content td {
   min-width: 72px;
-  padding: var(--space-sm) var(--space-md);
-  border: 1px solid var(--border-default);
+  padding: var(--space-sm) var(--space-md) var(--space-sm) 0;
+  border-bottom: 1px solid var(--border-subtle);
   text-align: left;
+  vertical-align: top;
 }
 
 .markdown-content th {
-  background: var(--bg-secondary);
   font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom-color: var(--border-hover);
 }
 
-.markdown-content pre { position: relative; padding-top: 36px; }
-.copy-code { position: absolute; right: 8px; top: 6px; padding: 3px 8px; border: 1px solid var(--border-default); border-radius: 5px; background: var(--bg-elevated); color: var(--text-muted); cursor: pointer; font: inherit; font-size: 11px; }
+.markdown-content tr:last-child td { border-bottom: 0; }
 
-.markdown-content tr:hover td {
-  background: var(--bg-secondary);
+/* 代码块头：语言名 + 复制按钮，一条细栏，代码本身不再被按钮压住 */
+.markdown-content pre { position: relative; padding-top: 38px; }
+.markdown-content pre[data-lang]::before {
+  content: attr(data-lang);
+  position: absolute;
+  left: var(--space-md);
+  top: 9px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
 }
+.copy-code {
+  position: absolute;
+  right: 6px;
+  top: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.copy-code:hover { background: var(--hover-overlay); color: var(--text-primary); }
+.copy-code.copied { color: var(--success); }
 
 .markdown-content hr {
   margin: 1.5em 0;
@@ -1294,7 +1345,8 @@ a:hover {
 
 /* 流式输出时的打字光标：贴在最后一块的末尾，跟着文字走。
    走伪元素而不是插一个 span——不额外动 DOM，也就不会干扰块级 diff。 */
-.markdown-content.is-streaming > :last-child::after {
+.markdown-content.is-streaming > :last-child:not(ul, ol)::after,
+.markdown-content.is-streaming > :is(ul, ol):last-child > li:last-child::after {
   content: '';
   display: inline-block;
   width: 2px;
@@ -1365,7 +1417,7 @@ a:hover {
 }
 
 :focus-visible {
-  outline: 2px solid rgba(var(--accent-rgb), 0.5);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -1427,7 +1479,7 @@ a:hover {
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: rgba(10, 10, 12, 0.40);
     z-index: var(--z-scrim);
   }
 

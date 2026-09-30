@@ -161,7 +161,7 @@ function toggleSource() {
   margin-left: auto;
   padding: 4px 8px;
   background: var(--success);
-  color: white;
+  color: var(--solid-fg);
   font-size: var(--text-xs);
   font-weight: 500;
   border-radius: var(--radius-sm);

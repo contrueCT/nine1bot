@@ -1400,8 +1400,6 @@ onUnmounted(() => {
 .metrics-kicker {
   margin-bottom: var(--space-sm);
   font-size: 0.78rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
   color: var(--accent);
 }
 
@@ -1897,8 +1895,6 @@ onUnmounted(() => {
 .metrics-table th {
   color: var(--text-muted);
   font-size: 0.76rem;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
 .primary-cell {
@@ -1997,8 +1993,6 @@ onUnmounted(() => {
   color: var(--accent);
   font-size: 0.76rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .detail-drawer-head h3 {

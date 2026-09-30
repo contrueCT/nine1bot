@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Square, PanelLeftOpen, Folder, BarChart3, MessageSquare, Menu } from 'lucide-vue-next'
 import type { Session } from '../api/client'
+import { tildify, useHomeDirectory } from '../composables/useWorkspacePath'
 
-defineProps<{
+const props = defineProps<{
   session: Session | null
   directory?: string
   projectName?: string
@@ -21,6 +23,13 @@ const emit = defineEmits<{
   'abort': []
   'toggle-metrics': []
 }>()
+
+const home = useHomeDirectory()
+const displayDirectory = computed(() => {
+  const directory = props.directory || props.session?.directory || ''
+  return directory && directory !== '.' ? directory : ''
+})
+const shortDirectory = computed(() => tildify(displayDirectory.value, home.value))
 </script>
 
 <template>
@@ -31,6 +40,7 @@ const emit = defineEmits<{
         class="btn btn-ghost btn-icon mobile-menu-btn"
         @click="emit('toggle-mobile-sidebar')"
         title="打开侧边栏"
+        aria-label="打开侧边栏"
       >
         <Menu :size="20" />
       </button>
@@ -40,32 +50,44 @@ const emit = defineEmits<{
         class="btn btn-ghost btn-icon"
         @click="emit('toggle-sidebar')"
         title="展开侧边栏"
+        aria-label="展开侧边栏"
       >
         <PanelLeftOpen :size="20" />
       </button>
 
       <div class="session-info">
         <span class="session-title">{{ session?.title || '新会话' }}</span>
-        <span v-if="(directory || session?.directory) && (directory || session?.directory) !== '.'" class="session-dir" :title="directory || session?.directory">
-          <Folder :size="12" /><span>{{ projectName ? projectName + ' · ' : '' }}{{ directory || session?.directory }}</span>
+        <span v-if="displayDirectory" class="session-dir" :title="displayDirectory">
+          <Folder :size="12" />
+          <span v-if="projectName" class="session-project">{{ projectName }}</span>
+          <span class="session-path">{{ shortDirectory }}</span>
         </span>
       </div>
     </div>
 
     <div class="header-center">
-      <div v-if="session && connectionState && connectionState !== 'connected'" class="streaming-badge retry-badge" role="status">
-        {{ connectionState === 'offline' ? '连接已断开' : connectionState === 'reconnecting' ? '正在重新连接…' : '连接中…' }}
+      <div
+        v-if="session && connectionState && connectionState !== 'connected'"
+        class="streaming-badge"
+        :class="connectionState === 'offline' ? 'tone-error' : 'tone-warning'"
+        role="status"
+      >
+        <span class="status-dot"></span>
+        <span>{{ connectionState === 'offline' ? '连接已断开' : connectionState === 'reconnecting' ? '正在重新连接…' : '连接中…' }}</span>
       </div>
-      <div v-else-if="pendingCount" class="streaming-badge" role="status">等待确认 · {{ pendingCount }}</div>
+      <div v-else-if="pendingCount" class="streaming-badge tone-warning" role="status">
+        <span class="status-dot"></span>
+        <span>{{ pendingCount }} 项等待你确认</span>
+      </div>
       <!-- Retry Indicator -->
-      <div v-else-if="retryInfo" class="streaming-badge retry-badge">
-        <span class="retry-dot"></span>
-        <span class="streaming-text">重试中 (第{{ retryInfo.attempt }}次) - {{ retryInfo.message }}</span>
+      <div v-else-if="retryInfo" class="streaming-badge tone-warning" role="status" :title="retryInfo.message">
+        <span class="status-dot pulsing"></span>
+        <span class="streaming-text">第 {{ retryInfo.attempt }} 次重试：{{ retryInfo.message }}</span>
       </div>
       <!-- Streaming Indicator (centered when streaming) -->
-      <div v-else-if="isStreaming" class="streaming-badge">
-        <span class="streaming-dot"></span>
-        <span class="streaming-text">生成中</span>
+      <div v-else-if="isStreaming" class="streaming-badge" role="status">
+        <span class="status-dot pulsing"></span>
+        <span class="streaming-text">正在处理</span>
       </div>
     </div>
 
@@ -97,6 +119,8 @@ const emit = defineEmits<{
 .session-title, .session-dir > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-dir > svg { flex-shrink: 0; }
 .session-dir > span { min-width: 0; }
+.session-project { flex-shrink: 0; max-width: 40%; color: var(--text-secondary); }
+.session-path { font-family: var(--font-mono); }
 .glass-header {
   background: transparent;
   border-bottom: none;
@@ -127,52 +151,55 @@ const emit = defineEmits<{
 .session-dir {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   font-size: var(--text-xs);
   color: var(--text-muted);
-  max-width: 300px;
+  max-width: 420px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .streaming-badge {
+  --tone: var(--accent);
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  background: var(--accent-subtle);
+  max-width: 420px;
+  padding: 4px 12px 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--tone) 25%, transparent);
   border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--tone) 8%, transparent);
   font-size: var(--text-sm);
   font-weight: 500;
-  color: var(--accent);
+  color: var(--tone);
 }
 
-.streaming-dot {
-  width: 8px;
-  height: 8px;
-  background: var(--accent);
+.streaming-badge.tone-warning { --tone: var(--warning); }
+.streaming-badge.tone-error { --tone: var(--error); }
+
+.streaming-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  animation: dot-pulse 1.5s infinite;
+  background: currentColor;
 }
 
-.retry-badge .streaming-text {
-  color: var(--warning);
+.status-dot.pulsing {
+  animation: status-pulse 1.4s var(--ease-smooth) infinite;
 }
 
-.retry-dot {
-  width: 8px;
-  height: 8px;
-  background: var(--warning);
-  border-radius: 50%;
-  animation: dot-pulse 1.5s infinite;
-  box-shadow: 0 0 8px var(--warning);
-}
-
-@keyframes dot-pulse {
-  0% { transform: scale(0.95); opacity: 0.8; }
-  50% { transform: scale(1.05); opacity: 1; }
-  100% { transform: scale(0.95); opacity: 0.8; }
+@keyframes status-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent); }
+  70% { box-shadow: 0 0 0 5px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 .abort-btn {
@@ -182,9 +209,14 @@ const emit = defineEmits<{
 }
 
 .metrics-btn {
-  margin-right: 10px;
   font-size: var(--text-13);
   gap: 6px;
+  color: var(--text-muted);
+}
+
+@media (max-width: 640px) {
+  .metrics-btn span { display: none; }
+  .session-dir { max-width: 200px; }
 }
 
 .abort-btn:hover {

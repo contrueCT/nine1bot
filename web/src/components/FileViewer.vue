@@ -255,6 +255,5 @@ onUnmounted(() => {
   padding: 2px 6px;
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
-  text-transform: uppercase;
 }
 </style>

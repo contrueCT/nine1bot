@@ -279,8 +279,6 @@ onUnmounted(() => {
   font-size: var(--text-xs);
   font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-subtle);
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, defineAsyncComponent } from 'vue'
 import { useModalFocus } from '../composables/useModalFocus'
-import { Sun, Moon, Upload, X, User, Info, ExternalLink } from 'lucide-vue-next'
+import { Sun, Moon, Monitor, Upload, X, User, Info, ExternalLink } from 'lucide-vue-next'
 import { useSettings } from '../composables/useSettings'
 import { useTheme } from '../composables/useTheme'
 import { useUserProfile } from '../composables/useUserProfile'
@@ -65,7 +65,12 @@ const {
   executePlatformAction,
 } = useSettings()
 
-const { theme, toggleTheme } = useTheme()
+const { preference: themePreference, setTheme } = useTheme()
+const themeOptions = [
+  { value: 'light', label: '浅色', icon: Sun },
+  { value: 'dark', label: '深色', icon: Moon },
+  { value: 'system', label: '跟随系统', icon: Monitor },
+] as const
 const { profile, brandLogo, botAvatar, setName, setAvatar, setLogo, setBotAvatar, clearAvatar, clearLogo, clearBotAvatar } = useUserProfile()
 
 const editingName = ref(profile.value.name || '')
@@ -391,12 +396,19 @@ function handleOverlayClick(e: MouseEvent) {
           <!-- Theme / Dark Mode -->
           <div class="profile-section">
             <h3 class="profile-section-title">外观</h3>
-            <div class="theme-toggle-row">
-              <span class="theme-label">{{ theme === 'dark' ? '暗色模式' : '亮色模式' }}</span>
-              <button class="theme-toggle-btn" @click="toggleTheme">
-                <Sun v-if="theme === 'dark'" :size="16" />
-                <Moon v-else :size="16" />
-                <span>{{ theme === 'dark' ? '切换到亮色' : '切换到暗色' }}</span>
+            <div class="theme-segmented" role="radiogroup" aria-label="界面主题">
+              <button
+                v-for="option in themeOptions"
+                :key="option.value"
+                type="button"
+                role="radio"
+                class="theme-option"
+                :class="{ active: themePreference === option.value }"
+                :aria-checked="themePreference === option.value"
+                @click="setTheme(option.value)"
+              >
+                <component :is="option.icon" :size="15" aria-hidden="true" />
+                <span>{{ option.label }}</span>
               </button>
             </div>
           </div>
@@ -439,8 +451,8 @@ function handleOverlayClick(e: MouseEvent) {
 .settings-nav-item { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; padding: 12px; margin-bottom: 4px; background: transparent; border: 1px solid transparent; border-radius: 9px; color: var(--text-secondary); cursor: pointer; }
 .settings-nav-item > span { font-size: var(--text-13); font-weight: 500; white-space: nowrap; }
 .settings-nav-item small { color: var(--text-muted); font-size: var(--text-xs); }
-.settings-nav-item.active { background: var(--bg-elevated); border-color: var(--border-subtle); color: var(--accent); }
-.settings-nav-item:hover { background: var(--bg-tertiary); }
+.settings-nav-item:hover { background: var(--hover-overlay); }
+.settings-nav-item.active { background: var(--bg-elevated); border-color: var(--border-default); color: var(--text-primary); box-shadow: var(--shadow-sm); }
 .settings-content { min-width: 0; flex: 1; overflow: auto; padding: 20px 28px 32px; }
 .settings-feedback { display: flex; min-height: 30px; align-items: center; color: var(--success); font-size: var(--text-sm); margin-bottom: 8px; }
 .settings-refresh { margin-left: auto; }
@@ -548,39 +560,41 @@ function handleOverlayClick(e: MouseEvent) {
   border-color: var(--accent);
 }
 
-.theme-toggle-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-default);
+.theme-segmented {
+  display: inline-flex;
+  align-self: flex-start;
+  width: fit-content;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
 
-.theme-label {
-  font-size: var(--text-base);
-  color: var(--text-secondary);
-}
-
-.theme-toggle-btn {
-  display: flex;
+.theme-option {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  border: none;
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
   font-family: var(--font-sans);
   font-size: var(--text-13);
   cursor: pointer;
-  border-radius: var(--radius-sm);
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.theme-toggle-btn:hover {
-  background: var(--accent-subtle);
-  color: var(--accent);
+.theme-option:hover {
+  color: var(--text-primary);
+}
+
+.theme-option.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
 }
 
 .logo-preview {

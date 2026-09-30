@@ -798,7 +798,7 @@ function confirmDeleteSession() {
 }
 
 .projects-title {
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: 2rem;
   font-weight: 400;
   color: var(--text-primary);
@@ -985,7 +985,7 @@ function confirmDeleteSession() {
 }
 
 .project-name-text {
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: 1.5rem;
   font-weight: 500;
   color: var(--text-primary);
@@ -999,7 +999,7 @@ function confirmDeleteSession() {
 }
 
 .project-name-input {
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: 1.5rem;
   font-weight: 500;
   color: var(--text-primary);
@@ -1087,7 +1087,7 @@ function confirmDeleteSession() {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: var(--text-base);
   line-height: 1.6;
   resize: vertical;
@@ -1313,7 +1313,7 @@ function confirmDeleteSession() {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: var(--text-base);
   line-height: 1.5;
   resize: vertical;
@@ -1418,7 +1418,7 @@ function confirmDeleteSession() {
 }
 
 .effective-prompt-text {
-  font-family: var(--font-serif);
+  font-family: var(--font-sans);
   font-size: var(--text-13);
   line-height: 1.7;
   color: var(--text-secondary);

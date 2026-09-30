@@ -5,60 +5,34 @@ import type { Message, MessagePart, FilePart } from '../api/client'
 import AgentSteps from './AgentSteps.vue'
 import { X, FileDown, File, Eye } from 'lucide-vue-next'
 import { useFilePreview } from '../composables/useFilePreview'
-
-interface Step { parts: MessagePart[]; isComplete: boolean }
+import { formatDuration, formatMessageTime } from '../utils/time-format'
+import { buildAgentTimeline } from '../utils/agent-timeline'
 
 const props = defineProps<{
   messages: Message[]
   isStreaming: boolean
 }>()
 
-// Collect all steps from all messages in this group
-const allSteps = computed<Step[]>(() => {
-  const steps: Step[] = []
-  for (const message of props.messages) {
-    let currentStep: Step | null = null
-    for (const part of message.parts) {
-      if (part.type === 'step-start') {
-        currentStep = { parts: [], isComplete: false }
-        steps.push(currentStep)
-      } else if (part.type === 'step-finish') {
-        if (currentStep) currentStep.isComplete = true
-        currentStep = null
-      } else if (part.type === 'tool' || part.type === 'reasoning') {
-        if (currentStep) {
-          currentStep.parts.push(part)
-        } else {
-          // tool/reasoning outside explicit steps — implicit completed step
-          if (steps.length === 0 || steps[steps.length - 1].isComplete) {
-            steps.push({ parts: [], isComplete: true })
-          }
-          steps[steps.length - 1].parts.push(part)
-        }
-      }
-    }
-  }
-  return steps
+/* 按时间顺序切开：最后一个工具之前说的话进折叠区、和工具穿插；之后的才是最终回复 */
+const timeline = computed(() => buildAgentTimeline(props.messages, { streaming: props.isStreaming }))
+const processItems = computed(() => timeline.value.process)
+const replyItems = computed(() => timeline.value.reply)
+
+/* 这一轮从第一条回复开始到最后一条完成的墙钟时间：包括模型思考和工具执行。
+   还在生成时不显示，免得数字停在半路 */
+const lastCompleted = computed(() => {
+  let latest = 0
+  for (const message of props.messages) latest = Math.max(latest, message.info.time?.completed || 0)
+  return latest
 })
 
-// Collect all text/file outputs (always visible)
-type OutputItem =
-  | { type: 'text'; text: string; id: string }
-  | { type: 'file'; part: MessagePart }
-
-const textOutputs = computed<OutputItem[]>(() => {
-  const outputs: OutputItem[] = []
-  for (const message of props.messages) {
-    for (const part of message.parts) {
-      if (part.type === 'text' && !(part as any).synthetic && part.text) {
-        outputs.push({ type: 'text', text: part.text, id: part.id })
-      } else if (part.type === 'file') {
-        outputs.push({ type: 'file', part })
-      }
-    }
-  }
-  return outputs
+const totalDuration = computed(() => {
+  if (props.isStreaming || !lastCompleted.value) return ''
+  const started = props.messages[0]?.info.time?.created
+  return started ? formatDuration(lastCompleted.value - started) : ''
 })
+
+const completedTime = computed(() => (!props.isStreaming && lastCompleted.value ? formatMessageTime(lastCompleted.value) : null))
 
 function isImageFile(part: MessagePart): boolean {
   return ((part as any).mime || '').startsWith('image/')
@@ -153,73 +127,82 @@ async function openPreview(meta: PreviewMeta, idx: number) {
 
 <template>
   <div class="agent-group">
-    <!-- Steps: all steps from all consecutive messages in one fold -->
+    <!-- 过程：工具、思考和过程中说的话按先后排在一个折叠区里。
+         生成中始终挂着，状态行位置固定，不会在出字时冒出来又消失 -->
     <AgentSteps
-      v-if="allSteps.length > 0"
-      :steps="allSteps"
+      v-if="isStreaming || processItems.length > 0"
+      :items="processItems"
       :isStreaming="isStreaming"
+      :duration="totalDuration"
     />
 
-    <!-- Text / file outputs: always visible -->
-    <template v-for="item in textOutputs" :key="item.type === 'text' ? item.id : (item.part as any).id">
-      <MarkdownText
-        v-if="item.type === 'text'"
-        :text="item.text"
-        :streaming="isStreaming"
-      />
-      <div v-else-if="item.type === 'file'" class="file-attachment">
-        <img
-          v-if="isImageFile(item.part)"
-          :src="resolveFileUrl((item.part as any).url)"
-          :alt="(item.part as any).filename || 'image'"
-          class="uploaded-image"
-          @click="previewImageUrl = resolveFileUrl((item.part as any).url)"
+    <!-- 最终回复：悬停时在下方显示完成时间 -->
+    <div v-if="replyItems.length > 0 || toolAttachments.length > 0 || previewTools.length > 0" class="agent-reply">
+      <!-- 最终回复：光标只跟在最后一段后面 -->
+      <template v-for="(item, index) in replyItems" :key="item.part.id">
+        <MarkdownText
+          v-if="item.kind === 'text'"
+          :text="item.part.text || ''"
+          :streaming="isStreaming && index === replyItems.length - 1"
         />
-        <a v-else :href="resolveFileUrl((item.part as any).url)" target="_blank" class="file-badge">
-          <File :size="18" class="file-icon" />
-          <span class="file-name">{{ (item.part as any).filename || '文件' }}</span>
-        </a>
-      </div>
-    </template>
+        <div v-else class="file-attachment">
+          <img
+            v-if="isImageFile(item.part)"
+            :src="resolveFileUrl((item.part as any).url)"
+            :alt="(item.part as any).filename || 'image'"
+            class="uploaded-image"
+            @click="previewImageUrl = resolveFileUrl((item.part as any).url)"
+          />
+          <a v-else :href="resolveFileUrl((item.part as any).url)" target="_blank" class="file-badge">
+            <File :size="18" class="file-icon" />
+            <span class="file-name">{{ (item.part as any).filename || '文件' }}</span>
+          </a>
+        </div>
+      </template>
 
-    <!-- Tool file attachments: surfaced from inside collapsed steps -->
-    <div v-if="toolAttachments.length > 0" class="tool-attachments-section">
-      <div
-        v-for="att in toolAttachments"
-        :key="att.id"
-        class="attachment-item"
-      >
-        <File :size="16" class="attachment-icon" />
-        <span class="attachment-name">{{ att.filename || '未命名文件' }}</span>
-        <span v-if="(att as any).size" class="attachment-size">{{ formatSize((att as any).size) }}</span>
-        <button class="download-btn" @click="downloadAttachment(att)">
-          <FileDown :size="13" /><span>下载</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- Preview file tools: surfaced from inside collapsed steps -->
-    <div v-if="previewTools.length > 0" class="preview-tools-section">
-      <div
-        v-for="(meta, idx) in previewTools"
-        :key="meta.path"
-        class="preview-item"
-      >
-        <Eye :size="16" class="preview-icon" />
-        <span class="preview-name">{{ meta.filename || '文件预览' }}</span>
-        <span v-if="meta.size" class="preview-size">{{ formatSize(meta.size) }}</span>
-        <button
-          class="preview-btn"
-          @click="openPreview(meta, idx)"
-          :disabled="openingPreviewIdx === idx"
+      <!-- Tool file attachments: surfaced from inside collapsed steps -->
+      <div v-if="toolAttachments.length > 0" class="tool-attachments-section">
+        <div
+          v-for="att in toolAttachments"
+          :key="att.id"
+          class="attachment-item"
         >
-          <template v-if="openingPreviewIdx === idx">
-            <div class="mini-spinner"></div><span>加载中</span>
-          </template>
-          <template v-else>
-            <Eye :size="13" /><span>预览</span>
-          </template>
-        </button>
+          <File :size="16" class="attachment-icon" />
+          <span class="attachment-name">{{ att.filename || '未命名文件' }}</span>
+          <span v-if="(att as any).size" class="attachment-size">{{ formatSize((att as any).size) }}</span>
+          <button class="download-btn" @click="downloadAttachment(att)">
+            <FileDown :size="13" /><span>下载</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Preview file tools: surfaced from inside collapsed steps -->
+      <div v-if="previewTools.length > 0" class="preview-tools-section">
+        <div
+          v-for="(meta, idx) in previewTools"
+          :key="meta.path"
+          class="preview-item"
+        >
+          <Eye :size="16" class="preview-icon" />
+          <span class="preview-name">{{ meta.filename || '文件预览' }}</span>
+          <span v-if="meta.size" class="preview-size">{{ formatSize(meta.size) }}</span>
+          <button
+            class="preview-btn"
+            @click="openPreview(meta, idx)"
+            :disabled="openingPreviewIdx === idx"
+          >
+            <template v-if="openingPreviewIdx === idx">
+              <div class="mini-spinner"></div><span>加载中</span>
+            </template>
+            <template v-else>
+              <Eye :size="13" /><span>预览</span>
+            </template>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="completedTime" class="reply-meta">
+        <time :datetime="completedTime.iso" :title="completedTime.full">{{ completedTime.label }}</time>
       </div>
     </div>
   </div>
@@ -241,6 +224,28 @@ async function openPreview(meta: PreviewMeta, idx: number) {
 /* Prose / Markdown styling lives in global style.css (.markdown-content) */
 .markdown-content {
   margin-bottom: 4px;
+}
+
+/* 完成时间只在悬停时出现，但一直占着这一行，出现时不推动下面的内容 */
+.reply-meta {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.agent-reply:hover .reply-meta,
+.agent-reply:focus-within .reply-meta {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .reply-meta { opacity: 1; }
 }
 
 .file-attachment { margin: 8px 0; }
@@ -355,8 +360,8 @@ async function openPreview(meta: PreviewMeta, idx: number) {
 .mini-spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(255,255,255,0.3);
-  border-top-color: white;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }

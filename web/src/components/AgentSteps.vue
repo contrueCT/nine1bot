@@ -1,65 +1,68 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { ChevronRight, ChevronDown, Check, X } from 'lucide-vue-next'
+import { computed, ref, watch } from 'vue'
+import { ChevronRight, Check, X } from 'lucide-vue-next'
 import type { MessagePart } from '../api/client'
 import ToolCall from './ToolCall.vue'
+import MarkdownText from './MarkdownText.vue'
 import { useCollapse } from '../composables/use-collapse'
 import { getToolDisplayName } from '../utils/tool-names'
 import { summarizeTools } from '../utils/step-summary'
-
-interface Step {
-  parts: MessagePart[]
-  isComplete: boolean
-}
+import type { ProcessItem } from '../utils/agent-timeline'
 
 const props = defineProps<{
-  steps: Step[]
+  /** 按时间顺序排好的过程：工具、思考、过程中说的话 */
+  items: ProcessItem[]
   isStreaming: boolean
+  /** 这一轮的总用时，已格式化；生成中为空 */
+  duration?: string
 }>()
 
-/* 过程区延迟挂载 + 0fr → 1fr 过渡：收起时不让上百张工具卡常驻 DOM */
-const { mounted: bodyMounted, open: isExpanded, toggle } = useCollapse()
+/* 过程区延迟挂载 + 0fr → 1fr 过渡：收起时不让上百张工具卡常驻 DOM。
+   运行中默认展开，过程中说的话和工具调用一直看得见；跑完自动收起。
+   用户在运行中手动收起过，就尊重这个选择，不再自动弹开。 */
+const { mounted: bodyMounted, open: isExpanded, set, toggle } = useCollapse()
+const userToggled = ref(false)
+
+function handleToggle() {
+  userToggled.value = true
+  void toggle()
+}
+
+watch(() => props.isStreaming, (streaming, wasStreaming) => {
+  if (streaming && !userToggled.value) void set(true)
+  // 一轮结束：收起，并清掉手动记录，之后开合由用户决定
+  if (!streaming && wasStreaming) {
+    userToggled.value = false
+    void set(false)
+  }
+}, { immediate: true })
+
 const reasoningExpanded = ref<Record<string, boolean>>({})
 
-const allComplete = computed(() => props.steps.length > 0 && props.steps.every(s => s.isComplete))
-
-const allParts = computed(() => props.steps.flatMap(s => s.parts))
-const tools = computed(() => allParts.value.filter(part => part.type === 'tool'))
-const activeTool = computed(() => tools.value.filter(part => part.state?.status === 'running' || part.state?.status === 'pending').slice(-1)[0])
-const runningTool = computed(() => tools.value.filter(part => part.state?.status === 'running').slice(-1)[0])
+const tools = computed(() => props.items.filter(item => item.kind === 'tool').map(item => item.part))
 const failedCount = computed(() => tools.value.filter(part => part.state?.status === 'error').length)
-const completedCount = computed(() => tools.value.filter(part => part.state?.status === 'completed').length)
+const activeTool = computed(() => tools.value.filter(part => part.state?.status === 'running' || part.state?.status === 'pending').slice(-1)[0])
 
-/* 折起时的状态色：失败过就标红，全完成才给绿，其余保持中性。
-   原来无条件按 success 着色，没跑完、跑失败了也是一圈绿底。 */
-const stepsTone = computed(() => (failedCount.value > 0 ? 'error' : allComplete.value ? 'success' : 'idle'))
+/* 状态色：失败过就标红，跑完才给绿，运行中用强调色的呼吸点 */
+const stepsTone = computed(() => (failedCount.value > 0 ? 'error' : props.isStreaming ? 'running' : 'success'))
 
-const stepSummary = computed(() => {
-  const running = runningTool.value
-  if (running) {
-    const target = getToolTarget(running)
-    return target ? `${getToolName(running)} · ${target}` : getToolName(running)
+/* 头部只有一行，元素固定不增删，只换文字：
+   运行中说「现在在做什么」，跑完才说「一共做了什么」 */
+const headline = computed(() => {
+  if (props.isStreaming) {
+    const active = activeTool.value
+    if (active) {
+      const target = getToolTarget(active)
+      return target ? `正在${getToolLabel(active)} ${target}` : `正在${getToolLabel(active)}`
+    }
+    // 没有工具在跑，就是在等模型输出
+    return '正在思考'
   }
   return summarizeTools(
     tools.value.map(part => ({ label: getToolLabel(part), status: part.state?.status })),
-    props.steps.length,
+    props.items.length,
   )
 })
-
-/** 运行中折起时也要看得出进度，尤其是中途失败过 */
-const peekLabel = computed(() => {
-  const done = completedCount.value
-  const failed = failedCount.value
-  if (failed > 0) return done > 0 ? `已完成 ${done} 次 · ${failed} 次失败` : `${failed} 次失败`
-  return done >= 2 ? `已完成 ${done} 次调用` : ''
-})
-
-/** 带 target 的人话标题，用于「现在在跑什么」 */
-function getToolName(part: MessagePart): string {
-  const title = part.state?.title
-  if (title) return title
-  return getToolLabel(part)
-}
 
 /** 归类计数用的名字：不能用 title，title 往回带上了目标文件，一条一类就没法统计 */
 function getToolLabel(part: MessagePart): string {
@@ -69,17 +72,11 @@ function getToolLabel(part: MessagePart): string {
 function getToolTarget(part: MessagePart): string {
   const input = part.state?.input
   if (!input) return ''
-  if (input.filePath || input.file_path) {
-    const p = (input.filePath || input.file_path) as string
-    return p.length > 45 ? '...' + p.slice(-42) : p
-  }
-  if (input.path) {
-    const p = input.path as string
-    return p.length > 45 ? '...' + p.slice(-42) : p
-  }
+  const path = (input.filePath || input.file_path || input.path) as string | undefined
+  if (path) return path.length > 45 ? '…' + path.slice(-42) : path
   if (input.command) {
     const cmd = input.command as string
-    return cmd.length > 40 ? cmd.slice(0, 40) + '...' : cmd
+    return cmd.length > 40 ? cmd.slice(0, 40) + '…' : cmd
   }
   if (input.pattern) return `"${input.pattern}"`
   if (input.url) return input.url as string
@@ -94,76 +91,63 @@ function toggleReasoning(partId: string) {
 function needsExpandButton(text: string): boolean {
   return text.split('\n').length > 3 || text.length > 200
 }
+
+/** 只有最后一项还在输出时才挂光标，前面说完的话不闪 */
+function isLiveNarration(index: number): boolean {
+  return props.isStreaming && !activeTool.value && index === props.items.length - 1
+}
 </script>
 
 <template>
-  <div class="steps" :class="{ 'is-open': isExpanded }">
-    <!-- 运行中且未展开：头让位给当前活跃的工具卡 -->
-    <template v-if="isStreaming && !isExpanded">
-      <button
-        v-if="peekLabel"
-        class="steps-peek"
-        :class="{ 'has-error': failedCount > 0 }"
-        @click="toggle"
-      >
-        <span>{{ peekLabel }}</span>
-        <ChevronRight :size="12" />
-      </button>
-      <ToolCall v-if="activeTool" :tool="activeTool" :hideAttachments="true" />
-      <button v-else class="steps-waiting" @click="toggle">
-        <span class="steps-shimmer">正在思考与生成…</span>
-        <ChevronRight :size="12" />
-      </button>
-    </template>
-
-    <!-- 折起与展开共用一个头，身体走高度过渡 -->
+  <div class="steps" :class="{ 'is-open': isExpanded, 'is-running': isStreaming }">
     <div
-      v-else
       class="steps-head"
       role="button"
       tabindex="0"
       :aria-expanded="isExpanded"
-      @click="toggle"
-      @keydown.enter.prevent="toggle"
-      @keydown.space.prevent="toggle"
+      :aria-label="isExpanded ? '收起执行过程' : '展开执行过程'"
+      @click="handleToggle"
+      @keydown.enter.prevent="handleToggle"
+      @keydown.space.prevent="handleToggle"
     >
-      <div class="steps-icon" :class="stepsTone">
-        <X v-if="failedCount > 0" :size="10" />
-        <Check v-else-if="allComplete" :size="10" />
-        <ChevronRight v-else :size="10" />
+      <div class="steps-icon" :class="stepsTone" aria-hidden="true">
+        <span v-if="stepsTone === 'running'" class="tool-pulse"></span>
+        <X v-else-if="stepsTone === 'error'" :size="10" />
+        <Check v-else :size="10" />
       </div>
-      <span class="steps-summary">{{ stepSummary }}</span>
-      <ChevronDown v-if="isExpanded" :size="12" class="steps-chevron" />
-      <ChevronRight v-else :size="12" class="steps-chevron" />
+      <span class="steps-summary" :class="{ 'steps-shimmer': isStreaming }">{{ headline }}</span>
+      <span v-if="duration" class="steps-duration" :title="`这一轮用时 ${duration}`">{{ duration }}</span>
+      <ChevronRight :size="12" class="steps-chevron" :class="{ open: isExpanded }" />
     </div>
 
     <div v-if="bodyMounted" class="steps-collapse" :class="{ open: isExpanded }" :aria-hidden="!isExpanded">
       <div class="steps-body">
-        <template v-for="(step, stepIndex) in steps" :key="stepIndex">
-          <div v-if="stepIndex > 0" class="step-divider" />
-          <template v-for="part in step.parts" :key="part.id">
-            <!-- Reasoning block -->
-            <div v-if="part.type === 'reasoning'" class="reasoning-block">
-              <div v-if="part.text">
-                <div
-                  class="reasoning-text"
-                  :class="{ clamped: !reasoningExpanded[part.id] }"
-                >{{ part.text }}</div>
-                <button
-                  v-if="needsExpandButton(part.text)"
-                  class="reasoning-toggle"
-                  @click.stop="toggleReasoning(part.id)"
-                >
-                  {{ reasoningExpanded[part.id] ? '收起' : '展开' }}
-                </button>
-              </div>
-              <div v-else class="loading-wave">
-                <span>.</span><span>.</span><span>.</span>
-              </div>
+        <template v-for="(item, index) in items" :key="item.part.id">
+          <!-- 过程中说的话：和工具按先后穿插，比最终回复淡一档 -->
+          <div v-if="item.kind === 'narration'" class="narration">
+            <MarkdownText :text="item.part.text || ''" :streaming="isLiveNarration(index)" />
+          </div>
+
+          <div v-else-if="item.kind === 'reasoning'" class="reasoning-block">
+            <div v-if="item.part.text">
+              <div
+                class="reasoning-text"
+                :class="{ clamped: !reasoningExpanded[item.part.id] }"
+              >{{ item.part.text }}</div>
+              <button
+                v-if="needsExpandButton(item.part.text)"
+                class="reasoning-toggle"
+                @click.stop="toggleReasoning(item.part.id)"
+              >
+                {{ reasoningExpanded[item.part.id] ? '收起' : '展开' }}
+              </button>
             </div>
-            <!-- Tool call -->
-            <ToolCall v-else-if="part.type === 'tool'" :tool="part" :hideAttachments="true" />
-          </template>
+            <div v-else class="loading-wave">
+              <span>.</span><span>.</span><span>.</span>
+            </div>
+          </div>
+
+          <ToolCall v-else :tool="item.part" :hideAttachments="true" />
         </template>
       </div>
     </div>
@@ -175,62 +159,13 @@ function needsExpandButton(text: string): boolean {
   margin: 2px 0 6px;
 }
 
-/* ── 运行中折起时的进度行 ── */
-.steps-peek {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 6px;
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  font-size: var(--text-sm);
-  font-family: var(--font-mono);
-  color: var(--text-muted);
-}
-.steps-peek:hover { color: var(--text-secondary); }
-.steps-peek.has-error { color: var(--error); }
-
-.steps-waiting {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  background: transparent;
-  border: 0;
-  padding: 8px 0;
-  font-size: var(--text-13);
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-/* 一道扫过文字的微光，比转圈安静 */
-.steps-shimmer {
-  background: linear-gradient(
-    100deg,
-    var(--text-muted) 0%,
-    var(--text-muted) 38%,
-    var(--text-primary) 50%,
-    var(--text-muted) 62%,
-    var(--text-muted) 100%
-  );
-  background-size: 240% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  animation: steps-shimmer 2.2s linear infinite;
-}
-
-@keyframes steps-shimmer {
-  from { background-position: 130% 0; }
-  to { background-position: -30% 0; }
-}
-
-/* ── 折起 / 展开共用的头 ── */
+/* ── 头：运行中和跑完共用，只换文字不换元素，更新时不闪 ── */
 .steps-head {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 4px 6px;
+  min-height: 26px;
+  padding: 3px 6px;
   cursor: pointer;
   color: var(--text-secondary);
   border-radius: var(--radius-sm);
@@ -259,27 +194,64 @@ function needsExpandButton(text: string): boolean {
   background: var(--error-subtle);
   color: var(--error);
 }
-.steps-icon.idle {
-  background: var(--bg-tertiary);
-  color: var(--text-muted);
+.steps-icon.running {
+  color: var(--accent);
+}
+.steps-icon .tool-pulse {
+  width: 7px;
+  height: 7px;
 }
 
 .steps-summary {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-sm);
-  font-family: var(--font-mono);
+  font-size: var(--text-13);
+  font-family: var(--font-sans);
   color: var(--text-muted);
 }
 .steps-head:hover .steps-summary {
   color: var(--text-secondary);
 }
 
+/* 一道扫过文字的微光，比转圈安静 */
+.steps-summary.steps-shimmer {
+  background: linear-gradient(
+    100deg,
+    var(--text-muted) 0%,
+    var(--text-muted) 38%,
+    var(--text-primary) 50%,
+    var(--text-muted) 62%,
+    var(--text-muted) 100%
+  );
+  background-size: 240% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: steps-shimmer 2.2s linear infinite;
+}
+
+@keyframes steps-shimmer {
+  from { background-position: 130% 0; }
+  to { background-position: -30% 0; }
+}
+
+.steps-duration {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .steps-chevron {
   flex-shrink: 0;
   color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+.steps-chevron.open {
+  transform: rotate(90deg);
 }
 
 /* ── 过程正文：0fr → 1fr 让开合有个高度过渡 ── */
@@ -304,8 +276,7 @@ function needsExpandButton(text: string): boolean {
   margin-left: 6px;
 }
 
-/* 组里的卡片退成列表行：挂在左侧细轨上表示层级，不再每张一个框。
-   展开一次过程就看到十几个圆角方块堆在一起，层级反而更难读。 */
+/* 组里的卡片退成列表行：挂在左侧细轨上表示层级，不再每张一个框。 */
 .steps-body :deep(.tool-call) {
   background: transparent;
   border: 0;
@@ -325,15 +296,22 @@ function needsExpandButton(text: string): boolean {
   border-top: 0;
 }
 
-.step-divider {
-  height: 1px;
-  background: var(--border-subtle);
-  margin: 8px 0;
+/* ── 过程中说的话 ── */
+.narration {
+  padding: 6px 6px 4px;
+}
+.narration :deep(.markdown-content) {
+  font-size: var(--text-base);
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+.narration :deep(.markdown-content p) {
+  margin-bottom: 0.4em;
 }
 
 /* ── Reasoning ── */
 .reasoning-block {
-  margin: 4px 0 6px;
+  margin: 4px 6px 6px;
 }
 
 .reasoning-text {

@@ -4,7 +4,7 @@ import { groupSessionsByProject } from '../utils/session-groups'
 import {
   PanelLeftClose, PanelLeft, MessageSquare, Plus, Search,
   FolderOpen, Sparkles, Pencil, Trash2, X, Check,
-  Loader2, Square, ChevronRight, User, Settings, EllipsisVertical, BarChart3, Webhook
+  Loader2, Square, ChevronRight, User, Settings, EllipsisVertical, BarChart3, Webhook, LogOut
 } from 'lucide-vue-next'
 import type { Session, FileItem } from '../api/client'
 import { useUserProfile } from '../composables/useUserProfile'
@@ -48,6 +48,8 @@ const props = defineProps<{
   runningCount: number
   maxParallelAgents: number
   activePage: 'chat' | 'projects' | 'metrics' | 'automations'
+  // WebUI 启用访问密码时才显示退出入口
+  canLogout?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -67,6 +69,7 @@ const emit = defineEmits<{
   'open-projects': []
   'open-metrics': []
   'open-automations': []
+  'logout': []
 }>()
 
 // User profile
@@ -158,7 +161,7 @@ function contextMenuDelete() {
         <img v-if="brandLogo.logoUrl" :src="brandLogo.logoUrl" alt="Nine1Bot" class="brand-logo" />
         <span class="brand-text">Nine1Bot</span>
       </div>
-      <button class="collapse-btn" @click="emit('toggle-collapse')" :title="mobileOpen ? '关闭侧边栏' : collapsed ? '展开' : '折叠'">
+      <button class="collapse-btn" @click="emit('toggle-collapse')" :title="mobileOpen ? '关闭侧边栏' : collapsed ? '展开' : '折叠'" :aria-label="mobileOpen ? '关闭侧边栏' : collapsed ? '展开侧边栏' : '折叠侧边栏'">
         <PanelLeftClose v-if="!collapsed" :size="18" />
         <PanelLeft v-else :size="18" />
       </button>
@@ -190,29 +193,29 @@ function contextMenuDelete() {
 
     <!-- Top Navigation (collapsed) -->
     <nav class="sidebar-nav sidebar-nav-collapsed" v-if="collapsed">
-      <button class="nav-item-icon" @click="emit('new-session')" title="新会话">
+      <button class="nav-item-icon" @click="emit('new-session')" title="新会话" aria-label="新会话">
         <Plus :size="18" />
       </button>
-      <button class="nav-item-icon" @click="emit('open-search')" title="搜索">
+      <button class="nav-item-icon" @click="emit('open-search')" title="搜索" aria-label="搜索">
         <Search :size="18" />
       </button>
-      <button class="nav-item-icon" :class="{ active: activePage === 'projects' }" @click="emit('open-projects')" title="项目">
+      <button class="nav-item-icon" :class="{ active: activePage === 'projects' }" @click="emit('open-projects')" title="项目" aria-label="项目">
         <FolderOpen :size="18" />
       </button>
-      <button class="nav-item-icon" :class="{ active: activePage === 'metrics' }" @click="emit('open-metrics')" title="统计">
+      <button class="nav-item-icon" :class="{ active: activePage === 'metrics' }" @click="emit('open-metrics')" title="统计" aria-label="统计">
         <BarChart3 :size="18" />
       </button>
-      <button class="nav-item-icon" :class="{ active: activePage === 'automations' }" @click="emit('open-automations')" title="自动化">
+      <button class="nav-item-icon" :class="{ active: activePage === 'automations' }" @click="emit('open-automations')" title="自动化" aria-label="自动化">
         <Webhook :size="18" />
       </button>
     </nav>
 
     <!-- Recents Section -->
     <div class="sidebar-section" v-if="!collapsed">
-      <div class="section-header" @click="showRecents = !showRecents">
-        <span class="section-label">项目</span>
+      <button type="button" class="section-header" :aria-expanded="showRecents" @click="showRecents = !showRecents">
+        <span class="section-label">会话</span>
         <ChevronRight :size="14" class="section-chevron" :class="{ expanded: showRecents }" />
-      </div>
+      </button>
 
       <div v-if="showRecents" class="section-list">
         <!-- Draft Session -->
@@ -221,7 +224,7 @@ function contextMenuDelete() {
           class="session-item active"
         >
           <Sparkles :size="14" class="session-icon" />
-          <span class="session-title">新对话</span>
+          <span class="session-title">新会话</span>
         </div>
 
         <section v-for="group in sessionGroups" :key="group.id" class="project-session-group">
@@ -232,7 +235,7 @@ function contextMenuDelete() {
               <span>{{ group.name }}</span>
               <span class="project-session-count">{{ group.sessions.length }}</span>
             </button>
-            <button v-if="group.projectId" class="mini-btn project-new" :title="'在 ' + group.name + ' 中新建会话'" @click="emit('project-new-session', group.projectId)"><Plus :size="14" /></button>
+            <button v-if="group.projectId" class="mini-btn project-new" :title="'在 ' + group.name + ' 中新建会话'" :aria-label="'在 ' + group.name + ' 中新建会话'" @click="emit('project-new-session', group.projectId)"><Plus :size="14" /></button>
           </div>
           <div v-show="!collapsedProjects[group.id]" class="project-session-children">
         <!-- Sessions in this project -->
@@ -266,7 +269,7 @@ function contextMenuDelete() {
             >
               <Square :size="10" fill="currentColor" />
             </button>
-            <button class="mini-btn" @click="openContextMenu($event, session)" title="更多操作">
+            <button class="mini-btn" @click="openContextMenu($event, session)" title="更多操作" aria-label="更多操作">
               <EllipsisVertical :size="14" />
             </button>
           </div>
@@ -297,12 +300,19 @@ function contextMenuDelete() {
         </div>
         <Settings :size="16" class="settings-icon" />
       </button>
+      <!-- 原来是悬浮在页面右下角的按钮，会压住输入框和「回到最新」 -->
+      <button v-if="canLogout" class="footer-logout" type="button" title="退出登录" aria-label="退出登录" @click="emit('logout')">
+        <LogOut :size="15" />
+      </button>
     </div>
 
     <!-- Collapsed Footer (avatar only) -->
     <div class="sidebar-footer sidebar-footer-collapsed" v-if="collapsed">
-      <button class="nav-item-icon" @click="emit('open-settings')" title="设置">
+      <button class="nav-item-icon" @click="emit('open-settings')" title="设置" aria-label="设置">
         <User :size="18" />
+      </button>
+      <button v-if="canLogout" class="nav-item-icon" @click="emit('logout')" title="退出登录" aria-label="退出登录">
+        <LogOut :size="16" />
       </button>
     </div>
   </aside>
@@ -391,12 +401,14 @@ function contextMenuDelete() {
 
 <style scoped>
 .project-group-heading { display: flex; align-items: center; gap: 4px; margin: 12px 0 4px; }
-.project-group-toggle { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--text-secondary); padding: 7px 4px; cursor: pointer; text-align: left; }
+.project-group-toggle { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); padding: 6px 4px; cursor: pointer; text-align: left; font-family: var(--font-sans); font-size: var(--text-13); font-weight: 500; }
+.project-group-toggle:hover { background: var(--hover-overlay); color: var(--text-primary); }
 .project-group-toggle > span:first-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-group-toggle svg { flex-shrink: 0; }
 .project-group-toggle .expanded { transform: rotate(90deg); }
-.project-session-count { margin-left: auto; font-size: 11px; color: var(--text-muted); }
-.project-session-children { padding-left: 15px; }
+.project-session-count { margin-left: auto; font-size: var(--text-xs); font-weight: 400; color: var(--text-muted); }
+/* 会话挂在项目下的一条细轨上，和对话区「过程」的左轨是同一种层级语言 */
+.project-session-children { margin-left: 10px; padding-left: 8px; border-left: 1px solid var(--border-default); }
 .project-session-children .session-item { padding-left: 10px; }
 .project-session-children .session-icon:not(.spin) { display: none; }
 .project-empty { color: var(--text-muted); padding: 8px 12px; font-size: var(--text-sm); }
@@ -477,8 +489,13 @@ function contextMenuDelete() {
 }
 
 .nav-item.active {
-  background: var(--accent-subtle);
-  color: var(--accent);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.nav-item.active svg {
+  opacity: 1;
 }
 
 .nav-item.new-chat {
@@ -509,7 +526,12 @@ function contextMenuDelete() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
+  margin-top: var(--space-sm);
   padding: var(--space-xs) var(--space-md);
+  border: 0;
+  background: transparent;
+  font-family: var(--font-sans);
   cursor: pointer;
 }
 
@@ -517,8 +539,10 @@ function contextMenuDelete() {
   font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+}
+
+.section-header:hover .section-label {
+  color: var(--text-secondary);
 }
 
 .section-chevron {
@@ -548,7 +572,7 @@ function contextMenuDelete() {
 }
 
 .session-item.active .session-icon {
-  color: var(--accent);
+  color: var(--text-primary);
 }
 
 .session-title {
@@ -603,7 +627,7 @@ function contextMenuDelete() {
 }
 
 .session-item.active .session-title {
-  color: var(--accent);
+  color: var(--text-primary);
   font-weight: 500;
 }
 
@@ -648,7 +672,7 @@ function contextMenuDelete() {
 }
 
 .mini-btn:hover {
-  background: var(--bg-primary);
+  background: var(--active-overlay);
   color: var(--text-primary);
 }
 
@@ -668,7 +692,35 @@ function contextMenuDelete() {
 }
 
 /* === User Profile Footer (base .sidebar-footer lives in global style.css) === */
+.sidebar-footer:not(.sidebar-footer-collapsed) {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.footer-logout {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.footer-logout:hover {
+  background: var(--hover-overlay);
+  color: var(--error);
+}
+
 .user-profile {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   border: 0;
   background: transparent;
@@ -690,6 +742,7 @@ function contextMenuDelete() {
 }
 
 .user-avatar {
+  flex-shrink: 0;
   width: 32px;
   height: 32px;
   display: flex;
@@ -708,6 +761,7 @@ function contextMenuDelete() {
 }
 
 .user-info {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -756,13 +810,17 @@ function contextMenuDelete() {
 }
 
 .nav-item-icon.active {
-  background: var(--accent-subtle);
-  color: var(--accent);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
 }
 
 /* === Collapsed Footer === */
 .sidebar-footer-collapsed {
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
   justify-content: center;
   padding: var(--space-sm) 0;
   border-top: 1px solid var(--border-subtle);
@@ -867,8 +925,6 @@ function contextMenuDelete() {
   font-size: var(--text-xs);
   font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
 }
 
 /* Project tag items in context menu */

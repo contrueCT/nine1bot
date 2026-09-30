@@ -66,6 +66,8 @@ export default defineConfig({
       '/question': apiTarget,
       '/permission': apiTarget,
       '/preferences': apiTarget,
+      // 只代理精确的 /path，不吞掉以 /path 开头的其它前端资源
+      '^/path(\\?.*)?$': apiTarget,
     }
   }
 })

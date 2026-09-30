@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, computed, onMounted, onUnmounted, toRef } from 'vue'
 import { readChatViewport, saveChatViewport } from '../composables/chat-viewport'
 import { isAtBottom, isTypingTarget, nextFollowing, UP_KEYS } from '../composables/scroll-follow'
+import { splitPath, tildify, useWorkspacePath } from '../composables/useWorkspacePath'
 import { ArrowDown, FolderOpen } from 'lucide-vue-next'
 import type { Message, QuestionRequest, PermissionRequest } from '../api/client'
 import MessageItem from './MessageItem.vue'
@@ -95,13 +96,15 @@ function handleDirectoryCancel() {
   showDirectoryBrowser.value = false
 }
 
-// 获取目录显示名称
-function getDirectoryName(path: string): string {
-  if (!path || path === '~' || path === '.') return ''
-  // 处理 Windows 和 Unix 路径
-  const parts = path.replace(/\\/g, '/').split('/')
-  return parts[parts.length - 1] || path
-}
+/* 空态的主角是工作目录：Agent 接下来读写文件、执行命令都落在这里。
+   草稿会话的目录是 "."，要先解析成绝对路径才有东西可显示。 */
+const workspacePath = useWorkspacePath(toRef(props, 'currentDirectory'))
+const workspace = computed(() => {
+  const path = workspacePath.value
+  if (!path) return null
+  const { parent, name } = splitPath(tildify(path))
+  return { parent, name, full: path }
+})
 
 const messageContent = ref<HTMLDivElement>()
 const following = ref(true)
@@ -261,23 +264,20 @@ onUnmounted(() => {
     <!-- Empty State -->
     <div v-if="validMessages.length === 0 && !isLoading && !sessionError && !loadError && !interactionCount" class="chat-empty">
       <div class="welcome-section">
-        <div class="greeting-row">
-          <!-- Decorative star icon -->
-          <svg class="greeting-icon" width="32" height="32" viewBox="0 0 100 101" fill="none">
-            <path d="M50 0L56.2 37.5L87.5 12.5L68.8 46.9L100 50L68.8 53.1L87.5 87.5L56.2 62.5L50 100L43.8 62.5L12.5 87.5L31.2 53.1L0 50L31.2 46.9L12.5 12.5L43.8 37.5L50 0Z" fill="currentColor"/>
-          </svg>
-          <span class="greeting-text">{{ greeting }}</span>
-        </div>
-
-        <!-- Directory selector below greeting -->
-        <div v-if="canChangeDirectory" class="directory-selector-section">
-          <button class="directory-btn" @click="openDirectoryPicker">
-            <FolderOpen :size="16" />
-            <span class="directory-btn-text">
-              {{ currentDirectory && getDirectoryName(currentDirectory) ? getDirectoryName(currentDirectory) : '选择工作目录' }}
-            </span>
-          </button>
-        </div>
+        <template v-if="canChangeDirectory">
+          <p class="welcome-lead">{{ greeting }}，Nine1Bot 会在这个目录里读写文件、执行命令。</p>
+          <div class="workspace-hero">
+            <div class="workspace-path" :title="workspace?.full">
+              <span v-if="workspace?.parent" class="workspace-parent">{{ workspace.parent }}</span>
+              <span class="workspace-name">{{ workspace?.name || '还没有选定工作目录' }}</span>
+            </div>
+            <button class="workspace-change" @click="openDirectoryPicker">
+              <FolderOpen :size="15" />
+              <span>{{ workspace ? '更换目录' : '选择目录' }}</span>
+            </button>
+          </div>
+        </template>
+        <p v-else class="welcome-lead">{{ greeting }}，可以直接提问，也可以让 Nine1Bot 处理当前页面。</p>
       </div>
     </div>
 
@@ -352,7 +352,7 @@ onUnmounted(() => {
 .chat-viewport { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; }
 .scroll-actions { position: absolute; bottom: 16px; right: 24px; display: flex; gap: 8px; z-index: var(--z-sticky); }
 .jump-latest, .pending-shortcut { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-default); padding: 8px 12px; border-radius: var(--radius-full); background: var(--bg-elevated); color: var(--text-primary); box-shadow: var(--shadow-sm); cursor: pointer; font-size: var(--text-13); }
-.pending-shortcut { color: var(--accent); }
+.pending-shortcut { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 35%, transparent); }
 .load-earlier { align-self: center; margin-bottom: 16px; }
 @media (max-width: 640px) {
   .chat-viewport .messages-container { padding: 16px 4px; }
@@ -395,87 +395,91 @@ onUnmounted(() => {
 }
 
 /* === Empty State === */
+/* 贴着输入框往下沉：目光从目录名直接落到要输入的地方。
+   左边缘和输入框对齐，所以这里不再加横向内边距。 */
 .chat-empty {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 0 var(--space-md);
+  justify-content: flex-end;
   width: 100%;
+  padding: 0 0 var(--space-xl);
   overflow: hidden;
 }
 
 .welcome-section {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: var(--space-xl);
+  gap: var(--space-md);
   max-width: var(--input-max-width);
   width: 100%;
-  animation: fade-up 0.6s ease-out;
-  will-change: transform, opacity;
+  margin: 0 auto;
 }
 
-.greeting-row {
+.welcome-lead {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  max-width: 34em;
+}
+
+.workspace-hero {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
+  justify-content: space-between;
   gap: var(--space-md);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--border-default);
 }
 
-.greeting-icon {
-  color: var(--accent);
-  flex-shrink: 0;
-  opacity: 0.8;
-}
-
-.greeting-text {
-  font-family: var(--font-serif);
-  font-size: 2rem;
-  font-weight: 400;
-  color: var(--text-primary);
-  line-height: 1.3;
-  letter-spacing: -0.01em;
-}
-
-/* Directory selector */
-.directory-selector-section {
+.workspace-path {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  min-width: 0;
 }
 
-.directory-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  background: transparent;
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-full);
+.workspace-parent {
+  font-family: var(--font-mono);
+  font-size: var(--text-13);
   color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-name {
+  font-size: 2.571rem;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.workspace-change {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
   font-family: var(--font-sans);
   font-size: var(--text-13);
-  font-weight: 400;
   cursor: pointer;
-  transition: all var(--transition-normal);
+  transition: border-color var(--transition-fast), color var(--transition-fast);
 }
 
-.directory-btn:hover {
-  background: var(--bg-tertiary);
+.workspace-change:hover {
   border-color: var(--border-hover);
   color: var(--text-primary);
 }
 
-.directory-btn svg {
-  color: inherit;
-}
-
-.directory-btn-text {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+@media (max-width: 640px) {
+  .workspace-hero { flex-direction: column; align-items: flex-start; }
+  .workspace-name { font-size: var(--text-3xl); }
 }
 
 /* === Loading State === */

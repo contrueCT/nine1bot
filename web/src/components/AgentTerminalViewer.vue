@@ -361,7 +361,7 @@ defineExpose({
   display: inline-block;
   padding: 2px 8px;
   background: var(--error);
-  color: white;
+  color: var(--solid-fg);
   font-size: var(--text-xs);
   border-radius: 4px;
 }

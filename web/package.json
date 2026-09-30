@@ -17,6 +17,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "5.2.7",
+    "@fontsource/ibm-plex-sans": "5.2.8",
     "@nine1bot/platform-gitlab": "workspace:*",
     "@types/marked": "^5.0.2",
     "@xterm/addon-fit": "^0.11.0",

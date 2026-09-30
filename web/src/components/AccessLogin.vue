@@ -68,7 +68,7 @@ async function submit(): Promise<void> {
   border: 1px solid var(--border-default);
   border-radius: 14px;
   background: var(--bg-elevated);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-lg);
 }
 
 .access-login-icon {
@@ -102,7 +102,7 @@ button {
   border: 0;
   border-radius: 9px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-fg);
   font-weight: 650;
   cursor: pointer;
 }
@@ -115,6 +115,6 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   font-size: 12px;
   line-height: 1.5;
 }
-.access-http-warning { background: #fff4d6; color: #7a4b00; }
-.access-login-error { margin-top: 10px; margin-bottom: 0; background: #fff0ef; color: #b42318; }
+.access-http-warning { background: var(--warning-subtle); color: var(--warning); }
+.access-login-error { margin-top: 10px; margin-bottom: 0; background: var(--error-subtle); color: var(--error); }
 </style>

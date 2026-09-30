@@ -22,7 +22,7 @@ import RightPanel from './components/RightPanel.vue'
 import { useAgentTerminal } from './composables/useAgentTerminal'
 import { useFilePreview } from './composables/useFilePreview'
 import { useTheme } from './composables/useTheme'
-import { Globe2, Plus, RefreshCw, Settings, Terminal } from 'lucide-vue-next'
+import { Globe2, LogOut, Plus, RefreshCw, Settings, Terminal } from 'lucide-vue-next'
 import { getTrustedExtensionParentContext, isTrustedExtensionParentEvent } from './utils/extension-parent'
 import { useAccessAuth } from './composables/useAccessAuth'
 import { parseSettingsDeepLink } from './utils/settings-deeplink'
@@ -197,6 +197,9 @@ const {
   resetGlobalRecentSessions,
   applyRecentSessionTitle,
 } = useGlobalRecentSessions()
+
+// 主界面的输入框：空态起手任务要把文字填进去
+const mainInputBox = ref<InstanceType<typeof InputBox>>()
 
 // 文件查看器状态
 const showFileViewer = ref(false)
@@ -963,9 +966,9 @@ function handleOpenSkills() {
   openSettings()
 }
 
-// 处理提示分类选择
+// 起手任务只填进输入框，让用户补充要求后再发送
 function handlePromptSelect(prompt: string) {
-  handleSend(prompt)
+  mainInputBox.value?.fillDraft(prompt)
 }
 </script>
 
@@ -980,13 +983,6 @@ function handlePromptSelect(prompt: string) {
         当前通过 HTTP 访问；功能可用，但传输内容不会被加密。
       </div>
     </Transition>
-    <button
-      v-if="accessEnabled"
-      class="access-logout-button"
-      type="button"
-      title="退出 WebUI 登录"
-      @click="handleAccessLogout"
-    >退出登录</button>
 
   <div v-if="isBrowserExtension" class="extension-app-layout">
     <header class="extension-chat-header">
@@ -1001,11 +997,14 @@ function handlePromptSelect(prompt: string) {
         </div>
       </div>
       <div class="extension-header-actions">
-        <button class="extension-icon-btn" type="button" title="刷新页面上下文" @click="refreshExtensionPageContext">
+        <button class="extension-icon-btn" type="button" title="刷新页面上下文" aria-label="刷新页面上下文" @click="refreshExtensionPageContext">
           <RefreshCw :size="16" />
         </button>
-        <button class="extension-icon-btn" type="button" title="设置" @click="openSettings">
+        <button class="extension-icon-btn" type="button" title="设置" aria-label="设置" @click="openSettings">
           <Settings :size="16" />
+        </button>
+        <button v-if="accessEnabled" class="extension-icon-btn" type="button" title="退出登录" aria-label="退出登录" @click="handleAccessLogout">
+          <LogOut :size="16" />
         </button>
         <button class="extension-action-btn" type="button" @click="handleNewSession">
           <Plus :size="16" />
@@ -1125,6 +1124,8 @@ function handlePromptSelect(prompt: string) {
       :runningCount="runningCount"
       :maxParallelAgents="MAX_PARALLEL_AGENTS"
       :activePage="showMetricsPage ? 'metrics' : showAutomationsPage ? 'automations' : showProjectsPage ? 'projects' : 'chat'"
+      :canLogout="accessEnabled"
+      @logout="handleAccessLogout"
       @toggle-collapse="toggleSidebar"
       @select-session="handleSidebarSelectSession"
       @new-session="handleNewSession"
@@ -1227,6 +1228,7 @@ function handlePromptSelect(prompt: string) {
               @change-directory="changeDirectory"
             />
             <InputBox
+              ref="mainInputBox"
               :draftKey="composerKey"
               :modelError="settingsError"
               :savingModel="savingModel"
@@ -1338,17 +1340,18 @@ function handlePromptSelect(prompt: string) {
 
 .access-transport-warning {
   position: fixed;
-  z-index: 1000;
+  z-index: var(--z-overlay);
   top: 8px;
   left: 50%;
   transform: translateX(-50%);
   max-width: calc(100vw - 220px);
   padding: 6px 10px;
-  border-radius: 7px;
-  background: #fff4d6;
-  color: #7a4b00;
-  font-size: 11px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--warning);
+  font-size: var(--text-xs);
+  box-shadow: var(--shadow-md);
 }
 
 .access-transport-warning-enter-active,
@@ -1362,22 +1365,6 @@ function handlePromptSelect(prompt: string) {
   transform: translate(-50%, -4px);
 }
 
-.access-logout-button {
-  position: fixed;
-  z-index: 1001;
-  right: 12px;
-  bottom: 12px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  background: var(--bg-elevated);
-  color: var(--text-muted);
-  font-size: 11px;
-  cursor: pointer;
-  opacity: 0.78;
-}
-
-.access-logout-button:hover { opacity: 1; color: var(--text-primary); }
 
 .extension-app-layout {
   display: flex;
@@ -1507,9 +1494,9 @@ function handlePromptSelect(prompt: string) {
   gap: 10px;
   margin: 10px 0 0;
   padding: 10px 12px;
-  border: 1px solid rgba(180, 35, 24, 0.22);
+  border: 1px solid color-mix(in srgb, var(--error) 28%, transparent);
   border-radius: var(--radius-md);
-  background: rgba(180, 35, 24, 0.06);
+  background: var(--error-subtle);
   color: var(--text-primary);
 }
 

@@ -1384,6 +1384,15 @@ export const api = {
     return Array.isArray(data) ? data : (data.data || [])
   },
 
+  // 解析当前请求目录对应的绝对路径（草稿会话的 "." 在服务端才知道落在哪）
+  async getPath(): Promise<{ home: string; directory: string; worktree: string }> {
+    const res = await fetchWithDirectory(`${BASE_URL}/path`)
+    if (!res.ok) {
+      throw new Error(`Failed to get path: ${res.status}`)
+    }
+    return res.json()
+  },
+
   // 获取文件列表
   async getFiles(path: string = '', directory?: string): Promise<FileItem[]> {
     const params = new URLSearchParams()

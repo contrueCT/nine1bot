@@ -241,7 +241,7 @@ defineExpose({ fit })
 
 .close-single-btn:hover {
   background: var(--danger);
-  color: white;
+  color: var(--solid-fg);
 }
 
 .separator {

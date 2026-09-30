@@ -2,9 +2,10 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { User, Pencil, Trash2, X, Check, File } from 'lucide-vue-next'
+import { Pencil, Trash2, X, Check, File } from 'lucide-vue-next'
 import type { Message, MessagePart } from '../api/client'
 import { useUserProfile } from '../composables/useUserProfile'
+import { formatMessageTime } from '../utils/time-format'
 
 const { profile } = useUserProfile()
 
@@ -24,6 +25,11 @@ const deleteConfirmPartId = ref<string | null>(null)
 
 // 用户消息的第一个文本 part（纯附件消息没有，编辑/删除按钮据此隐藏）
 const firstTextPart = computed(() => props.message.parts.find(p => p.type === 'text'))
+
+const sentTime = computed(() => {
+  const created = props.message.info.time?.created
+  return created ? formatMessageTime(created) : null
+})
 
 function startEdit(part?: MessagePart) {
   if (!part || part.type !== 'text' || !part.text) return
@@ -139,15 +145,15 @@ onUnmounted(() => {
 <template>
   <!-- ChatPanel 只传入 user 消息，agent 消息由 AgentMessageGroup 渲染 -->
   <div class="message-row user-row">
-    <div class="avatar shadow-sm">
-      <img v-if="profile.avatarUrl" :src="profile.avatarUrl" alt="头像" class="avatar-img" />
-      <User v-else :size="18" />
+    <!-- 只有设置了头像才显示：默认的小人图标每条消息都重复一遍，只是噪声 -->
+    <div v-if="profile.avatarUrl" class="avatar">
+      <img :src="profile.avatarUrl" alt="头像" class="avatar-img" />
     </div>
 
     <!-- User message -->
     <div class="message-wrapper user-wrapper">
-      <div class="message-bubble user-bubble">
-        <div class="message-sender-name" v-if="profile.name">{{ profile.name }}</div>
+      <div class="message-sender-name" v-if="profile.name">{{ profile.name }}</div>
+      <div class="message-bubble user-bubble" :class="{ editing: !!editingPartId }">
         <div class="message-content">
           <template v-for="item in userParts" :key="item.part.id || item.index">
             <!-- File Attachment -->
@@ -180,10 +186,14 @@ onUnmounted(() => {
           </template>
         </div>
       </div>
-      <!-- 用户消息操作按钮（纯附件消息没有文本 part，不渲染编辑/删除） -->
-      <div class="message-actions" v-if="!editingPartId && firstTextPart">
-        <button class="action-btn" @click="startEdit(firstTextPart)" title="编辑"><Pencil :size="14" /></button>
-        <button class="action-btn danger" @click="startDelete(firstTextPart)" title="删除"><Trash2 :size="14" /></button>
+      <!-- 悬停时出现：发送时间 + 操作按钮（纯附件消息没有文本 part，不渲染编辑/删除）。
+           这一行始终占位，只切换透明度，悬停时下面的消息不会跳动 -->
+      <div class="message-actions" v-if="!editingPartId && (sentTime || firstTextPart)">
+        <time v-if="sentTime" class="message-time" :datetime="sentTime.iso" :title="sentTime.full">{{ sentTime.label }}</time>
+        <template v-if="firstTextPart">
+          <button class="action-btn" @click="startEdit(firstTextPart)" title="编辑" aria-label="编辑消息"><Pencil :size="14" /></button>
+          <button class="action-btn danger" @click="startDelete(firstTextPart)" title="删除" aria-label="删除消息"><Trash2 :size="14" /></button>
+        </template>
       </div>
     </div>
   </div>
@@ -226,8 +236,8 @@ onUnmounted(() => {
 <style scoped>
 .message-row {
   display: flex;
-  gap: 12px;
-  padding: 12px var(--space-lg);
+  gap: 10px;
+  padding: 16px var(--space-lg) 8px;
   width: 100%;
   opacity: 0;
   animation: fade-up 0.3s var(--ease-smooth) forwards;
@@ -238,9 +248,11 @@ onUnmounted(() => {
 }
 
 .avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
+  width: 28px;
+  height: 28px;
+  margin-top: 2px;
+  border-radius: 50%;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -263,7 +275,8 @@ onUnmounted(() => {
 .message-wrapper {
   display: flex;
   flex-direction: column;
-  max-width: 720px;
+  min-width: 0;
+  max-width: min(82%, 620px);
 }
 
 .user-wrapper {
@@ -273,28 +286,63 @@ onUnmounted(() => {
 .message-bubble {
   width: fit-content;
   max-width: 100%;
-  padding: 10px 14px;
-  border-radius: var(--radius-lg);
   position: relative;
-  line-height: 1.5;
-  word-wrap: break-word;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
+/* 用户气泡：浅灰块，靠近发言人一侧的上角收紧，读起来是「从右边说出来的」。
+   字号比回答小一档：用户的话是指令，回答才是要细读的正文。 */
 .user-bubble {
+  padding: 9px 15px;
+  border-radius: 18px 6px 18px 18px;
   background: var(--user-bubble);
   color: var(--text-primary);
 }
 
-.message-sender-name {
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+.user-bubble.editing {
+  width: min(620px, 100%);
+  border-radius: 14px;
 }
 
+.user-bubble :deep(.markdown-content) {
+  font-size: var(--text-base);
+  line-height: 1.65;
+}
+
+.user-bubble :deep(.markdown-content p) {
+  margin-bottom: 0.6em;
+}
+
+.user-bubble :deep(.markdown-content p:last-child) {
+  margin-bottom: 0;
+}
+
+/* 气泡本身就是浅灰，行内代码和代码块要反过来用白底才分得出来 */
+.user-bubble :deep(.markdown-content code) {
+  background: var(--bg-primary);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+
+.user-bubble :deep(.markdown-content pre) {
+  margin: 0.6em 0;
+  padding: 10px 12px;
+  background: var(--bg-primary);
+}
+
+.user-bubble :deep(.markdown-content pre code) {
+  box-shadow: none;
+}
+
+.user-bubble :deep(.markdown-content pre .copy-code) {
+  display: none;
+}
+
+.message-sender-name {
+  margin: 0 6px 4px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+}
 
 /* Prose / Markdown styling lives in global style.css (.markdown-content) */
 
@@ -307,25 +355,40 @@ onUnmounted(() => {
 .message-actions {
   display: flex;
   flex-direction: row;
-  gap: 4px;
+  align-items: center;
+  gap: 2px;
+  min-height: 26px;
   opacity: 0;
   transition: opacity var(--transition-fast);
-  margin-top: 4px;
+  margin-top: 2px;
   justify-content: flex-end;
 }
 
-.message-row:hover .message-actions {
+.message-time {
+  margin-right: 4px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.message-row:hover .message-actions,
+.message-row:focus-within .message-actions {
   opacity: 1;
 }
 
+@media (hover: none) {
+  .message-actions { opacity: 1; }
+}
+
 .action-btn {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
-  background: var(--bg-tertiary);
+  background: transparent;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   cursor: pointer;
@@ -333,7 +396,7 @@ onUnmounted(() => {
 }
 
 .action-btn:hover {
-  background: var(--bg-elevated);
+  background: var(--hover-overlay);
   color: var(--text-primary);
 }
 
@@ -351,11 +414,12 @@ onUnmounted(() => {
 
 .edit-textarea {
   width: 100%;
-  min-width: 300px;
-  padding: var(--space-sm);
+  min-width: 0;
+  padding: var(--space-sm) 10px;
   background: var(--bg-primary);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
+  line-height: 1.6;
   color: var(--text-primary);
   font-size: var(--text-base);
   font-family: inherit;
@@ -364,7 +428,8 @@ onUnmounted(() => {
 
 .edit-textarea:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.45);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
 .edit-actions {
@@ -375,8 +440,11 @@ onUnmounted(() => {
 
 /* File Attachment */
 .file-attachment {
-  margin: 8px 0;
+  margin: 4px 0;
 }
+
+.file-attachment:first-child { margin-top: 0; }
+.file-attachment:last-child { margin-bottom: 0; }
 
 .uploaded-image {
   max-width: 100%;
@@ -395,8 +463,8 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: var(--bg-secondary);
+  padding: 7px 12px;
+  background: var(--bg-primary);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   font-size: var(--text-13);
