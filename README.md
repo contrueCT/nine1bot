@@ -12,7 +12,11 @@ Supports programming, file management, information retrieval, content creation, 
 
 ## Screenshots
 
-![Nine1Bot Web UI](./docs/images/feature-web-ui.jpg)
+![Nine1Bot project sessions and Agent response](./docs/images/feature-web-ui.jpg)
+
+![Nine1Bot workspace and new session](./docs/images/feature-workspace.jpg)
+
+Screenshots are rendered from the current Web UI with example projects and conversation data.
 
 ## Features
 
@@ -31,7 +35,11 @@ Supports programming, file management, information retrieval, content creation, 
 
 ### Product Features
 
-- **Web Interface** - Modern chat interface with Markdown rendering, code highlighting, agent console monitoring
+- **Web Workbench** - A white interface by default, with dark and system themes; Markdown, code block copying, message times, and execution duration
+- **Agent Execution History** - Tools, reasoning, and progress messages appear in order, then collapse after completion for later inspection
+- **Project Sessions** - Conversations grouped by project, with the working directory below the title; text, attachments, and planning state retained when switching sessions
+- **Planning and Confirmation** - Enable planning in the composer, inspect plans and todos, and handle pending questions and permissions
+- **Skill Search** - Search loaded skills in Settings and inspect their capabilities and sources
 - **Multi-Model Support** - Anthropic Claude, OpenAI, Google Gemini, OpenRouter, and more
 - **Session Working Directory** - Each session can have its own working directory with built-in directory browsing
 - **User Preferences** - Record personal preferences, AI follows your habits across all sessions
@@ -77,6 +85,12 @@ curl -X POST "http://127.0.0.1:4096/webhooks/{sourceId}/{secret}" \
   -H "Content-Type: application/json" \
   -d '{"event":"deploy_failed","severity":"warning","message":"Health check failed"}'
 ```
+
+### GitLab Review and FOG Reports
+
+The GitLab integration supports automated merge request and commit reviews. Review tools are bound to the project and frozen commit SHA, with bounded repository reads and MR CI inspection. Invalid tool arguments can be corrected by the model; an invalid final response gets at most one format-correction turn within the original timeout.
+
+Optional FOG delivery is disabled by default. MR reports are delivered after GitLab publication is confirmed and CI for the same SHA reaches a final state. A SQLite outbox retains reports, idempotency keys, and receipts for retries. Tokens are read from server-side environment variables or files. See the [FOG delivery guide](./packages/platform-gitlab/docs/review-implementation/29-fog-report-outbox.md) for configuration, capacity limits, and public URL verification.
 
 ### Built-in Skills
 

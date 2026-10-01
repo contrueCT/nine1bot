@@ -12,7 +12,11 @@
 
 ## 截图
 
-![Nine1Bot Web 界面](./docs/images/feature-web-ui.jpg)
+![Nine1Bot 项目会话与 Agent 回复](./docs/images/feature-web-ui.jpg)
+
+![Nine1Bot 工作目录与新会话](./docs/images/feature-workspace.jpg)
+
+截图由当前 Web 界面实际渲染，使用示例项目与会话数据。
 
 ## 功能特点
 
@@ -31,7 +35,11 @@
 
 ### 产品特性
 
-- **Web 界面** - 现代化的聊天界面，支持 Markdown 渲染、代码高亮、agent控制台监控
+- **Web 工作台** - 默认白色界面，可选择深色或跟随系统；支持 Markdown、代码块复制、消息时间与执行耗时
+- **Agent 执行过程** - 按顺序展示工具调用、思考和过程说明，运行结束后折叠，随时可展开查看
+- **项目会话** - 会话按项目分组，标题下展示工作目录；切换会话自动保留输入文字、附件和规划状态
+- **规划与确认** - 在输入框开启「先规划」，查看计划和待办，并集中处理待确认的问题与权限
+- **技能搜索** - 在设置中搜索已加载技能，查看可用能力与来源
 - **多模型支持** - Anthropic Claude、OpenAI、Google Gemini、OpenRouter 等
 - **会话工作目录** - 每个会话可设置独立的工作目录，内置目录浏览与选择
 - **用户偏好** - 记录个人偏好，AI 会在所有会话中遵循你的习惯
@@ -77,6 +85,12 @@ curl -X POST "http://127.0.0.1:4096/webhooks/{sourceId}/{secret}" \
   -H "Content-Type: application/json" \
   -d '{"event":"deploy_failed","severity":"warning","message":"Health check failed"}'
 ```
+
+### GitLab 自动审查与 FOG 报告
+
+GitLab 平台集成支持自动审查 MR 和提交。审查工具绑定当前项目与冻结的提交 SHA，提供有边界的仓库读取和 MR CI 查询；工具参数错误可以反馈给模型修正，最终输出格式错误最多追加一次修正，并沿用原运行超时。
+
+可选的 FOG 报告投递默认关闭。启用后，MR 报告在 GitLab 发布确认和同一 SHA 的 CI 进入最终状态后进入投递流程；SQLite 队列保留报告、幂等键和回执，支持重试。Token 从服务端环境变量或文件读取。配置方式、容量上限和公开链接校验见 [FOG 投递说明](./packages/platform-gitlab/docs/review-implementation/29-fog-report-outbox.md)。
 
 ### 内置 Skills
 
