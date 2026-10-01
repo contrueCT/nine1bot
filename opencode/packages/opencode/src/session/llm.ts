@@ -9,6 +9,7 @@ import {
   type StreamTextResult,
   type Tool,
   type ToolSet,
+  type ToolCallRepairFunction,
   extractReasoningMiddleware,
   tool,
   jsonSchema,
@@ -44,6 +45,20 @@ export namespace LLM {
   }
 
   export type StreamOutput = StreamTextResult<ToolSet, unknown>
+
+  export const repairToolCall: ToolCallRepairFunction<ToolSet> = async (failed) => {
+    const lower = failed.toolCall.toolName.toLowerCase()
+    if (lower !== failed.toolCall.toolName && Object.hasOwn(failed.tools, lower)) {
+      return { ...failed.toolCall, toolName: lower }
+    }
+    // Restricted sessions may deliberately omit the fallback tool.
+    if (!Object.hasOwn(failed.tools, "invalid")) return null
+    return {
+      ...failed.toolCall,
+      input: JSON.stringify({ tool: failed.toolCall.toolName, error: failed.error.message }),
+      toolName: "invalid",
+    }
+  }
 
   export async function stream(input: StreamInput) {
     const l = log
@@ -193,27 +208,7 @@ export namespace LLM {
           error,
         })
       },
-      async experimental_repairToolCall(failed) {
-        const lower = failed.toolCall.toolName.toLowerCase()
-        if (lower !== failed.toolCall.toolName && tools[lower]) {
-          l.info("repairing tool call", {
-            tool: failed.toolCall.toolName,
-            repaired: lower,
-          })
-          return {
-            ...failed.toolCall,
-            toolName: lower,
-          }
-        }
-        return {
-          ...failed.toolCall,
-          input: JSON.stringify({
-            tool: failed.toolCall.toolName,
-            error: failed.error.message,
-          }),
-          toolName: "invalid",
-        }
-      },
+      experimental_repairToolCall: repairToolCall,
       temperature: params.temperature,
       topP: params.topP,
       topK: params.topK,

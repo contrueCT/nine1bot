@@ -72,6 +72,8 @@
 
 ## 当前交付目标
 
+FOG 综合报告对接的确认边界、联调事实及实施批次见 [FOG 对接计划](./28-fog-report-integration.md)，配置与恢复方式见 [FOG 实现与运维](./29-fog-report-outbox.md)。MR 出站链路已实现，默认关闭；缺少最终 CI 时暂缓发送，不阻断 GitLab 评论。测试服务器已启用，公开地址映射修复后取得真实 FOG 接收回执，详见 [真实联调记录](./30-fog-live-integration.md)。
+
 当前交付包含两条隔离的内部 wrapper 路线：
 
 ```text
@@ -98,6 +100,10 @@
 配置型拒绝修复后必须调用显式 retry 接口创建新 attempt。发布前的明确瞬时 `load_changes` 失败可在 GitLab 重发同一 webhook 时创建关联 attempt；原 run、错误、时间和审计信息保持不变，旧异步请求不能覆盖新 attempt。
 
 ## 收口状态
+
+2026-09-17 Qwen 联调暴露的参数类型、重复下载和最终输出协议问题，见 [Qwen 联调恢复记录](./27-qwen-integration-recovery.md)。`d96dba2` 已部署，真实复测完成 CI 查询、日志读取、冻结源码取证及摘要/行内评论发布；数字参数兼容和一次格式纠正均通过实测。
+
+2026-09-16 部署联调发现的工具输入状态异常及修复、验证结果，见 [工具参数异常恢复记录](./26-tool-input-runtime-recovery.md)。该记录区分自动化验证与真实 GitLab 审查结果。
 
 二次审查加固 Task 1--8 已完成（`c6df20a..54c3be6`，含 Task 6 的 CPU 补充修复 `3a5f60e`、`9c905ce`、`873ce7d`、`33b3393`）。2026-08-15 fresh 自动化验证：聚焦 `350 pass / 0 fail / 1217 expect()`，根测试 `554 pass / 0 fail / 2040 expect()`，根与 OpenCode typecheck、Web build 均为 exit 0。自动化覆盖旧 HEAD 零发布、并发发布、部分恢复、stale binding retry、CI 配额/输出和 attempt 链修复。
 

@@ -41,6 +41,8 @@ export type AutomatedRunMonitor = {
 }
 
 export type AutomatedControllerInput = {
+  // Internal continuation only: preserve the original session's model, agent and permissions.
+  existingSessionID?: string
   title: string
   directory: string
   permission?: PermissionNext.Ruleset
@@ -95,7 +97,7 @@ export async function runAutomatedControllerSession(input: AutomatedControllerIn
     async fn() {
       let monitor: AutomatedRunMonitor | undefined
       const { sessionResponse, messageResponse } = await createAndSendAutomatedControllerTurn({
-        createSession: async () => await createControllerSession({
+        createSession: async () => input.existingSessionID ? { sessionId: input.existingSessionID } : await createControllerSession({
           directory: input.directory,
           title: input.title,
           permission: input.permission,
@@ -157,6 +159,7 @@ export function startAutomatedRunMonitor(input: {
   let finished = false
   let unsubscribe: (() => void) | undefined
   let timeout: ReturnType<typeof setTimeout> | undefined
+  let pendingOutput = Promise.resolve()
 
   const dispose = () => {
     if (timeout) clearTimeout(timeout)
@@ -181,10 +184,12 @@ export function startAutomatedRunMonitor(input: {
         // The terminal callback must still run when cancellation cleanup fails.
       }
     }
+    await pendingOutput
     await input.onFinished?.({ status, error }).catch(() => undefined)
   }
 
   unsubscribe = Bus.subscribeAll(async (event) => {
+    if (finished) return
     const properties = event.properties as Record<string, any> | undefined
     const eventSessionID =
       properties?.sessionID || properties?.info?.sessionID || properties?.part?.sessionID || properties?.info?.id
@@ -230,22 +235,24 @@ export function startAutomatedRunMonitor(input: {
 
     if (event.type === "message.updated") {
       const info = properties?.info
-      await input.onRuntimeOutput?.({
+      pendingOutput = pendingOutput.then(() => input.onRuntimeOutput?.({
         kind: "message",
         sessionID: input.sessionID,
         payload: info,
-      }).catch(() => undefined)
+      })).catch(() => undefined)
+      await pendingOutput
       return
     }
 
     if (event.type === "message.part.updated") {
       const part = properties?.part
-      await input.onRuntimeOutput?.({
+      pendingOutput = pendingOutput.then(() => input.onRuntimeOutput?.({
         kind: "part",
         sessionID: input.sessionID,
         payload: part,
         text: extractTextPart(part),
-      }).catch(() => undefined)
+      })).catch(() => undefined)
+      await pendingOutput
       return
     }
 

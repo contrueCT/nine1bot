@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import z from "zod"
 import { createGitLabCiInspectTool } from "../../src/tool/gitlab-ci-inspect"
 import type { Tool } from "../../src/tool/tool"
 
@@ -15,6 +16,27 @@ const context: Tool.Context = {
 }
 
 describe("gitlab_ci_inspect tool", () => {
+  test("guides numeric correction without coercing invalid inputs or executing them", async () => {
+    const requests: unknown[] = []
+    const tool = await createGitLabCiInspectTool({
+      async inspect(_session, request) {
+        requests.push(request)
+        return { ok: false, action: request.action, diagnostic: "test" }
+      },
+    }).init()
+    const schema = z.toJSONSchema(tool.parameters)
+    expect(schema.type).toBe("object")
+    expect(schema.anyOf).toBeUndefined()
+    expect(schema.properties?.jobId).toMatchObject({ type: "integer" })
+    expect(tool.parameters.safeParse({ action: "read_job_log" }).success).toBe(false)
+    expect(tool.parameters.safeParse({ action: "list", jobId: 8 }).success).toBe(false)
+    for (const jobId of ["8", "", true, null, 0, -1, 1.5]) {
+      await expect(tool.execute({ action: "read_job_log", jobId } as any, context)).rejects.toThrow("without quotes")
+    }
+    expect(requests).toHaveLength(0)
+    await tool.execute({ action: "read_job_log", jobId: 8 }, context)
+    expect(requests).toEqual([{ action: "read_job_log", jobId: 8 }])
+  })
   test("derives review identity from the tool session and exposes only bounded actions", async () => {
     const calls: Array<{ sessionId: string; request: unknown; signal: AbortSignal }> = []
     const tool = createGitLabCiInspectTool({

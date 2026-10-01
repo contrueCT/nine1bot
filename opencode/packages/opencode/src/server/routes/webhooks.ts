@@ -33,6 +33,7 @@ import { buildGitLabReviewRuntimePrompt } from "../../../../../../packages/nine1
 import { ReviewRunStore, type ReviewRunRecord } from "../../../../../../packages/nine1bot/src/review/run-store"
 import { readPlatformManagerConfig } from "../../../../../../packages/nine1bot/src/platform/config-store"
 import { FilePlatformSecretStore } from "../../../../../../packages/nine1bot/src/platform/secrets"
+import { fogDeliveryStatus, retryFogDelivery } from "../../../../../../packages/nine1bot/src/review/fog-runtime"
 import { registerBuiltinPlatformAdapters } from "../../../../../../packages/nine1bot/src/platform/builtin"
 import {
   GITLAB_REVIEW_PUBLICATION_INPUT_TOO_LARGE,
@@ -709,6 +710,11 @@ export async function startGitLabReviewRuntimeRun(
     secrets,
   })
   let publishAttempted = false
+  let outputRetryAttempted = false
+  let boundSessionID: string | undefined
+  let boundGeneration: string | undefined
+  let latestOutput = ""
+  const deadline = Date.now() + RUN_MONITOR_TIMEOUT_MS
   const entry = {
     source: "webhook",
     platform: "gitlab",
@@ -717,7 +723,8 @@ export async function startGitLabReviewRuntimeRun(
     traceId: result.runId,
   } satisfies RuntimeControllerProtocol.Entry
 
-  await (options.runner ?? runAutomatedControllerSession)({
+  const runTurn = async (repair = false): Promise<unknown> => (options.runner ?? runAutomatedControllerSession)({
+    existingSessionID: repair ? boundSessionID : undefined,
     directory,
     title: `GitLab review: ${result.trigger.projectPath ?? result.trigger.projectId}`,
     sessionChoice: {
@@ -731,12 +738,20 @@ export async function startGitLabReviewRuntimeRun(
     },
     entry,
     clientCapabilities: GITLAB_REVIEW_CLIENT_CAPABILITIES,
-    parts: [{ type: "text", text: buildGitLabReviewRuntimePrompt(result) }],
+    parts: [{ type: "text", text: repair ? [
+      "Your previous final response failed the GitLab review output contract. This is the only format-correction attempt.",
+      "Use only evidence already collected in this session. Do not call tools, fetch more data, or invent findings.",
+      "Emit exactly one fenced json block, with no prose before or after it. Its first content line must be GITLAB_REVIEW_RESULT: followed by valid JSON matching the review finding schema.",
+      'Use stage="closed", status="ok", "blocked", or "failed", and findings/nextActions arrays.',
+      "CI failure alone is not a code finding; put unverified CI and coverage limitations in summary or nextActions.",
+    ].join("\n") : buildGitLabReviewRuntimePrompt(result) }],
     context: {
       blocks: result.context.contextBlocks,
     },
-    tools: gitLabReviewRuntimeTools(result.trigger.objectType),
-    timeoutMs: RUN_MONITOR_TIMEOUT_MS,
+    tools: repair
+      ? Object.fromEntries(Object.keys(gitLabReviewRuntimeTools(result.trigger.objectType)).map((key) => [key, false]))
+      : gitLabReviewRuntimeTools(result.trigger.objectType),
+    timeoutMs: Math.max(1, deadline - Date.now()),
     timeoutMessage: "GitLab review run monitor timed out.",
     interactionPolicy: {
       permission: "deny",
@@ -748,6 +763,15 @@ export async function startGitLabReviewRuntimeRun(
     async onSessionCreated({ sessionID }) {
       const run = ReviewRunStore.get(result.runId)
       if (!run) throw new Error("review_run_not_found")
+      if (repair) {
+        if (run.sessionId !== boundSessionID || run.generation !== boundGeneration || run.status !== "running" || run.publication) {
+          throw new Error("review_output_retry_stale")
+        }
+        latestOutput = ""
+        return
+      }
+      boundSessionID = sessionID
+      boundGeneration = run.generation
       const patch = gitLabReviewSessionCreatedPatch(
         sessionID,
         run,
@@ -755,6 +779,7 @@ export async function startGitLabReviewRuntimeRun(
       if (patch) ReviewRunStore.update(result.runId, patch)
     },
     async onControllerResponse(response) {
+      if (repair !== outputRetryAttempted) return
       const patch = gitLabReviewControllerResponsePatch(ReviewRunStore.get(result.runId), response)
       if (!patch) return
       if (!response.accepted) {
@@ -764,27 +789,11 @@ export async function startGitLabReviewRuntimeRun(
       updateGitLabReviewRuntimeRun(result.runId, patch)
     },
     async onRuntimeOutput(output) {
-      if (publishAttempted || output.kind !== "part" || !output.text) return
-      const stageResult = extractGitLabReviewStageResultFromRuntimeText(output.text)
-      if (!stageResult) return
-      publishAttempted = true
-      try {
-        const published = await publishGitLabReviewRunResult({
-          runId: result.runId,
-          stageResult,
-          platforms: await readPlatformManagerConfig(),
-          secrets: new FilePlatformSecretStore(process.env.NINE1BOT_PLATFORM_SECRETS_PATH),
-        })
-        if (published.published) return
-        await failGitLabReviewRuntimeRun(result.runId, "publish_result", published.error, {
-          warnings: published.warnings,
-        })
-      } catch (error) {
-        const diagnostic = gitLabReviewRuntimeFailure("runtime_publish", error)
-        await failGitLabReviewRuntimeRun(result.runId, "publish_result", diagnostic)
-      }
+      if (repair !== outputRetryAttempted) return
+      if (output.kind === "part" && output.text !== undefined) latestOutput = output.text
     },
     async onFinished(finished) {
+      if (repair !== outputRetryAttempted) return
       const beforeCiDiagnostic = ReviewRunStore.get(result.runId)
       const ciDiagnosticPatch = beforeCiDiagnostic && gitLabReviewCiNotQueriedPatch(beforeCiDiagnostic)
       if (ciDiagnosticPatch) updateGitLabReviewRuntimeRun(result.runId, ciDiagnosticPatch)
@@ -792,6 +801,37 @@ export async function startGitLabReviewRuntimeRun(
       const current = ReviewRunStore.get(result.runId)
       if (current?.publishedAt) return
       if (finished.status === "succeeded") {
+        // Validate the completed response, never a temporarily valid streaming prefix.
+        const stageResult = extractGitLabReviewStageResultFromRuntimeText(latestOutput)
+        if (stageResult) {
+          publishAttempted = true
+          try {
+            const published = await publishGitLabReviewRunResult({
+              runId: result.runId,
+              stageResult,
+              platforms: await readPlatformManagerConfig(),
+              secrets: new FilePlatformSecretStore(process.env.NINE1BOT_PLATFORM_SECRETS_PATH),
+            })
+            if (!published.published) await failGitLabReviewRuntimeRun(result.runId, "publish_result", published.error, { warnings: published.warnings })
+          } catch (error) {
+            await failGitLabReviewRuntimeRun(result.runId, "publish_result", gitLabReviewRuntimeFailure("runtime_publish", error))
+          }
+          return
+        }
+        if (!outputRetryAttempted && boundSessionID && current?.sessionId === boundSessionID
+          && current.generation === boundGeneration && current.status === "running" && !current.publication
+          && Date.now() < deadline) {
+          outputRetryAttempted = true
+          updateGitLabReviewRuntimeRun(result.runId, {
+            warnings: [...(current.warnings ?? []), "Runtime output invalid; attempting one tool-free format correction."],
+          })
+          try {
+            await runTurn(true)
+          } catch (error) {
+            await failGitLabReviewRuntimeRun(result.runId, "runtime_output", gitLabReviewRuntimeFailure("runtime_retry", error))
+          }
+          return
+        }
         const error = "gitlab_review_result_missing"
         await failGitLabReviewRuntimeRun(result.runId, "runtime_output", error, {
           warnings: [
@@ -805,6 +845,7 @@ export async function startGitLabReviewRuntimeRun(
       await failGitLabReviewRuntimeRun(result.runId, "runtime_finished", error)
     },
   })
+  await runTurn()
 }
 
 export function gitLabReviewRuntimePatch(
@@ -980,6 +1021,19 @@ export const WebhookPublicRoutes = lazy(() => createWebhookPublicRoutes())
 
 export const WebhookRoutes = lazy(() =>
   new Hono()
+    .get("/gitlab/fog-reports", validator("query", z.object({
+      limit: z.coerce.number().int().min(1).max(100).default(100),
+      offset: z.coerce.number().int().min(0).max(10000).default(0),
+    })), (c) => {
+      const { limit, offset } = c.req.valid("query")
+      return c.json(fogDeliveryStatus(limit, offset))
+    })
+    .post("/gitlab/fog-reports/:runId/retry", validator("param", z.object({ runId: z.string().min(1).max(128) })), (c) => {
+      try {
+        const retried = retryFogDelivery(c.req.valid("param").runId)
+        return c.json({ retried }, retried ? 202 : 409)
+      } catch { return c.json({ error: "fog_store_unavailable" }, 503) }
+    })
     .get(
       "/status",
       describeRoute({

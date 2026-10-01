@@ -51,6 +51,7 @@ import { MetricsRoutes } from "./routes/metrics"
 import { RuntimeMetricsStore } from "@/runtime/metrics/store"
 import { ScheduleRoutes } from "./routes/schedules"
 import { WebhookPublicRoutes, WebhookRoutes } from "./routes/webhooks"
+import { startFogDelivery, stopFogDelivery } from "../../../../../packages/nine1bot/src/review/fog-runtime"
 import { MDNS } from "./mdns"
 import { Schedule } from "@/schedule/schedule"
 import { shouldSendEvent } from "./event-filter"
@@ -897,6 +898,7 @@ export namespace Server {
 
     _url = server.url
     Schedule.init()
+    startFogDelivery()
 
     const shouldPublishMDNS =
       opts.mdns &&
@@ -913,6 +915,7 @@ export namespace Server {
     const originalStop = server.stop.bind(server)
     server.stop = async (closeActiveConnections?: boolean) => {
       Schedule.stopScanner()
+      await stopFogDelivery()
       if (shouldPublishMDNS) MDNS.unpublish()
       return originalStop(closeActiveConnections)
     }

@@ -116,6 +116,9 @@ export type GitLabMergeRequestMetadata = {
   id?: number
   iid?: number
   project_id?: number
+  title?: string
+  source_branch?: string
+  target_branch?: string
   diff_refs?: {
     base_sha?: string
     start_sha?: string
@@ -295,6 +298,21 @@ export class GitLabApiClient {
     const projected = projectMergeRequestMetadata(value)
     if (!projected) throw new Error('GitLab merge request metadata response is invalid')
     return projected
+  }
+
+  async getProject(projectId: string | number, options: GitLabRequestOptions = {}): Promise<GitLabProjectSummary> {
+    const value = objectRecord(await this.request<unknown>(
+      `/api/v4/projects/${encodeURIComponent(String(projectId))}`,
+      { signal: options.signal },
+    ))
+    const id = finiteNumber(value?.id)
+    if (!id) throw new Error('GitLab project metadata response is invalid')
+    return {
+      id,
+      name: boundedString(value?.name, MAX_CI_TEXT_LENGTH),
+      path_with_namespace: boundedString(value?.path_with_namespace, 1024),
+      web_url: boundedString(value?.web_url, MAX_CI_URL_LENGTH),
+    }
   }
 
   async getPipeline(
@@ -842,6 +860,9 @@ function projectMergeRequestMetadata(input: unknown): GitLabMergeRequestMetadata
     id: finiteNumber(record.id),
     iid: finiteNumber(record.iid),
     project_id: finiteNumber(record.project_id),
+    title: boundedString(record.title, MAX_CI_TEXT_LENGTH),
+    source_branch: boundedString(record.source_branch, MAX_CI_TEXT_LENGTH),
+    target_branch: boundedString(record.target_branch, MAX_CI_TEXT_LENGTH),
     diff_refs: diffRefs
       ? compactObject({
           base_sha: boundedString(diffRefs.base_sha, MAX_CI_TEXT_LENGTH),
