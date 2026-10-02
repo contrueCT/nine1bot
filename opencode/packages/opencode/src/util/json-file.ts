@@ -10,12 +10,27 @@ export namespace JsonFile {
   export type Document = { path: string; text: string; data: Object; existed: boolean; mode: number }
 
   export async function canonical(filename: string) {
-    const absolute = path.resolve(filename)
-    return fs.realpath(absolute).catch(async (error) => {
-      if (error.code !== "ENOENT") throw error
-      const parent = await fs.realpath(path.dirname(absolute)).catch(() => path.dirname(absolute))
-      return path.join(parent, path.basename(absolute))
-    })
+    let absolute = path.resolve(filename)
+    const seen = new Set<string>()
+    for (let depth = 0; depth < 40; depth++) {
+      // Canonicalize the stable parent, not the file inode replaced by write().
+      // Bun/Linux can resolve that old inode as "filename (deleted)" during a
+      // concurrent rename, which would create a different lock and output file.
+      const parent = await fs.realpath(path.dirname(absolute)).catch((error) => {
+        if (error.code === "ENOENT") return path.dirname(absolute)
+        throw error
+      })
+      absolute = path.join(parent, path.basename(absolute))
+      const target = await fs.readlink(absolute).catch((error) => {
+        if (error.code === "EINVAL" || error.code === "ENOENT") return undefined
+        throw error
+      })
+      if (target === undefined) return absolute
+      if (seen.has(absolute)) break
+      seen.add(absolute)
+      absolute = path.resolve(parent, target)
+    }
+    throw Object.assign(new Error(`Too many symbolic links: ${filename}`), { code: "ELOOP" })
   }
 
   export async function read(filename: string): Promise<Document> {
