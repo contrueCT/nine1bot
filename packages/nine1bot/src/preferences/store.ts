@@ -31,7 +31,9 @@ export async function getPreferences(projectDir?: string): Promise<Preference[]>
 }
 
 export async function getPreference(id: string, projectDir?: string): Promise<Preference | null> {
-  return (await getPreferences(projectDir)).find((preference) => preference.id === id) ?? null
+  const matches = (await getPreferences(projectDir)).filter((preference) => preference.id === id)
+  if (matches.length > 1) throw new Preferences.AmbiguousError()
+  return matches[0] ?? null
 }
 
 export async function addPreference(input: AddPreferenceInput, projectDir?: string): Promise<Preference> {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { visiblePreferenceText } from '../../../opencode/packages/opencode/src/preferences/permission'
 import type { PermissionRequest } from '../api/client'
 import { permissionApi } from '../api/client'
 
@@ -56,9 +57,9 @@ const rememberPreview = computed(() => {
   if (metadata.scope !== 'global' && metadata.scope !== 'project') return null
   if (typeof metadata.directory !== 'string' || !metadata.directory.trim()) return null
   return {
-    content: metadata.content,
+    content: visiblePreferenceText(metadata.content),
     scope: metadata.scope === 'global' ? '全局（所有项目）' : '仅当前项目',
-    directory: metadata.directory,
+    directory: visiblePreferenceText(metadata.directory),
   }
 })
 const canApprove = computed(() => props.request.permission !== 'remember' || rememberPreview.value !== null)

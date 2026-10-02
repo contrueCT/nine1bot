@@ -19,7 +19,8 @@ const {
   startEdit,
   cancelEdit,
   saveEdit,
-  formatTime
+  formatTime,
+  isAmbiguous
 } = usePreferences()
 
 // 新增偏好的输入
@@ -44,7 +45,7 @@ async function handleAdd() {
 const deletingId = ref<string | null>(null)
 
 function handleDelete(id: string) {
-  if (!loading.value) deletingId.value = id
+  if (!loading.value && !isAmbiguous(id)) deletingId.value = id
 }
 
 async function confirmDelete() {
@@ -132,8 +133,8 @@ onMounted(() => {
         </p>
         <div class="preference-items">
           <div
-            v-for="pref in section.items"
-            :key="pref.id"
+            v-for="(pref, index) in section.items"
+            :key="`${pref.id}:${index}`"
             class="preference-item"
           >
             <!-- 编辑模式 -->
@@ -160,17 +161,21 @@ onMounted(() => {
             <template v-else>
               <div class="item-content">
                 <p class="content-text">{{ pref.content }}</p>
+                <p v-if="isAmbiguous(pref.id)" class="error-message" role="alert">
+                  ID 冲突，已禁用修改和删除。请在源文件中为重复记录设置不同 ID 后重新加载。
+                  <span v-if="pref.origin">源文件：{{ pref.origin }}</span>
+                </p>
                 <div class="item-meta">
                   <span class="source">{{ pref.source === 'ai' ? 'AI 添加' : '手动添加' }}</span>
                   <span class="time">{{ formatTime(pref.createdAt) }}</span>
                 </div>
               </div>
               <div class="item-actions">
-                <button class="btn btn-ghost btn-sm" v-if="section.id === 'unresolved'" :disabled="loading" @click="assignPreference(pref.id)">分配到当前项目</button>
-                <button :disabled="loading" class="action-btn edit" @click="startEdit(pref)" title="编辑">
+                <button class="btn btn-ghost btn-sm" v-if="section.id === 'unresolved'" :disabled="loading || isAmbiguous(pref.id)" @click="assignPreference(pref.id)">分配到当前项目</button>
+                <button :disabled="loading || isAmbiguous(pref.id)" class="action-btn edit" @click="startEdit(pref)" title="编辑">
                   <Edit2 :size="14" />
                 </button>
-                <button :disabled="loading" class="action-btn delete" @click="handleDelete(pref.id)" title="删除">
+                <button :disabled="loading || isAmbiguous(pref.id)" class="action-btn delete" @click="handleDelete(pref.id)" title="删除">
                   <Trash2 :size="14" />
                 </button>
               </div>

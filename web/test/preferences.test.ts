@@ -111,3 +111,39 @@ test('component retains drafts and delete confirmation until mutations succeed',
   expect(source).toContain('maxlength="4096"')
   expect(source).toContain('当前项目：{{ directory }}')
 })
+
+test('duplicate cross-scope IDs cannot be edited or deleted and neither record disappears', async () => {
+  const global = { ...record('copied'), content: 'global original', origin: '/global.json', ambiguous: true }
+  const project = { ...record('copied', 'project'), content: 'project original', origin: '/project/preferences.json', ambiguous: true }
+  preferencesApi.list = async () => ({ ...state('/project', [project]), global: [global], preferences: [project, global] })
+  let writes = 0
+  preferencesApi.update = async () => { writes++; return global }
+  preferencesApi.delete = async () => { writes++; return true }
+  preferencesApi.assign = async () => { writes++; return project }
+  const panel = usePreferences()
+  await panel.loadPreferences('/project')
+  panel.startEdit(project)
+  expect(panel.editingId.value).toBeNull()
+  expect(await panel.updatePreference('copied', 'new text')).toBe(false)
+  expect(await panel.deletePreference('copied')).toBe(false)
+  expect(await panel.assignPreference('copied')).toBe(false)
+  expect(writes).toBe(0)
+  expect(panel.globalPreferences.value).toEqual([global])
+  expect(panel.projectPreferences.value).toEqual([project])
+  expect(panel.preferences.value).toHaveLength(2)
+  expect(panel.error.value).toContain('ID 重复')
+})
+
+test('a newly detected server-side duplicate conflict preserves the visible record and edit draft', async () => {
+  preferencesApi.list = async () => ({ ...state('/a'), global: [record('unique')], preferences: [record('unique')] })
+  preferencesApi.update = async () => { throw new Error('偏好 ID 重复，请重新加载') }
+  preferencesApi.delete = async () => { throw new Error('偏好 ID 重复，请重新加载') }
+  const panel = usePreferences()
+  await panel.loadPreferences('/a')
+  panel.startEdit(record('unique'))
+  panel.editingContent.value = 'kept draft'
+  expect(await panel.saveEdit()).toBe(false)
+  expect(panel.editingContent.value).toBe('kept draft')
+  expect(await panel.deletePreference('unique')).toBe(false)
+  expect(panel.globalPreferences.value).toHaveLength(1)
+})

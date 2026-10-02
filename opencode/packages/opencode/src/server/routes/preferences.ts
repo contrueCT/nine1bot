@@ -15,6 +15,12 @@ import { Instance } from "../../project/instance"
 const PreferenceSchema = Preferences.Info
 const AddPreferenceSchema = Preferences.Add
 const UpdatePreferenceSchema = Preferences.Update
+const conflictResponse = {
+  409: {
+    description: "Ambiguous preference ID; no records changed",
+    content: { "application/json": { schema: resolver(z.object({ error: z.string() })) } },
+  },
+}
 
 function context(): Preferences.Context {
   return { projectID: Instance.project.id, directory: Instance.project.rootDirectory, workingDirectory: Instance.directory }
@@ -41,10 +47,10 @@ export function PreferencesRoutes() {
               "application/json": {
                 schema: resolver(
                   z.object({
-                    preferences: PreferenceSchema.array(),
-                    global: PreferenceSchema.array(),
-                    project: PreferenceSchema.array(),
-                    unresolved: PreferenceSchema.array(),
+                    preferences: Preferences.Listed.array(),
+                    global: Preferences.Listed.array(),
+                    project: Preferences.Listed.array(),
+                    unresolved: Preferences.Listed.array(),
                     projectID: z.string(),
                     directory: z.string(),
                   })
@@ -59,6 +65,7 @@ export function PreferencesRoutes() {
         try {
           return c.json(await Preferences.list(context()))
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }
@@ -87,6 +94,7 @@ export function PreferencesRoutes() {
           const input = c.req.valid("json")
           return c.json(await Preferences.add(input, context()))
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }
@@ -107,6 +115,7 @@ export function PreferencesRoutes() {
             },
           },
           ...errors(400, 404, 500),
+          ...conflictResponse,
         },
       }),
       validator("param", z.object({ id: z.string() })),
@@ -119,6 +128,7 @@ export function PreferencesRoutes() {
           if (!preference) return c.json({ error: "Preference not found" }, 404)
           return c.json(preference)
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }
@@ -139,6 +149,7 @@ export function PreferencesRoutes() {
             },
           },
           ...errors(404, 500),
+          ...conflictResponse,
         },
       }),
       validator("param", z.object({ id: z.string() })),
@@ -148,6 +159,7 @@ export function PreferencesRoutes() {
           if (!await Preferences.remove(id, context())) return c.json({ error: "Preference not found" }, 404)
           return c.json(true)
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }
@@ -174,6 +186,7 @@ export function PreferencesRoutes() {
         try {
           return c.json({ prompt: await Preferences.prompt(context()) })
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }

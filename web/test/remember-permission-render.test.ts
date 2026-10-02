@@ -48,3 +48,14 @@ test('global preference preview clearly names all projects and incomplete reques
     expect(html).toContain('拒绝')
   }
 })
+
+test('actual permission SFC visibly escapes bidi and terminal controls in both content and directory', async () => {
+  const content = 'plain \u202ehidden-order\u202c \x1b[8mhidden\x1b[0m\r\b\u009b31m\nnext line'
+  const directory = '/projects/\u2066target\u2069\u0007\x1b[2J'
+  const metadata = { content, scope: 'project', directory }
+  const html = await render(metadata)
+  expect(html).toContain('plain \\u202ehidden-order\\u202c \\u001b[8mhidden\\u001b[0m\\u000d\\u0008\\u009b31m\nnext line')
+  expect(html).toContain('/projects/\\u2066target\\u2069\\u0007\\u001b[2J')
+  expect(html).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/)
+  expect(metadata).toEqual({ content, scope: 'project', directory })
+})

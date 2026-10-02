@@ -39,6 +39,18 @@ export function usePreferences() {
     }
   }
 
+  function isAmbiguous(id: string) {
+    const records = [...globalPreferences.value, ...projectPreferences.value, ...unresolvedPreferences.value]
+      .filter((preference) => preference.id === id)
+    return records.length > 1 || records.some((preference) => preference.ambiguous)
+  }
+
+  function canTarget(id: string) {
+    if (!isAmbiguous(id)) return true
+    error.value = '偏好 ID 重复，已阻止修改。请在所示源文件中修复重复 ID 后重新加载。'
+    return false
+  }
+
   function replace(preference: Preference) {
     if (!state.value) return
     const current = state.value
@@ -74,15 +86,17 @@ export function usePreferences() {
   }
 
   async function updatePreference(id: string, content: string) {
-    if (!content.trim()) return false
+    if (!content.trim() || !canTarget(id)) return false
     return !!await mutate((dir) => preferencesApi.update(id, content.trim(), dir), replace)
   }
 
   async function assignPreference(id: string) {
+    if (!canTarget(id)) return false
     return !!await mutate((dir) => preferencesApi.assign(id, dir), replace)
   }
 
   async function deletePreference(id: string) {
+    if (!canTarget(id)) return false
     return !!await mutate((dir) => preferencesApi.delete(id, dir), (deleted) => {
       if (!deleted || !state.value) return
       for (const key of ['preferences', 'global', 'project', 'unresolved'] as const) {
@@ -92,7 +106,7 @@ export function usePreferences() {
   }
 
   function startEdit(preference: Preference) {
-    if (loading.value) return
+    if (loading.value || !canTarget(preference.id)) return
     editingId.value = preference.id
     editingContent.value = preference.content
   }
@@ -129,6 +143,6 @@ export function usePreferences() {
     hasPreferences: computed(() => preferences.value.length > 0),
     isEditing: computed(() => editingId.value !== null),
     loadPreferences, addPreference, updatePreference, assignPreference, deletePreference,
-    startEdit, cancelEdit, saveEdit, formatTime,
+    startEdit, cancelEdit, saveEdit, formatTime, isAmbiguous,
   }
 }

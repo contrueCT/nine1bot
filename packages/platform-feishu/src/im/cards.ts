@@ -1,3 +1,4 @@
+import { visiblePreferenceText } from '../../../../opencode/packages/opencode/src/preferences/permission'
 import {
   createFeishuCardActionPayload,
   type FeishuCardActionContext,
@@ -267,7 +268,7 @@ export function renderFeishuPermissionCard(input: FeishuInteractionCardInput): F
         text: {
           tag: 'plain_text',
           content: canApprove
-            ? `保存后将用于后续对话。\n生效范围：${scope}\n项目目录：${directory}\n偏好全文：\n${content}`
+            ? `保存后将用于后续对话。\n生效范围：${scope}\n项目目录：${visiblePreferenceText(directory!)}\n偏好全文：\n${visiblePreferenceText(content!)}`
             : '偏好内容或目标范围不完整，请拒绝后重新发起请求。',
         },
       }] : []),

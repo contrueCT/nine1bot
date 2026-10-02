@@ -2917,6 +2917,8 @@ export interface Preference {
   createdAt: number
   scope: 'global' | 'project'
   projectID?: string
+  origin?: string
+  ambiguous?: boolean
 }
 
 export interface PreferencesState {

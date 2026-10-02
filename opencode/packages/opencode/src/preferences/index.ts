@@ -16,6 +16,15 @@ export namespace Preferences {
     projectID: z.string().min(1).optional(),
   }).passthrough()
   export type Info = z.infer<typeof Info>
+  // Presentation-only provenance; it is never written back into legacy files.
+  export const Listed = Info.extend({ origin: z.string(), ambiguous: z.boolean() })
+  export type Listed = z.infer<typeof Listed>
+  export class AmbiguousError extends Error {
+    constructor() {
+      super("偏好 ID 重复，已阻止修改。请在所示源文件中为重复记录设置不同 ID，然后重新加载。")
+      this.name = "AmbiguousPreferenceError"
+    }
+  }
   export const Content = z.string().trim().min(1).max(4096)
   export const Add = z.object({
     content: Content,
@@ -28,10 +37,10 @@ export namespace Preferences {
   }).refine((input) => input.content !== undefined || input.assignToCurrentProject, "No update provided")
   export type Context = { projectID: string; directory: string; workingDirectory?: string }
   export type State = {
-    preferences: Info[]
-    global: Info[]
-    project: Info[]
-    unresolved: Info[]
+    preferences: Listed[]
+    global: Listed[]
+    project: Listed[]
+    unresolved: Listed[]
     projectID: string
     directory: string
   }
@@ -91,17 +100,22 @@ export namespace Preferences {
 
   export async function list(context: Context, globalPath = filename()): Promise<State> {
     const documents = await Promise.all((await files(context, globalPath)).map(JsonFile.read))
-    const central = entries(documents[0].data)
-    const global = central.filter((preference) => preference.scope === "global")
-    const project = [
-      ...central.filter((preference) => preference.scope === "project" && active(preference, context)),
-      ...documents.slice(1).flatMap((document) => localEntries(document.data, context)),
-    ]
+    const records = documents.flatMap((document, index) => {
+      const preferences = index === 0
+        ? entries(document.data).filter((preference) => active(preference, context) || unresolved(preference))
+        : localEntries(document.data, context)
+      return preferences.map((preference) => ({ ...preference, origin: path.resolve(document.path) }))
+    })
+    const counts = new Map<string, number>()
+    for (const preference of records) counts.set(preference.id, (counts.get(preference.id) ?? 0) + 1)
+    const listed = records.map((preference) => ({ ...preference, ambiguous: counts.get(preference.id)! > 1 }))
+    const global = listed.filter((preference) => preference.scope === "global")
+    const project = listed.filter((preference) => preference.scope === "project" && !unresolved(preference))
     return {
       preferences: [...project, ...global],
       global,
       project,
-      unresolved: central.filter(unresolved),
+      unresolved: listed.filter(unresolved),
       projectID: context.projectID,
       directory: context.workingDirectory ?? context.directory,
     }
@@ -135,19 +149,24 @@ export namespace Preferences {
   ) {
     let result: Info | undefined
     await JsonFile.transaction(await files(context, globalPath), (documents) => {
-      for (const [index, document] of documents.entries()) {
-        const preferences = entries(document.data)
-        const found = preferences.findIndex((preference) => preference.id === id &&
-          (index > 0 || active(preference, context) || unresolved(preference)))
-        if (found === -1) continue
-        const preference = index === 0 ? preferences[found] : localEntries(document.data, context)[found]
-        const updated = edit(preference, index === 0 && unresolved(preference))
-        if (updated) preferences[found] = updated
-        else preferences.splice(found, 1)
-        document.data.preferences = preferences
-        result = updated ?? preference
-        break
-      }
+      const matches = documents.flatMap((document, sourceIndex) =>
+        entries(document.data).flatMap((preference, recordIndex) =>
+          preference.id === id && (sourceIndex > 0 || active(preference, context) || unresolved(preference))
+            ? [{ document, sourceIndex, recordIndex }]
+            : []))
+      // Check every visible source under the same locks, including duplicate IDs
+      // within one file. Traversal order must never choose what the user meant.
+      if (matches.length > 1) throw new AmbiguousError()
+      const match = matches[0]
+      if (!match) return
+      const { document, sourceIndex, recordIndex } = match
+      const preferences = entries(document.data)
+      const preference = sourceIndex === 0 ? preferences[recordIndex] : localEntries(document.data, context)[recordIndex]
+      const updated = edit(preference, sourceIndex === 0 && unresolved(preference))
+      if (updated) preferences[recordIndex] = updated
+      else preferences.splice(recordIndex, 1)
+      document.data.preferences = preferences
+      result = updated ?? preference
     })
     return result
   }

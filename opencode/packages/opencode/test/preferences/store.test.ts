@@ -88,3 +88,40 @@ test("rejects empty and excessively long new content without creating a file", a
   }
   expect(await fs.stat(file).catch(() => null)).toBeNull()
 })
+
+for (const source of ["project-file", "same-file"] as const) {
+  test(`duplicate legacy IDs fail closed for edit, delete and assignment (${source})`, async () => {
+    const global = { ...legacy, scope: "global", content: "global original" }
+    const copied = { ...legacy, content: "local copied original" }
+    const local = path.join(a.directory, "nine1bot.preferences.json")
+    const originalGlobal = JSON.stringify({ version: 1, keep: "global", preferences: source === "same-file" ? [global, copied] : [global] }, null, 2)
+    const originalLocal = JSON.stringify({ version: 1, keep: "local", preferences: [copied] }, null, 2)
+    await fs.writeFile(file, originalGlobal)
+    if (source === "project-file") await fs.writeFile(local, originalLocal)
+    const state = await Preferences.list(a, file)
+    const all = [...state.global, ...state.project, ...state.unresolved]
+    expect(all).toHaveLength(2)
+    expect(all.every((preference) => preference.ambiguous)).toBe(true)
+    expect(all.map((preference) => preference.origin)).toEqual(source === "same-file" ? [file, file] : [file, local])
+    await expect(Preferences.update("legacy", { content: "wrong target" }, a, file)).rejects.toBeInstanceOf(Preferences.AmbiguousError)
+    await expect(Preferences.remove("legacy", a, file)).rejects.toBeInstanceOf(Preferences.AmbiguousError)
+    await expect(Preferences.update("legacy", { assignToCurrentProject: true }, a, file)).rejects.toBeInstanceOf(Preferences.AmbiguousError)
+    expect(await fs.readFile(file, "utf8")).toBe(originalGlobal)
+    if (source === "project-file") expect(await fs.readFile(local, "utf8")).toBe(originalLocal)
+    expect((await Preferences.list(a, file)).global[0].content).toBe("global original")
+  })
+}
+
+test("duplicate IDs in two project-local sources also fail closed without hiding either", async () => {
+  const cwd = path.join(a.directory, "apps", "one")
+  await fs.mkdir(cwd, { recursive: true })
+  const rootLocal = path.join(a.directory, "nine1bot.preferences.json")
+  const cwdLocal = path.join(cwd, "nine1bot.preferences.json")
+  const original = JSON.stringify({ version: 1, preferences: [legacy] })
+  await Promise.all([rootLocal, cwdLocal].map((filename) => fs.writeFile(filename, original)))
+  const context = { ...a, workingDirectory: cwd }
+  expect((await Preferences.list(context, file)).project).toHaveLength(2)
+  await expect(Preferences.remove("legacy", context, file)).rejects.toBeInstanceOf(Preferences.AmbiguousError)
+  expect(await fs.readFile(rootLocal, "utf8")).toBe(original)
+  expect(await fs.readFile(cwdLocal, "utf8")).toBe(original)
+})

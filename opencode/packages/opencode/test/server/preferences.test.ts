@@ -99,3 +99,24 @@ test("legacy monorepo cwd preferences remain visible and editable without moving
   expect((await request(app, "/legacy-app", "DELETE")).status).toBe(200)
   expect(JSON.parse(await fs.readFile(local, "utf8")).preferences).toEqual([])
 })
+
+test("HTTP copied global/project IDs return a visible conflict and preserve both sources byte-for-byte", async () => {
+  const globalPath = process.env.NINE1BOT_PREFERENCES_PATH!
+  const localPath = path.join(a, "nine1bot.preferences.json")
+  const global = JSON.stringify({ version: 1, preferences: [{ id: "copied-id", content: "global original", scope: "global", source: "user", createdAt: 1 }] })
+  const local = JSON.stringify({ version: 1, preferences: [{ id: "copied-id", content: "project original", scope: "project", source: "user", createdAt: 1 }] })
+  await fs.writeFile(globalPath, global)
+  await fs.writeFile(localPath, local)
+  const state = await request(a).then((response) => response.json())
+  expect(state.project[0]).toMatchObject({ ambiguous: true, origin: localPath })
+  expect(state.global[0]).toMatchObject({ ambiguous: true, origin: globalPath })
+  for (const [method, input] of [["PATCH", { content: "do not write" }], ["DELETE", undefined]] as const) {
+    const response = await request(a, "/copied-id", method, input)
+    expect(response.status).toBe(409)
+    expect((await response.json()).error).toContain("ID")
+    expect(await fs.readFile(globalPath, "utf8")).toBe(global)
+    expect(await fs.readFile(localPath, "utf8")).toBe(local)
+  }
+  const listed = await request(a).then((response) => response.json())
+  expect(listed.preferences).toHaveLength(2)
+})

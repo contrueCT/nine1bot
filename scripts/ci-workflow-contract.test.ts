@@ -79,3 +79,11 @@ describe('CI workflow contract', () => {
     ]) expect(scripts['ci:test:opencode-runtime']).toContain(path)
   })
 })
+
+test('runs standard CI for stacked PR bases while keeping push restricted to main', async () => {
+  const workflow = await readCIWorkflow()
+  const pullRequest = workflow.slice(workflow.indexOf('  pull_request:'), workflow.indexOf('  push:'))
+  expect(pullRequest).not.toContain('branches:')
+  expect(workflow).toContain('  push:\n    branches: [main]')
+  expect(workflow).toContain('permissions:\n  contents: read')
+})
