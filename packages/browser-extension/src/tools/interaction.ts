@@ -76,11 +76,31 @@ async function getElementCoordinates(tabId: number, ref: string): Promise<[numbe
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: (refId) => {
-      const element = document.querySelector(`[data-mcp-ref="${refId}"]`)
-      if (!element) return null
-
-      const rect = element.getBoundingClientRect()
-      return [rect.x + rect.width / 2, rect.y + rect.height / 2]
+      const selector = `[data-mcp-ref="${CSS.escape(refId)}"]`
+      const resolve = () => {
+        const element = document.querySelector(selector)
+        if (!element) return null
+        const rect = element.getBoundingClientRect()
+        const style = window.getComputedStyle(element)
+        const visible = style.display !== 'none' && style.visibility !== 'hidden' &&
+          style.visibility !== 'collapse' && style.opacity !== '0' && rect.width > 0 && rect.height > 0
+        const left = Math.max(0, rect.x)
+        const top = Math.max(0, rect.y)
+        const right = Math.min(window.innerWidth, rect.x + rect.width)
+        const bottom = Math.min(window.innerHeight, rect.y + rect.height)
+        return { element, visible, inViewport: right > left && bottom > top, x: (left + right) / 2, y: (top + bottom) / 2 }
+      }
+      let target = resolve()
+      if (!target) return null
+      if (!target.visible) throw new Error(`Element with ref "${refId}" is not visible`)
+      if (!target.inViewport) {
+        target.element.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' })
+        target = resolve()
+      }
+      if (!target?.visible || !target.inViewport || !Number.isFinite(target.x) || !Number.isFinite(target.y)) {
+        throw new Error(`Element with ref "${refId}" is not interactable in the viewport after scrolling`)
+      }
+      return [target.x, target.y]
     },
     args: [ref],
   })

@@ -20,6 +20,7 @@ export async function executePageCdpCommand(
   method: string,
   params: Record<string, unknown> | undefined,
   ensureDebuggerAttached: (tabId: number) => Promise<void>,
+  assertActive: () => void = () => {},
 ): Promise<unknown> {
   if (method === 'DOM.setFileInputFiles') {
     // Server paths are not paths on the extension host. Never transfer files or
@@ -34,7 +35,9 @@ export async function executePageCdpCommand(
   }
 
   const target = { tabId }
+  assertActive()
   await ensureDebuggerAttached(tabId)
+  assertActive()
   let commandParams = { ...params }
 
   if (method === 'Runtime.evaluate') {
@@ -67,6 +70,7 @@ export async function executePageCdpCommand(
 
   // Preserve the original CDP payload, including wheel deltas, modifiers and
   // optional protocol fields. Chrome validates method-specific parameters.
+  assertActive()
   const result = await chrome.debugger.sendCommand(target, method, commandParams) as {
     errorText?: string
     data?: string

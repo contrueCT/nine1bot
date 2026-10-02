@@ -1178,74 +1178,33 @@ export class BridgeServer {
   }
 
   private async resolveRefToCoords(tabId: string, ref: string, channel: 'extension' | 'cdp'): Promise<[number, number]> {
-    const expression = buildResolveRefExpression(ref)
-
-    let resultJson: string
-
-    if (channel === 'extension') {
-      const result = await this.relay!.sendCommand('Runtime.evaluate', {
-        expression,
-        returnByValue: true,
-      }, tabId) as { result?: { value?: string } }
-      resultJson = String(result?.result?.value ?? 'null')
-    } else {
-      const wsUrl = await this.getTargetWsUrl(tabId)
-      resultJson = String(await evaluateScript(wsUrl, expression) ?? 'null')
-    }
-
-    const parsed = JSON.parse(resultJson) as {
-      found?: boolean
-      centerX?: number
-      centerY?: number
-      visible?: boolean
-      message?: string
-    } | null
-
-    if (!parsed || parsed.found === false) {
-      throw new Error(parsed?.message || `Element with ref "${ref}" not found`)
-    }
-
-    if (!parsed.visible) {
-      // Scroll into view
-      const scrollExpr = buildScrollIntoViewExpression(ref)
-      if (channel === 'extension') {
-        await this.relay!.sendCommand('Runtime.evaluate', { expression: scrollExpr, returnByValue: true }, tabId)
-      } else {
-        const wsUrl = await this.getTargetWsUrl(tabId)
-        await evaluateScript(wsUrl, scrollExpr)
-      }
-      await new Promise(r => setTimeout(r, 300))
-
-      // Re-resolve
-      let newJson: string
+    const evaluate = async (expression: string): Promise<string> => {
       if (channel === 'extension') {
         const result = await this.relay!.sendCommand('Runtime.evaluate', {
           expression,
           returnByValue: true,
         }, tabId) as { result?: { value?: string } }
-        newJson = String(result?.result?.value ?? 'null')
-      } else {
-        const wsUrl = await this.getTargetWsUrl(tabId)
-        newJson = String(await evaluateScript(wsUrl, expression) ?? 'null')
+        return String(result?.result?.value ?? 'null')
       }
-      const newParsed = JSON.parse(newJson) as {
-        found?: boolean
-        centerX?: number
-        centerY?: number
-        message?: string
-      } | null
-      if (!newParsed || newParsed.found === false) {
-        throw new Error(newParsed?.message || `Element with ref "${ref}" could not be resolved after scrolling`)
-      }
-      if (typeof newParsed.centerX === 'number' && typeof newParsed.centerY === 'number') {
-        return [newParsed.centerX, newParsed.centerY]
-      }
+      const wsUrl = await this.getTargetWsUrl(tabId)
+      return String(await evaluateScript(wsUrl, expression) ?? 'null')
     }
+    type RefGeometry = { centerX: number; centerY: number; visible: boolean; inViewport: boolean }
+    const expression = buildResolveRefExpression(ref)
+    let parsed = JSON.parse(await evaluate(expression)) as RefGeometry | null
+    if (!parsed) throw new Error(`Element with ref "${ref}" not found`)
+    if (!parsed.visible) throw new Error(`Element with ref "${ref}" is not visible`)
 
-    if (typeof parsed.centerX !== 'number' || typeof parsed.centerY !== 'number') {
-      throw new Error(parsed.message || `Element with ref "${ref}" did not resolve to valid coordinates`)
+    if (!parsed.inViewport) {
+      await evaluate(buildScrollIntoViewExpression(ref))
+      // Instant scrolling forces layout; resolve again because scrolling may move or
+      // remove the target. Never fall back to coordinates from before the scroll.
+      parsed = JSON.parse(await evaluate(expression)) as RefGeometry | null
     }
-
+    if (!parsed?.visible || !parsed.inViewport ||
+        !Number.isFinite(parsed.centerX) || !Number.isFinite(parsed.centerY)) {
+      throw new Error(`Element with ref "${ref}" is not interactable in the viewport after scrolling`)
+    }
     return [parsed.centerX, parsed.centerY]
   }
 
