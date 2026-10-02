@@ -331,6 +331,7 @@ export namespace Server {
                 const session = await Session.get(sessionID)
                 const owner = await Instance.normalizeDirectory(session.directory)
                 if (owner !== Instance.directory) {
+                  admission?.bindOwner(owner)
                   return Instance.provide({ directory: owner, init: InstanceBootstrap, fn: () => next() })
                 }
               }

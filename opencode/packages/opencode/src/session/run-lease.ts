@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto"
 import { Instance } from "@/project/instance"
+import { State } from "@/project/state"
 import { Session } from "."
 import { SessionStatus } from "./status"
 
@@ -23,18 +24,19 @@ export namespace RunLease {
   export type PendingAdmission = Disposable & {
     sessionID: string
     controller: AbortController
-    bindOwner(): void
+    bindOwner(directory?: string): void
   }
   const pending = new Map<string, Set<PendingAdmission>>()
-  const pendingOwned = Instance.state(
-    () => new Set<PendingAdmission>(),
-    async (admissions) => {
-      for (const admission of admissions) {
-        admission.controller.abort()
-        admission[Symbol.dispose]()
-      }
-    },
-  )
+  const createPendingOwner = () => new Set<PendingAdmission>()
+  const disposePendingOwner = async (admissions: Set<PendingAdmission>) => {
+    for (const admission of admissions) {
+      admission.controller.abort()
+      admission[Symbol.dispose]()
+    }
+  }
+  // The canonical target is known before entering its asynchronous Instance scope.
+  // Register in that directory's lifecycle now, including while its body is read.
+  const pendingOwned = (directory: string) => State.create(() => directory, createPendingOwner, disposePendingOwner)()
 
   // Register synchronously before looking up request receipts. This permits Stop
   // while distinguishing new work from a side-effect-free replay; it neither
@@ -44,8 +46,8 @@ export namespace RunLease {
     const owners = new Set<Set<PendingAdmission>>()
     const admission: PendingAdmission = {
       sessionID,
-      bindOwner() {
-        const owned = pendingOwned()
+      bindOwner(directory = Instance.directory) {
+        const owned = pendingOwned(directory)
         owned.add(admission)
         owners.add(owned)
       },

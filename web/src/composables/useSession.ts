@@ -392,20 +392,25 @@ export function useSession() {
         return false
       }
 
-      return sessionEventReconciler.applySnapshot(generation, () => {
-        frameDeltaBuffer.clear()
-        messages.value = snapshot.messages
+      const applied = sessionEventReconciler.applySnapshot(generation, () => {
+        // A failed history endpoint must not discard an independently known idle
+        // status or erase displayed messages. Buffered SSE still follows the snapshot.
+        if (snapshot.messages) {
+          frameDeltaBuffer.clear()
+          messages.value = snapshot.messages
+          seenUserMessageIds.clear()
+          for (const message of snapshot.messages) {
+            if (message.info.role === 'user') seenUserMessageIds.add(message.info.id)
+          }
+        }
         if (snapshot.questions) pendingQuestions.value = snapshot.questions
         if (snapshot.permissions) pendingPermissions.value = snapshot.permissions
-        seenUserMessageIds.clear()
-        for (const message of snapshot.messages) {
-          if (message.info.role === 'user') seenUserMessageIds.add(message.info.id)
-        }
         if (snapshot.status) applyRecoveryStatus(sessionID, snapshot.status)
-        historyError.value = snapshot.failures?.length
+        historyError.value = snapshot.messagesError ?? (snapshot.failures?.length
           ? `${snapshot.failures.join('、')}加载失败，消息已显示，请重试同步。`
-          : null
+          : null)
       })
+      return applied && !snapshot.failures?.length
     } catch (error) {
       if (
         sessionEventReconciler.isCurrent(generation) &&
@@ -629,7 +634,9 @@ export function useSession() {
       attempt.submitted = true
       setSessionRunning(sessionId, true)
       const sendResult = await api.sendMessage(sessionId, attempt.submission.request)
-      // Accepted replays do not start a new turn and may emit no idle event.
+      // Acceptance is authoritative even if display recovery is partial. Keep
+      // historyError/retryHistory visible while independently reconciling idle;
+      // restoring history must not require posting an accepted message again.
       if (replaying) await reconcileCurrentSessionState(sessionId)
       if (attempt.notificationId) dismissNotification(attempt.notificationId)
       showContextEnrichmentNotice(sessionId, sendResult.contextEnrichment)

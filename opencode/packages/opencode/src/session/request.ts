@@ -17,10 +17,19 @@ export namespace SessionRequest {
     state: z.enum(["reserved", "accepted"]).optional(), // absent on legacy receipts
   })
   type Receipt = z.infer<typeof Receipt>
-  const key = (messageID: string) => ["message_request", messageID]
+  // Legacy IDs may contain dots, spaces or Unicode. Keep their existing filename
+  // contract, while rejecting separators/NUL rather than interpreting a path.
+  function safeMessageID(value: string) {
+    return value.startsWith("msg") && !/[\/\\\u0000]/.test(value)
+  }
+  function assertMessageID(messageID: string) {
+    if (!safeMessageID(messageID)) throw new HTTPException(400, { message: "messageID must be a single safe filename component starting with msg" })
+    return messageID
+  }
+  const key = (messageID: string) => ["message_request", assertMessageID(messageID)]
   const digest = (value: string) => createHash("sha256").update(value).digest("hex")
   const requestKey = (requestID: string) => ["client_message_request", digest(requestID)]
-  const originKey = (messageID: string) => ["message_request_origin", messageID]
+  const originKey = (messageID: string) => ["message_request_origin", assertMessageID(messageID)]
   const indexKey = (sessionID: string, target: string[]) => ["session_message_request", sessionID, digest(target.join("/"))]
   const inputKey = (input: Pick<SessionPrompt.PromptInput, "messageID" | "requestID">) =>
     input.requestID ? requestKey(input.requestID) : input.messageID ? key(input.messageID) : undefined
@@ -65,6 +74,7 @@ export namespace SessionRequest {
     return input.requestID ? { ...input, runtimeRequestFingerprint: hash(input) } : input
   }
   export function assertIdentity(input: { messageID?: string; requestID?: string }) {
+    if (input.messageID !== undefined) assertMessageID(input.messageID)
     if (input.messageID !== undefined && input.requestID !== undefined) {
       throw new HTTPException(400, { message: "Provide requestID or messageID, not both" })
     }
@@ -176,7 +186,7 @@ export namespace SessionRequest {
       const target = indexed?.target
       if (!Array.isArray(target) || target.length !== 2 || typeof target[1] !== "string" ||
         (!(target[0] === "client_message_request" && /^[a-f0-9]{64}$/.test(target[1])) &&
-         !(target[0] === "message_request" && /^msg[A-Za-z0-9_-]*$/.test(target[1])))) {
+         !(target[0] === "message_request" && safeMessageID(target[1])))) {
         throw requestError("REQUEST_CORRUPTED", "会话回执索引已损坏，请检查后再删除会话。")
       }
       const receipt = await readReceipt(target)

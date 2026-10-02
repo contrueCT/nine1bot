@@ -196,9 +196,45 @@ describe('stoppable and replayable sends', () => {
     console.error = () => {}
     try { expect(await active.sendMessage('hello', undefined, undefined, attempt)).toBe(false) }
     finally { console.error = originalError }
-    expect(active.isStreaming.value).toBe(true)
+    expect(active.isStreaming.value).toBe(false)
     expect(await active.sendMessage('hello', undefined, undefined, attempt)).toBe(true)
     expect(active.isStreaming.value).toBe(false)
+    expect(posts).toBe(2)
+  })
+  it('reconciles idle after an accepted replay even when history stays offline, without another POST for history retry', async () => {
+    await active.selectSession(session('A'))
+    const displayed = message('displayed-before-failure', 'A', 'assistant')
+    active.messages.value = [displayed]
+    const draft = getComposerDraft('A')
+    draft.text = 'keep original'
+    const attempt = beginSend(draft)
+    let posts = 0
+    api.getMessages = async () => { throw new Error('persistent history outage') }
+    api.getSessionStatus = async () => ({ A: { type: 'idle' } })
+    api.sendMessage = async () => {
+      if (++posts === 1) throw new Error('202 acknowledgement lost')
+      return { accepted: true, sessionId: 'A' }
+    }
+    const first = await active.sendMessage(attempt.text, undefined, undefined, attempt)
+    finishSend(draft, attempt, first)
+    expect(first).toBe(false)
+    expect(active.isStreaming.value).toBe(false)
+    expect(active.historyError.value).toBe('persistent history outage')
+    expect(active.messages.value).toEqual([displayed])
+    const replayed = await active.sendMessage(attempt.text, undefined, undefined, attempt)
+    finishSend(draft, attempt, replayed)
+    expect(replayed).toBe(true)
+    expect(draft.attempts).toHaveLength(0)
+    expect(active.isStreaming.value).toBe(false)
+    expect(active.historyError.value).toBe('persistent history outage')
+    expect(active.messages.value).toEqual([displayed])
+    expect(await active.retryHistory()).toBe(false)
+    expect(active.isStreaming.value).toBe(false)
+    expect(posts).toBe(2)
+    api.getMessages = async () => [displayed, message('recovered-original', 'A')]
+    expect(await active.retryHistory()).toBe(true)
+    expect(active.historyError.value).toBeNull()
+    expect(active.messages.value).toHaveLength(2)
     expect(posts).toBe(2)
   })
   it('does not let an interrupted older preflight post after a newer send starts', async () => {
@@ -248,6 +284,40 @@ describe('stream and selected-session ownership', () => {
     api.sendMessage = async () => { posts++; return { accepted: true, sessionId: 'A' } }
     expect(await active.sendMessage('hello')).toBe(false)
     expect(posts).toBe(0)
+  })
+  it('does not let an older partial recovery overwrite the latest status and history error', async () => {
+    await active.selectSession(session('A'))
+    const oldStatus = deferred<any>()
+    api.getMessages = async () => { throw new Error('old history error') }
+    api.getSessionStatus = () => oldStatus.promise
+    useParallelSessions().setSessionRunning('A', true)
+    const oldRecovery = active.retryHistory()
+    await tick()
+    api.getMessages = async () => { throw new Error('current history error') }
+    api.getSessionStatus = async () => ({ A: { type: 'idle' } })
+    expect(await active.retryHistory()).toBe(false)
+    expect(active.isStreaming.value).toBe(false)
+    oldStatus.resolve({ A: { type: 'busy' } })
+    expect(await oldRecovery).toBe(false)
+    expect(active.isStreaming.value).toBe(false)
+    expect(active.historyError.value).toBe('current history error')
+  })
+  it('ignores partial recovery status after selecting another session', async () => {
+    await active.selectSession(session('A'))
+    const oldStatus = deferred<any>()
+    api.getMessages = async () => { throw new Error('A history error') }
+    api.getSessionStatus = () => oldStatus.promise
+    const recovering = active.retryHistory()
+    await tick()
+    api.getMessages = async id => [message('B-message', id)]
+    api.getSessionStatus = async () => ({ B: { type: 'busy' } })
+    await active.selectSession(session('B'))
+    oldStatus.resolve({ A: { type: 'idle' }, B: { type: 'idle' } })
+    expect(await recovering).toBe(false)
+    expect(active.currentSession.value?.id).toBe('B')
+    expect(active.isStreaming.value).toBe(true)
+    expect(active.historyError.value).toBeNull()
+    expect(active.messages.value[0].info.sessionID).toBe('B')
   })
   it('ignores a late directory update after changing sessions and returning', async () => {
     await active.selectSession(session('A'))

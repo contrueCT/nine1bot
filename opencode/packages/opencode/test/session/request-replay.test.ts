@@ -515,3 +515,41 @@ test("whole-session deletion clears indexed receipts including tombstones, and o
     expect(RunLease.current(session.id)).toBeUndefined()
   })
 })
+
+test("safe legacy dot IDs remain accepted and deletable after their history is removed", async () => {
+  const { Storage } = await import("../../src/storage/storage")
+  await fixture(async session => {
+    const body = { messageID: "msg.external.1", noReply: true, parts: [{ type: "text", text: "legacy dot ID" }] }
+    const send = () => Server.App().request(`/nine1bot/agent/sessions/${session.id}/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json", "x-opencode-directory": session.directory }, body: JSON.stringify(body),
+    })
+    expect((await send()).status).toBe(202)
+    await Session.removeMessage({ sessionID: session.id, messageID: body.messageID })
+    expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+    expect(await SessionRequest.isAccepted(session.id, body.messageID)).toBe(true)
+    expect((await send()).status).toBe(202)
+    const deleted = await Server.App().request(`/session/${session.id}`, {
+      method: "DELETE", headers: { "x-opencode-directory": session.directory },
+    })
+    expect(deleted.status).toBe(200)
+    expect(await Storage.list(["session_message_request", session.id])).toHaveLength(0)
+    expect(await SessionRequest.isAccepted(session.id, body.messageID)).toBe(false)
+    expect((await send()).status).toBe(404)
+  })
+})
+
+test("unsafe legacy IDs and receipt index paths fail closed without following path components", async () => {
+  const { Storage } = await import("../../src/storage/storage")
+  await fixture(async session => {
+    for (const messageID of ["msg/../escape", "msg\\..\\escape", "msg\u0000bad"]) {
+      await expect(SessionPrompt.promptAsync({ sessionID: session.id, messageID, noReply: true, parts: [] })).rejects.toMatchObject({ status: 400 })
+      expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+      const index = ["session_message_request", session.id, "unsafe-index"]
+      await Storage.writeAtomic(index, { target: ["message_request", messageID] })
+      await expect(SessionRequest.removeSession(session.id)).rejects.toMatchObject({ status: 409 })
+      expect(await Storage.read(index)).toEqual({ target: ["message_request", messageID] })
+      await Storage.remove(index)
+    }
+    expect(await Storage.list(["session_message_request", session.id])).toHaveLength(0)
+  })
+})

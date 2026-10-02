@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
+import fs from "node:fs/promises"
+import path from "node:path"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
 import { SessionPrompt } from "../../src/session/prompt"
@@ -20,8 +22,8 @@ afterEach(async () => {
   for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key]
   Object.assign(process.env, previous)
 })
-async function fixture(fn: (session: Session.Info) => Promise<void>) {
-  await using tmp = await tmpdir({ config: { model: "test/model" } })
+async function fixture(fn: (session: Session.Info) => Promise<void>, git = false) {
+  await using tmp = await tmpdir({ git, config: { model: "test/model" } })
   process.env.OPENCODE_CONFIG = tmp.path + "/opencode.json"
   process.env.OPENCODE_DISABLE_GLOBAL_CONFIG = "true"
   process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "true"
@@ -372,4 +374,46 @@ test("a normal turn hands the original lease to the loop and releases it when mo
       expect(await Session.messages({ sessionID: session.id })).toHaveLength(1)
     } finally { gate.released.resolve(); gate.compile.mockRestore(); unsubscribe() }
   })
+})
+
+test("disposing the routed session owner cancels a slow body before controller validation completes", async () => {
+  await fixture(async session => {
+    const nested = path.join(session.directory, "incoming-subdirectory")
+    await fs.mkdir(nested)
+    const started = deferred()
+    const released = deferred()
+    const input = body("req_owner_dispose_streamed_body")
+    const requestBody = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        started.resolve()
+        await released.promise
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(input)))
+        controller.close()
+      },
+    }, { highWaterMark: 0 })
+    const pending = Server.App().request(`/nine1bot/agent/sessions/${session.id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-opencode-directory": encodeURIComponent(nested) },
+      body: requestBody,
+      duplex: "half",
+    } as RequestInit)
+    try {
+      await started.promise
+      expect(RunLease.current(session.id)).toBeUndefined()
+      const disposed = await Server.App().request("/instance/dispose", {
+        method: "POST", headers: { "x-opencode-directory": encodeURIComponent(session.directory) },
+      })
+      expect(disposed.status).toBe(200)
+      released.resolve()
+      const response = await pending
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({ error: { code: "REQUEST_CANCELLED" } })
+      await Instance.provide({ directory: session.directory, fn: async () => {
+        expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+        expect(await SessionRequest.isAccepted(session.id, undefined, input.requestID)).toBe(false)
+        expect(RunLease.current(session.id)).toBeUndefined()
+        expect(SessionPrompt.cancel(session.id)).toBe(false)
+      } })
+    } finally { released.resolve(); await pending }
+  }, true)
 })
