@@ -360,6 +360,55 @@ export interface ContextEnrichmentSummary {
   tone?: 'neutral' | 'success' | 'warning' | 'danger'
 }
 
+export interface MessageSubmission {
+  messageID: string
+  // Serialize once. A replay must include exactly the original model, files and page context.
+  body: string
+}
+
+export interface MessageAttempt {
+  id: string
+  modelCaptured?: boolean
+  model?: { providerID: string; modelID: string }
+  submission?: { sessionID: string; request: MessageSubmission }
+  submitted?: boolean
+  notificationId?: string
+}
+
+let lastMessageTime = 0
+let messageCounter = 0
+export function createMessageID(): string {
+  // Match the server's ascending IDs: 48-bit time/counter followed by randomness.
+  const now = Math.max(Date.now(), lastMessageTime)
+  messageCounter = now === lastMessageTime ? messageCounter + 1 : 1
+  lastMessageTime = now + Math.floor(messageCounter / 0x1000)
+  messageCounter %= 0x1000
+  const time = (BigInt(lastMessageTime) * 0x1000n + BigInt(messageCounter)).toString(16).padStart(12, '0').slice(-12)
+  const bytes = crypto.getRandomValues(new Uint8Array(14))
+  const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+  return `msg_${time}${Array.from(bytes, byte => alphabet[byte % alphabet.length]).join('')}`
+}
+
+export function createMessageSubmission(
+  content: string,
+  files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
+  pageContext?: RequestPagePayload,
+  model?: { providerID: string; modelID: string },
+  messageID = createMessageID(),
+): MessageSubmission {
+  return Object.freeze({
+    messageID,
+    body: JSON.stringify({
+      messageID,
+      ...(model ? { model } : {}),
+      parts: [...(content.trim() ? [{ type: 'text', text: content }] : []), ...(files || [])],
+      entry: controllerEntry(pageContext),
+      ...(pageContext ? { context: { page: pageContext } } : {}),
+      clientCapabilities: webClientCapabilities(pageContext),
+    }),
+  })
+}
+
 export interface MessageSendResult {
   accepted: boolean
   sessionId: string
@@ -1138,29 +1187,15 @@ export const api = {
   // 发送消息。消息流通过 per-session runtime event stream 返回。
   async sendMessage(
     sessionId: string,
-    content: string,
+    content: string | MessageSubmission,
     files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
     pageContext?: RequestPagePayload
   ): Promise<MessageSendResult> {
-    const parts: any[] = []
-
-    if (content.trim()) {
-      parts.push({ type: 'text', text: content })
-    }
-
-    if (files && files.length > 0) {
-      parts.push(...files)
-    }
-
+    const request = typeof content === 'string' ? createMessageSubmission(content, files, pageContext) : content
     const res = await fetchWithTimeout(`${BASE_URL}/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        parts,
-        entry: controllerEntry(pageContext),
-        ...(pageContext ? { context: { page: pageContext } } : {}),
-        clientCapabilities: webClientCapabilities(pageContext),
-      })
+      body: request.body,
     })
 
     if (!res.ok) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { api, setApiDirectory } from '../src/api/client'
+import { api, createMessageID, createMessageSubmission, setApiDirectory } from '../src/api/client'
 import type { RequestPagePayload } from '../src/api/page-context'
 
 type FetchCall = {
@@ -196,5 +196,50 @@ describe('Controller message page context', () => {
       platform: 'feishu',
       mode: 'browser-sidepanel',
     })
+  })
+})
+
+
+describe('immutable message submissions', () => {
+  it('uses a valid unique ascending message ID, including same-millisecond overflow', () => {
+    const now = Date.now()
+    const originalNow = Date.now
+    let ids: string[]
+    Date.now = () => now
+    try { ids = Array.from({ length: 4200 }, () => createMessageID()) }
+    finally { Date.now = originalNow }
+    expect(ids.every(id => /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(id))).toBe(true)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect([...ids].sort()).toEqual(ids)
+  })
+
+  it('replays the identical wire body after a lost 202 without reserializing mutated context/model/files', async () => {
+    const page = { platform: 'gitlab', title: 'original' }
+    const model = { providerID: 'p', modelID: 'm' }
+    const files = [{ type: 'file' as const, mime: 'text/plain', filename: 'original.txt', url: 'file:///original' }]
+    const submission = createMessageSubmission('hello', files, page, model)
+    const bodies: string[] = []
+    const receipts = new Map<string, string>()
+    let executions = 0
+    globalThis.fetch = (async (_input, init) => {
+      const body = String(init?.body)
+      bodies.push(body)
+      const { messageID } = JSON.parse(body)
+      if (!receipts.has(messageID)) {
+        receipts.set(messageID, body)
+        executions++
+        throw new Error('202 response lost')
+      }
+      expect(receipts.get(messageID)).toBe(body)
+      return jsonResponse({ accepted: true, sessionId: 'ses_1' }, 202)
+    }) as typeof fetch
+    await expect(api.sendMessage('ses_1', submission)).rejects.toThrow('202 response lost')
+    page.title = 'different page'
+    model.modelID = 'different model'
+    files[0].filename = 'different.txt'
+    await api.sendMessage('ses_1', submission)
+    expect(bodies).toEqual([submission.body, submission.body])
+    expect(executions).toBe(1)
+    expect(JSON.parse(submission.body)).toMatchObject({ messageID: submission.messageID, model: { modelID: 'm' }, context: { page: { title: 'original' } } })
   })
 })

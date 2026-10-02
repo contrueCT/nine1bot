@@ -1,7 +1,8 @@
 import { markRaw, reactive } from 'vue'
+import { createMessageID, type MessageAttempt } from '../api/client'
 import { useFileUpload, type FileAttachment } from './useFileUpload'
 
-export interface SendAttempt {
+export interface SendAttempt extends MessageAttempt {
   id: string
   text: string
   planMode: boolean
@@ -40,7 +41,7 @@ export function moveComposerDraft(from: string, to: string) {
 
 export function beginSend(draft: ComposerDraft): SendAttempt {
   const attempt: SendAttempt = reactive({
-    id: `send-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    id: createMessageID(),
     text: draft.text.trim(),
     planMode: draft.planMode,
     attachments: [...draft.uploads.attachments.value],
@@ -63,7 +64,8 @@ export function finishSend(draft: ComposerDraft, attempt: SendAttempt, success: 
 }
 
 export function restoreAttempt(draft: ComposerDraft, attempt: SendAttempt) {
-  if (draft.text || draft.uploads.attachments.value.length) return false
+  // An uncertain POST may already be accepted. Only replay its original ID/payload.
+  if (attempt.submitted || draft.text || draft.uploads.attachments.value.length) return false
   draft.text = attempt.text
   draft.planMode = attempt.planMode
   draft.uploads.attachments.value = attempt.attachments

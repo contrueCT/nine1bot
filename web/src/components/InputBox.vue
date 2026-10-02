@@ -18,7 +18,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  send: [content: string, files: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode: boolean, onResult?: (success: boolean) => void]
+  send: [content: string, files: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode: boolean, onResult?: (success: boolean) => void, attempt?: SendAttempt]
   abort: []
   'select-model': [providerId: string, modelId: string]
   'open-mcp': []
@@ -86,13 +86,14 @@ function selectModel(providerId: string, modelId: string) {
 function handleSend() {
   if (!canSend.value) return
   const owner = draft.value
-  performSend(owner, beginSend(owner))
+  performSend(owner, beginSend(owner), true)
 }
 
-function performSend(owner: ComposerDraft, attempt: SendAttempt) {
+function performSend(owner: ComposerDraft, attempt: SendAttempt, initial = false) {
+  if ((!initial && attempt.status === 'sending') || owner.attempts.some(item => item !== attempt && item.status === 'sending')) return
   attempt.status = 'sending'
   const files = attempt.attachments.filter(file => file.url).map(file => ({ type: 'file' as const, mime: file.mime, filename: file.filename, url: file.url! }))
-  emit('send', attempt.text, files, attempt.planMode, success => finishSend(owner, attempt, success))
+  emit('send', attempt.text, files, attempt.planMode, success => finishSend(owner, attempt, success), attempt)
 }
 
 function togglePlanMode() {
@@ -251,10 +252,10 @@ function formatSize(bytes: number): string {
     <div v-for="attempt in draft.attempts" :key="attempt.id" class="send-attempt" :class="attempt.status" role="status">
       <div class="attempt-text">{{ attempt.text || attempt.attachments.map(file => file.filename).join('、') }}</div>
       <div class="attempt-actions">
-        <span>{{ attempt.status === 'sending' ? '正在发送…' : '发送未完成，内容已保留' }}</span>
+        <span>{{ attempt.status === 'sending' ? '正在发送…' : (attempt.submitted ? '发送结果待确认，重试不会重复执行' : '发送未完成，内容已保留') }}</span>
         <template v-if="attempt.status === 'failed'">
-          <button class="btn btn-sm btn-ghost" :disabled="disabled || isStreaming || isSending" @click="performSend(draft, attempt)">重试</button>
-          <button v-if="!input && !attachments.length" class="btn btn-sm btn-ghost" @click="restoreAttempt(draft, attempt)">编辑</button>
+          <button class="btn btn-sm btn-ghost" :disabled="disabled || (isStreaming && !attempt.submitted) || isSending" @click="performSend(draft, attempt)">重试</button>
+          <button v-if="!attempt.submitted && !input && !attachments.length" class="btn btn-sm btn-ghost" @click="restoreAttempt(draft, attempt)">编辑</button>
         </template>
       </div>
     </div>

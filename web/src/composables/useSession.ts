@@ -1,6 +1,10 @@
 import { ref, computed } from 'vue'
+import { createInteractionResponder } from './interaction-state'
 import {
   api,
+  createMessageID,
+  createMessageSubmission,
+  type MessageAttempt,
   type ContextEnrichmentSummary,
   type EventStreamSubscription,
   type Message,
@@ -59,10 +63,16 @@ export function useSession() {
     clearSession
   } = useParallelSessions()
 
-  // isStreaming is now computed based on current session
+  type LocalSend = { key: string; sessionID?: string; cancelled: boolean; posted: boolean }
+  const localSends = ref<LocalSend[]>([])
+  const ownsCurrentView = (send: LocalSend) => send.sessionID
+    ? send.sessionID === currentSession.value?.id
+    : send.key === composerKey.value
+
+  // Preflight is stoppable too, including draft creation and context collection.
   const isStreaming = computed(() => {
-    if (!currentSession.value) return false
-    return isSessionRunning(currentSession.value.id)
+    return localSends.value.some(send => !send.cancelled && ownsCurrentView(send))
+      || Boolean(currentSession.value && isSessionRunning(currentSession.value.id))
   })
 
   // 当前正在流式接收的消息
@@ -71,6 +81,7 @@ export function useSession() {
   // 待处理的问题和权限请求
   const pendingQuestions = ref<QuestionRequest[]>([])
   const pendingPermissions = ref<PermissionRequest[]>([])
+  const { states: interactionStates, respond: respondToInteraction } = createInteractionResponder()
 
   // 会话错误（如模型不可用）
   const sessionError = ref<{ message: string; dismissable?: boolean } | null>(null)
@@ -83,15 +94,27 @@ export function useSession() {
 
   // 待办事项
   const todoItems = ref<TodoItem[]>([])
-  const isSummarizing = ref(false)
+  const summarizingSessions = ref(new Set<string>())
+  const isSummarizing = computed(() => Boolean(currentSession.value && summarizingSessions.value.has(currentSession.value.id)))
 
   // 事件源订阅
   let eventSource: EventStreamSubscription | null = null
   let sessionEventSource: EventStreamSubscription | null = null
+  let sessionEventAlive = false
   let subscribedRuntimeSessionId: string | null = null
   let sessionEventGeneration = 0
   let sessionEventSubscriptionVersion = 0
   let selectionVersion = 0
+  let directoryVersion = 0
+  let todoVersion = 0
+  function viewOwner() {
+    const version = selectionVersion
+    const sessionID = currentSession.value?.id
+    return () => version === selectionVersion && sessionID === currentSession.value?.id
+  }
+  function cancelPreflight() {
+    for (const send of localSends.value) if (!send.posted) send.cancelled = true
+  }
   const pendingCreations = new Map<string, Promise<Session>>()
   let sessionsLoadVersion = 0
   const sessionEventReconciler = createSessionEventReconciler<SSEEvent>(dispatchSessionEvent)
@@ -257,6 +280,7 @@ export function useSession() {
   function createSession(directory: string) {
     if (isDraftSession.value && currentDirectory.value === (directory || '.') && !currentSession.value) return
     // 使任何在途的选择/创建请求失效，防止其返回后抢占新草稿
+    cancelPreflight()
     selectionVersion++
     composerKey.value = `draft:${directory || '.'}`
     isLoading.value = false
@@ -293,26 +317,28 @@ export function useSession() {
       return
     }
 
-    // 如果有当前会话且没有消息，尝试更新会话的目录
+    // Keep the request's owner even if a different session/directory is selected meanwhile.
     if (currentSession.value && messages.value.length === 0) {
+      const sessionID = currentSession.value.id
+      const isOwner = viewOwner()
+      const version = ++directoryVersion
       try {
-        const updated = await api.updateSession(currentSession.value.id, { directory })
+        const updated = await api.updateSession(sessionID, { directory })
+        if (!isOwner() || version !== directoryVersion) return
         currentSession.value = updated
         currentDirectory.value = updated.directory
         setApiDirectory(currentDirectory.value)
         reconnectEventsForDirectory()
+        const index = sessions.value.findIndex(s => s.id === updated.id)
+        if (index !== -1) sessions.value[index] = updated
         unsubscribeSessionRuntimeEvents()
         await openSessionEventStreamAndReconcile(updated.id)
-
-        // 更新本地会话列表
-        const index = sessions.value.findIndex(s => s.id === updated.id)
-        if (index !== -1) {
-          sessions.value[index] = updated
-        }
       } catch (error) {
-        console.error('Failed to change directory:', error)
-        pushSessionNotification({ sessionId: currentSession.value.id, message: error instanceof Error ? error.message : '修改目录失败', type: 'error' })
-        throw error
+        if (isOwner() && version === directoryVersion) {
+          console.error('Failed to change directory:', error)
+          pushSessionNotification({ sessionId: sessionID, message: error instanceof Error ? error.message : '修改目录失败', type: 'error' })
+          throw error
+        }
       }
     } else if (messages.value.length > 0) {
       throw new Error('无法修改已有消息的会话工作目录')
@@ -396,10 +422,10 @@ export function useSession() {
     const subscription = subscribeToSessionRuntimeEvents(sessionID, generation)
     try {
       await subscription.ready
-      if (currentSession.value?.id === sessionID) connectionState.value = 'connected'
+      if (sessionEventReconciler.isCurrent(generation) && currentSession.value?.id === sessionID && sessionEventAlive) connectionState.value = 'connected'
     } catch (error) {
       sessionEventReconciler.finish(generation)
-      if (currentSession.value?.id === sessionID) connectionState.value = 'offline'
+      if (sessionEventReconciler.isCurrent(generation) && currentSession.value?.id === sessionID) connectionState.value = 'offline'
       if (sessionEventSource === subscription) {
         unsubscribeSessionRuntimeEvents()
       } else {
@@ -440,6 +466,7 @@ export function useSession() {
         await loadSessions()
         return session
       }
+      for (const send of localSends.value) if (send.key === draftKey) send.sessionID = session.id
       currentSession.value = session
       composerKey.value = session.id
       isDraftSession.value = false
@@ -463,6 +490,7 @@ export function useSession() {
   }
 
   async function selectSession(session: Session) {
+    cancelPreflight()
     const requestVersion = ++selectionVersion
     try {
       isLoading.value = true
@@ -534,118 +562,96 @@ export function useSession() {
   async function sendMessage(
     content: string,
     model?: { providerID: string; modelID: string },
-    files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>
+    files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
+    attempt: MessageAttempt = { id: createMessageID() },
   ): Promise<boolean> {
-    const originVersion = selectionVersion
-    const draftPageContext =
-      isDraftSession.value || !currentSession.value
-        ? await collectActivePageContext().catch((error) => {
-            console.warn('Failed to collect active page context:', error)
-            return undefined
-          })
-        : undefined
-    if (originVersion !== selectionVersion) return false
-    // 如果是草稿模式或没有当前会话，先创建会话
-    const ensuredSession = await ensureSession(draftPageContext)
-    if (!ensuredSession) {
-      return false
+    // Lock before the first await, and never reuse a cancelled local operation.
+    if (localSends.value.some(send => !send.cancelled && ownsCurrentView(send))) return false
+    if (attempt.submission && attempt.submission.sessionID !== currentSession.value?.id) return false
+    if (!attempt.modelCaptured) {
+      attempt.model = model ? { ...model } : undefined
+      attempt.modelCaptured = true
     }
-
-    if (currentSession.value?.id !== ensuredSession.id) return false
-    const sendVersion = selectionVersion
-    const isCurrentSend = () => sendVersion === selectionVersion && currentSession.value?.id === ensuredSession.id
-
-    // Check if this session is already streaming
-    if (isSessionRunning(currentSession.value.id)) return false
-
-    // Check parallel limit
-    if (!canStartNewAgent.value) {
-      pushSessionNotification({
-        sessionId: currentSession.value.id,
-        message: `最多支持 ${MAX_PARALLEL_AGENTS} 个并行 agent，请等待其中一个完成`,
-        type: 'error',
-      })
-      return false
-    }
-
-    // Mark session as running BEFORE the API call
-    setSessionRunning(currentSession.value.id, true)
-    streamingMessage.value = null
-    // 清空已见消息记录
-    seenUserMessageIds.clear()
-
-    const sessionId = currentSession.value.id
-
+    const originalFiles = files?.map(file => ({ ...file }))
+    const send: LocalSend = { key: composerKey.value, sessionID: currentSession.value?.id, cancelled: false, posted: false }
+    localSends.value.push(send)
+    // Vue proxies objects inserted into refs; keep the proxy for reactive cancellation.
+    const operation = localSends.value[localSends.value.length - 1]
+    let sessionId = operation.sessionID
+    let isOwner = viewOwner()
+    const isCurrentSend = () => !operation.cancelled && isOwner()
     try {
-      const subscription =
-        sessionEventSource && subscribedRuntimeSessionId === sessionId
-          ? sessionEventSource
-          : await openSessionEventStreamAndReconcile(sessionId)
+      const draftPageContext = !attempt.submission && (isDraftSession.value || !currentSession.value)
+        ? await collectActivePageContext().catch(() => undefined)
+        : undefined
+      if (!isCurrentSend()) return false
+      const ensuredSession = await ensureSession(draftPageContext)
+      if (!ensuredSession || operation.cancelled || currentSession.value?.id !== ensuredSession.id) return false
+      sessionId = ensuredSession.id
+      operation.sessionID = sessionId
+      isOwner = viewOwner()
+
+      if (isSessionRunning(sessionId) && !attempt.submitted) return false
+      if (!canStartNewAgent.value && !attempt.submitted) {
+        pushSessionNotification({ sessionId, message: `最多支持 ${MAX_PARALLEL_AGENTS} 个并行 agent，请等待其中一个完成`, type: 'error' })
+        return false
+      }
+      const subscription = sessionEventSource && sessionEventAlive && subscribedRuntimeSessionId === sessionId
+        ? sessionEventSource
+        : await openSessionEventStreamAndReconcile(sessionId)
       await subscription.ready
-      if (!isCurrentSend()) {
-        setSessionRunning(sessionId, false)
-        return false
-      }
-      setSessionRunning(sessionId, true)
+      if (!isCurrentSend() || !sessionEventAlive) return false
+      // Recovery may reveal another client's running turn.
+      if (isSessionRunning(sessionId) && !attempt.submitted) return false
 
-      if (model && !isSameModel(currentSession.value.runtime?.currentModel, model)) {
-        const modelResult = await api.changeSessionModel(sessionId, model)
-        if (!isCurrentSend()) {
-          setSessionRunning(sessionId, false)
-          return false
+      if (!attempt.submission) {
+        const pageContext = draftPageContext ?? await collectActivePageContext().catch(() => undefined)
+        if (!isCurrentSend()) return false
+        attempt.submission = {
+          sessionID: sessionId,
+          request: createMessageSubmission(content, originalFiles, pageContext, attempt.model ?? currentSession.value?.runtime?.currentModel, attempt.id),
         }
-        applyCurrentSessionRuntime({
-          currentModel: modelResult.currentModel,
-          profileSnapshotId: modelResult.profileSnapshotId,
-        })
       }
-
-      const pageContext =
-        draftPageContext ??
-        (await collectActivePageContext().catch((error) => {
-          console.warn('Failed to collect active page context:', error)
-          return undefined
-        }))
-      if (!isCurrentSend()) {
-        setSessionRunning(sessionId, false)
-        return false
+      // Replays must not mutate the session model or collect a different page payload.
+      if (!attempt.submitted && attempt.model && !isSameModel(currentSession.value?.runtime?.currentModel, attempt.model)) {
+        const modelResult = await api.changeSessionModel(sessionId, attempt.model)
+        if (!isCurrentSend()) return false
+        applyCurrentSessionRuntime({ currentModel: modelResult.currentModel, profileSnapshotId: modelResult.profileSnapshotId })
       }
-      const sendResult = await api.sendMessage(sessionId, content, files, pageContext)
+      if (!isCurrentSend()) return false
+      const replaying = Boolean(attempt.submitted)
+      operation.posted = true
+      attempt.submitted = true
+      setSessionRunning(sessionId, true)
+      const sendResult = await api.sendMessage(sessionId, attempt.submission.request)
+      // Accepted replays do not start a new turn and may emit no idle event.
+      if (replaying) await reconcileCurrentSessionState(sessionId)
+      if (attempt.notificationId) dismissNotification(attempt.notificationId)
       showContextEnrichmentNotice(sessionId, sendResult.contextEnrichment)
       return true
     } catch (error: any) {
-      // Ignore abort errors
-      const errorMessage = error.message?.toLowerCase() || ''
-      if (errorMessage.includes('aborted') || errorMessage.includes('abort') || error.name === 'AbortError') {
-        console.log('Request aborted')
+      if (sessionId) {
         await reconcileCurrentSessionState(sessionId)
-        return false
+        // A lost 202 can still be confirmed by its exact user-message ID.
+        if (isOwner() && messages.value.some(message => message.info.id === attempt.id && message.info.role === 'user')) {
+          if (attempt.notificationId) dismissNotification(attempt.notificationId)
+          return true
+        }
+        if (!operation.cancelled) {
+          if (attempt.notificationId) dismissNotification(attempt.notificationId)
+          attempt.notificationId = pushSessionNotification({
+            sessionId,
+            message: error instanceof SessionBusyError
+              ? '该会话正在被其他客户端使用中，请稍后重试或创建新会话'
+              : attempt.submitted ? `发送结果待确认，可安全重试原消息: ${error.message || '网络错误'}` : `发送失败: ${error.message || '未知错误'}`,
+            type: 'error',
+          })
+        }
       }
-      // Handle session busy error
-      if (error instanceof SessionBusyError) {
-        console.log('Session is busy:', error.sessionID)
-        pushSessionNotification({
-          sessionId,
-          message: '该会话正在被其他客户端使用中，请稍后重试或创建新会话',
-          type: 'error',
-        })
-        await reconcileCurrentSessionState(sessionId)
-        return false
-      }
-      console.error('Failed to send message:', error)
-      pushSessionNotification({
-        sessionId,
-        message: `发送失败: ${error.message || '未知错误'}`,
-        type: 'error',
-      })
-      await reconcileCurrentSessionState(sessionId)
       return false
     } finally {
-      // 仅在仍是当前会话时清理流式指示，避免清掉新会话的状态
-      if (currentSession.value?.id === sessionId) {
-        streamingMessage.value = null
-      }
-      // Note: Don't set running to false here - SSE events will handle that via session.idle
+      localSends.value = localSends.value.filter(item => item !== operation)
+      if (isOwner()) streamingMessage.value = null
     }
   }
 
@@ -939,6 +945,9 @@ export function useSession() {
 
   // Abort any session by ID
   async function abortSession(sessionId: string) {
+    const local = localSends.value.filter(send => send.sessionID === sessionId)
+    for (const send of local) send.cancelled = true
+    if (local.length && local.every(send => !send.posted) && !isSessionRunning(sessionId)) return
     try {
       await api.abortSession(sessionId)
     } catch (error) {
@@ -959,7 +968,8 @@ export function useSession() {
   }
 
   async function abortCurrentSession() {
-    if (currentSession.value && isStreaming.value) {
+    for (const send of localSends.value) if (ownsCurrentView(send)) send.cancelled = true
+    if (currentSession.value) {
       await abortSession(currentSession.value.id)
     }
   }
@@ -1060,7 +1070,7 @@ export function useSession() {
   }
 
   function subscribeToSessionRuntimeEvents(sessionId: string, generation: number) {
-    if (sessionEventSource && subscribedRuntimeSessionId === sessionId) {
+    if (sessionEventSource && sessionEventAlive && subscribedRuntimeSessionId === sessionId) {
       return sessionEventSource
     }
 
@@ -1068,6 +1078,7 @@ export function useSession() {
     const subscriptionVersion = ++sessionEventSubscriptionVersion
     subscribedRuntimeSessionId = sessionId
     sessionEventGeneration = generation
+    sessionEventAlive = true
     sessionEventSource = api.subscribeSessionRuntimeEvents(
       sessionId,
       (event: SSEEvent) => {
@@ -1092,6 +1103,10 @@ export function useSession() {
         },
         onGiveUp() {
           if (subscriptionVersion !== sessionEventSubscriptionVersion) return
+          sessionEventAlive = false
+          sessionEventSubscriptionVersion++
+          sessionEventSource?.close()
+          sessionEventReconciler.finish(sessionEventGeneration)
           connectionState.value = 'offline'
           // 重连彻底失败：复位 running 状态，避免 runningCount 泄漏锁死新 agent
           setSessionRunning(sessionId, false)
@@ -1109,6 +1124,7 @@ export function useSession() {
   }
 
   function unsubscribeSessionRuntimeEvents() {
+    sessionEventAlive = false
     messagePositions.clear()
     partPositions.clear()
     sessionEventSubscriptionVersion++
@@ -1122,6 +1138,7 @@ export function useSession() {
 
   // 取消订阅
   function unsubscribe() {
+    cancelPreflight()
     if (eventSource) {
       eventSource.close()
       eventSource = null
@@ -1141,7 +1158,7 @@ export function useSession() {
     isLoading.value = messages.value.length === 0
     try {
       await openSessionEventStreamAndReconcile(session.id)
-      return !historyError.value
+      return version === selectionVersion && sessionEventAlive && connectionState.value === 'connected' && !historyError.value
     } catch (error) {
       if (version === selectionVersion) historyError.value = error instanceof Error ? error.message : '重新连接失败'
       return false
@@ -1172,52 +1189,24 @@ export function useSession() {
     }
   }
 
-  // 回答问题
-  async function answerQuestion(requestId: string, answers: string[][]) {
-    try {
-      await questionApi.reply(requestId, answers)
+  // Requests are submitted once by the parent. Cards retain their input until success.
+  function answerQuestion(requestId: string, answers: string[][]) {
+    const snapshot = answers.map(answer => [...answer])
+    return respondToInteraction(requestId, 'answer', () => questionApi.reply(requestId, snapshot), () => {
       pendingQuestions.value = pendingQuestions.value.filter(q => q.id !== requestId)
-    } catch (error) {
-      console.error('Failed to answer question:', error)
-      throw error
-    }
+    })
   }
 
-  // 拒绝问题
-  async function rejectQuestion(requestId: string) {
-    try {
-      await questionApi.reject(requestId)
+  function rejectQuestion(requestId: string) {
+    return respondToInteraction(requestId, 'reject', () => questionApi.reject(requestId), () => {
       pendingQuestions.value = pendingQuestions.value.filter(q => q.id !== requestId)
-    } catch (error) {
-      console.error('Failed to reject question:', error)
-      throw error
-    }
+    })
   }
 
-  // 刷新权限列表
-  async function refreshPermissions() {
-    try {
-      const permissions = await permissionApi.list()
-      pendingPermissions.value = permissions.filter(
-        p => currentSession.value && p.sessionID === currentSession.value.id
-      )
-    } catch (e) {
-      console.error('Failed to refresh permissions:', e)
-    }
-  }
-
-  // 响应权限请求
-  async function respondPermission(requestId: string, reply: 'once' | 'always' | 'reject', message?: string) {
-    try {
-      await permissionApi.reply(requestId, reply, message)
-      // 立即从列表移除
+  function respondPermission(requestId: string, reply: 'once' | 'always' | 'reject', message?: string) {
+    return respondToInteraction(requestId, reply, () => permissionApi.reply(requestId, reply, message), () => {
       pendingPermissions.value = pendingPermissions.value.filter(p => p.id !== requestId)
-    } catch (error) {
-      console.error('Failed to respond to permission:', error)
-      // 刷新权限列表以恢复正确状态
-      await refreshPermissions()
-      throw error
-    }
+    })
   }
 
   // 清除会话错误
@@ -1338,16 +1327,19 @@ export function useSession() {
       return
     }
 
-    isSummarizing.value = true
+    const sessionID = currentSession.value.id
+    const isOwner = viewOwner()
+    summarizingSessions.value.add(sessionID)
     try {
-      await api.summarizeSession(currentSession.value.id, model)
-      // 重新加载消息以获取压缩后的内容
-      messages.value = await api.getMessages(currentSession.value.id)
+      await api.summarizeSession(sessionID, model)
+      if (!isOwner()) return
+      // Use the same generation-guarded snapshot path as reconnects.
+      await reconcileCurrentSessionState(sessionID)
     } catch (error) {
       console.error('Failed to summarize session:', error)
       throw error
     } finally {
-      isSummarizing.value = false
+      summarizingSessions.value.delete(sessionID)
     }
   }
 
@@ -1355,11 +1347,17 @@ export function useSession() {
   async function loadTodoItems() {
     if (!currentSession.value) return
 
+    const sessionID = currentSession.value.id
+    const isOwner = viewOwner()
+    const version = ++todoVersion
     try {
-      todoItems.value = await api.getSessionTodo(currentSession.value.id)
+      const items = await api.getSessionTodo(sessionID)
+      if (isOwner() && version === todoVersion) todoItems.value = items
     } catch (error) {
-      console.error('Failed to load todo items:', error)
-      todoItems.value = []
+      if (isOwner() && version === todoVersion) {
+        console.error('Failed to load todo items:', error)
+        todoItems.value = []
+      }
     }
   }
 
@@ -1392,6 +1390,7 @@ export function useSession() {
     streamingMessage,
     pendingQuestions,
     pendingPermissions,
+    interactionStates,
     sessionError,
     retryInfo,
     loadSessions,

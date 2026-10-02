@@ -4,6 +4,7 @@ import { readChatViewport, saveChatViewport } from '../composables/chat-viewport
 import { isAtBottom, isTypingTarget, nextFollowing, UP_KEYS } from '../composables/scroll-follow'
 import { splitPath, tildify, useWorkspacePath } from '../composables/useWorkspacePath'
 import { ArrowDown, FolderOpen } from 'lucide-vue-next'
+import type { InteractionState } from '../composables/interaction-state'
 import type { Message, QuestionRequest, PermissionRequest } from '../api/client'
 import MessageItem from './MessageItem.vue'
 import AgentMessageGroup from './AgentMessageGroup.vue'
@@ -19,6 +20,7 @@ const props = defineProps<{
   sessionId?: string
   pendingQuestions?: QuestionRequest[]
   pendingPermissions?: PermissionRequest[]
+  interactionStates?: Record<string, InteractionState>
   sessionError?: { message: string; dismissable?: boolean } | null
   currentDirectory?: string
   canChangeDirectory?: boolean
@@ -313,6 +315,7 @@ onUnmounted(() => {
           v-for="request in pendingPermissions"
           :key="request.id"
           :request="request"
+          :state="interactionStates?.[request.id]"
           @responded="(response) => emit('permissionResponded', request.id, response)"
         />
       </div>
@@ -323,6 +326,7 @@ onUnmounted(() => {
           v-for="request in pendingQuestions"
           :key="request.id"
           :request="request"
+          :state="interactionStates?.[request.id]"
           @answered="(id, answers) => emit('questionAnswered', id, answers)"
           @rejected="(id) => emit('questionRejected', id)"
         />

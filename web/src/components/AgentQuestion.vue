@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import type { QuestionRequest } from '../api/client'
+import type { InteractionState } from '../composables/interaction-state'
 
 const props = defineProps<{
   request: QuestionRequest
+  state?: InteractionState
 }>()
 
 const emit = defineEmits<{
@@ -11,8 +13,8 @@ const emit = defineEmits<{
   (e: 'rejected', requestId: string): void
 }>()
 
-const isSubmitting = ref(false)
-const isAnswered = ref(false)
+const isSubmitting = computed(() => props.state?.status === 'pending')
+const isAnswered = computed(() => props.state?.status === 'success')
 const selectedAnswers = ref<string[][]>([])
 const customInputs = ref<string[]>([])
 
@@ -20,7 +22,6 @@ const customInputs = ref<string[]>([])
 const initializeAnswers = () => {
   selectedAnswers.value = props.request.questions.map(() => [])
   customInputs.value = props.request.questions.map(() => '')
-  isAnswered.value = false
 }
 initializeAnswers()
 
@@ -61,7 +62,7 @@ const isSelected = (questionIndex: number, label: string) => {
 }
 
 const submitAnswer = () => {
-  if (!canSubmit.value || isSubmitting.value) return
+  if (!canSubmit.value || isSubmitting.value || isAnswered.value) return
 
   // Build answers: for each question, combine selected options and custom input
   const answers = props.request.questions.map((_, i) => {
@@ -70,17 +71,15 @@ const submitAnswer = () => {
     if (custom) {
       return [...selected, custom]
     }
-    return selected
+    return [...selected]
   })
 
-  isAnswered.value = true
   emit('answered', props.request.id, answers)
 }
 
 const rejectQuestion = () => {
-  if (isSubmitting.value) return
+  if (isSubmitting.value || isAnswered.value) return
 
-  isAnswered.value = true
   emit('rejected', props.request.id)
 }
 </script>
@@ -127,6 +126,8 @@ const rejectQuestion = () => {
       </div>
     </div>
 
+    <p v-if="state?.status === 'error'" class="question-error" role="alert">{{ state.error }}</p>
+
     <div v-if="!isAnswered" class="question-actions">
       <button class="btn btn-ghost" :disabled="isSubmitting" @click="rejectQuestion">
         跳过
@@ -145,7 +146,7 @@ const rejectQuestion = () => {
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M20 6L9 17l-5-5"/>
       </svg>
-      <span>已回答</span>
+      <span>{{ state?.action === 'reject' ? '已跳过' : '已回答' }}</span>
     </div>
   </div>
 </template>
@@ -265,6 +266,11 @@ const rejectQuestion = () => {
 .custom-input:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.question-error {
+  color: var(--error);
+  font-size: 0.8125rem;
 }
 
 .question-actions {

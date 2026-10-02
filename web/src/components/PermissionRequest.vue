@@ -1,21 +1,22 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { visiblePreferenceText } from '../../../opencode/packages/opencode/src/preferences/permission'
 import type { PermissionRequest } from '../api/client'
-import { permissionApi } from '../api/client'
+import type { InteractionState } from '../composables/interaction-state'
 
 const props = defineProps<{
   request: PermissionRequest
+  state?: InteractionState
 }>()
 
 const emit = defineEmits<{
   (e: 'responded', response: 'once' | 'always' | 'reject'): void
 }>()
 
-const isSubmitting = ref(false)
-const isResponded = ref(false)
-const responseType = ref<'once' | 'always' | 'reject' | null>(null)
-const errorMessage = ref('')
+const isSubmitting = computed(() => props.state?.status === 'pending')
+const isResponded = computed(() => props.state?.status === 'success')
+const responseType = computed(() => props.state?.action)
+const errorMessage = computed(() => props.state?.status === 'error' ? props.state.error : '')
 
 const permissionLabel = computed(() => {
   const labels: Record<string, string> = {
@@ -64,25 +65,11 @@ const rememberPreview = computed(() => {
 })
 const canApprove = computed(() => props.request.permission !== 'remember' || rememberPreview.value !== null)
 
-const respond = async (reply: 'once' | 'always' | 'reject') => {
+const respond = (reply: 'once' | 'always' | 'reject') => {
   if (isSubmitting.value || isResponded.value || (reply !== 'reject' && !canApprove.value)) return
-
-  isSubmitting.value = true
-  responseType.value = reply
-  errorMessage.value = ''
-
-  try {
-    await permissionApi.reply(props.request.id, reply)
-    isResponded.value = true
-    emit('responded', reply)
-  } catch (error) {
-    console.error('Failed to respond to permission:', error)
-    errorMessage.value = error instanceof Error ? error.message : '操作失败，请重试'
-    responseType.value = null
-  } finally {
-    isSubmitting.value = false
-  }
+  emit('responded', reply)
 }
+
 </script>
 
 <template>
@@ -122,7 +109,7 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
         <p>项目目录：{{ rememberPreview.directory }}</p>
         <p>将保存的偏好全文：</p>
         <pre class="remember-content">{{ rememberPreview.content }}</pre>
-        <p>允许后会保存并用于后续对话。始终允许会跳过后续同一范围的逐条确认。</p>
+        <p>允许后会保存并用于后续对话。本会话内允许会跳过当前会话内同一范围的后续确认。</p>
       </div>
       <p v-else-if="request.permission === 'remember'" class="permission-error" role="alert">
         偏好内容或目标范围不完整，无法核对。请拒绝后重新发起请求。
@@ -155,11 +142,11 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
         @click="respond('always')"
       >
         <span v-if="isSubmitting && responseType === 'always'" class="loading-spinner small"></span>
-        <span v-else>始终允许</span>
+        <span v-else>本会话内允许</span>
       </button>
     </div>
 
-    <div v-if="errorMessage" class="permission-error">
+    <div v-if="errorMessage" class="permission-error" role="alert">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="10"/>
         <line x1="12" y1="8" x2="12" y2="12"/>
@@ -168,12 +155,12 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
       <span>{{ errorMessage }}</span>
     </div>
 
-    <div v-else-if="isResponded" class="permission-responded" :class="responseType">
+    <div v-if="isResponded" class="permission-responded" :class="responseType">
       <template v-if="responseType === 'always'">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20 6L9 17l-5-5"/>
         </svg>
-        <span>已始终允许</span>
+        <span>已允许本会话内的匹配请求</span>
       </template>
       <template v-else-if="responseType === 'once'">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
