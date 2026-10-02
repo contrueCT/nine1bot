@@ -1180,7 +1180,7 @@ export const api = {
   async getSessionChanges(sessionId: string, directory: string): Promise<SessionFileChange[]> {
     const url = applyDirectoryToUrl(`${BASE_URL}/session/${encodeURIComponent(sessionId)}/diff`, directory)
     const response = await requireOk(await fetchWithTimeout(url, {
-      headers: { 'x-opencode-directory': directory },
+      headers: { 'x-opencode-directory': encodeURIComponent(directory) },
     }, DEFAULT_TIMEOUT, false))
     const data: unknown = await response.json()
     if (!Array.isArray(data) || data.some(item => !item || typeof item.file !== 'string'

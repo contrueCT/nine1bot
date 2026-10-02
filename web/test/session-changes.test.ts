@@ -20,7 +20,30 @@ describe('session change review', () => {
     expect(await api.getSessionChanges('ses_A', '/workspace/A')).toEqual([file('A.ts')])
     expect(calls[0]?.url).toContain('/session/ses_A/diff')
     expect(calls[0]?.init?.method).toBeUndefined()
-    expect(new Headers(calls[0]?.init?.headers).get('x-opencode-directory')).toBe('/workspace/A')
+    expect(decodeURIComponent(new Headers(calls[0]?.init?.headers).get('x-opencode-directory') || '')).toBe('/workspace/A')
+  })
+
+  test('pins a Unicode owner directory using a byte-safe header and encoded query', async () => {
+    const originalWindow = globalThis.window
+    globalThis.window = { location: { origin: 'http://localhost' } } as unknown as Window & typeof globalThis
+    const directory = '/workspace/项目 空间'
+    setApiDirectory('/workspace/other')
+    let requested = false
+    globalThis.fetch = async (url, init) => {
+      requested = true
+      expect(new URL(String(url), window.location.origin).searchParams.get('directory')).toBe(directory)
+      const header = new Headers(init?.headers).get('x-opencode-directory') || ''
+      expect(header).toBe(encodeURIComponent(directory))
+      expect(decodeURIComponent(header)).toBe(directory)
+      return Response.json([file('文件.ts')])
+    }
+    try {
+      expect((await api.getSessionChanges('ses_A', directory))[0]?.file).toBe('文件.ts')
+      expect(requested).toBe(true)
+    } finally {
+      if (originalWindow === undefined) Reflect.deleteProperty(globalThis, 'window')
+      else globalThis.window = originalWindow
+    }
   })
 
   test('does not turn HTTP failures or malformed payloads into empty success', async () => {
