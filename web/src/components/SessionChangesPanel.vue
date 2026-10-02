@@ -73,8 +73,8 @@ useModalFocus(root, () => emit('close'))
         </button>
         <p v-if="opened.has(file.file) && !file.before && !file.after && file.additions === 0 && file.deletions === 0" class="changes-note change-no-text">此快照未提供文本差异，可能是二进制文件或空文件。请在工作区核对文件内容。</p>
         <div v-else-if="opened.has(file.file)" class="change-columns">
-          <section><h3>变更前</h3><p v-if="file.before.length > TEXT_LIMIT" class="changes-note">内容较长，仅显示前 {{ TEXT_LIMIT }} 个字符</p><pre>{{ file.before.slice(0, TEXT_LIMIT) || '（空）' }}</pre></section>
-          <section><h3>变更后</h3><p v-if="file.after.length > TEXT_LIMIT" class="changes-note">内容较长，仅显示前 {{ TEXT_LIMIT }} 个字符</p><pre>{{ file.after.slice(0, TEXT_LIMIT) || '（空）' }}</pre></section>
+          <section><h3>变更前</h3><p v-if="file.before.length > TEXT_LIMIT" class="changes-note">内容较长，仅显示前 {{ TEXT_LIMIT }} 个字符</p><pre tabindex="0" role="region" :aria-label="`${file.file} 变更前`">{{ file.before.slice(0, TEXT_LIMIT) || '（空）' }}</pre></section>
+          <section><h3>变更后</h3><p v-if="file.after.length > TEXT_LIMIT" class="changes-note">内容较长，仅显示前 {{ TEXT_LIMIT }} 个字符</p><pre tabindex="0" role="region" :aria-label="`${file.file} 变更后`">{{ file.after.slice(0, TEXT_LIMIT) || '（空）' }}</pre></section>
         </div>
       </article>
       <button v-if="files.length > visibleCount" type="button" class="btn btn-ghost" @click="visibleCount += 50">显示更多文件</button>
@@ -103,5 +103,6 @@ useModalFocus(root, () => emit('close'))
 .change-columns section + section { border-left: 1px solid var(--border-default); }
 .change-columns h3 { font-size: 12px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--border-default); }
 .change-columns pre { font: 12px/1.6 var(--font-mono); margin: 0; padding: 12px; max-height: 45vh; overflow: auto; white-space: pre; }
+.change-columns pre:focus-visible { outline: 2px solid var(--text-primary); outline-offset: -2px; }
 @media (max-width: 600px) { .changes-panel { padding: 12px; } .changes-header { align-items: flex-start; } .changes-actions { gap: 4px; } .change-columns { grid-template-columns: minmax(0, 1fr); } .change-columns section + section { border-left: none; border-top: 1px solid var(--border-default); } }
 </style>

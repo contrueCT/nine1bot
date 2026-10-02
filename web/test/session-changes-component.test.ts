@@ -23,7 +23,7 @@ const listeners = new Map<string, (event: any) => void>()
 function node(type: string, text = ''): Host {
   const value: Host = { type, text, props: {}, children: [], isConnected: true,
     focus() { active = value }, contains(other) { return descendants(value).includes(other) },
-    querySelectorAll() { return descendants(value).filter(item => item.type === 'button' && !item.props.disabled) },
+    querySelectorAll() { return descendants(value).filter(item => (item.type === 'button' && !item.props.disabled) || String(item.props.tabindex) === '0') },
     getClientRects() { return [{}] },
   }
   return value
@@ -110,6 +110,34 @@ test('real panel preserves a failed snapshot and supports retry and session swit
   id.value = 'B'; await settle()
   expect(text(root)).toContain('B.ts')
   expect(text(root)).not.toContain('A.ts')
+})
+
+test('expanded text scrollers participate in the real modal focus trap and retain scroll keys', async () => {
+  api.getSessionChanges = async () => [{ file: 'long.ts', before: 'before\n'.repeat(100), after: 'after\n'.repeat(100), additions: 1, deletions: 1 }]
+  const root = await mount(() => ({ sessionId: 'A', directory: '/A', isStreaming: false }))
+  const toggle = button(root, 'long.ts')
+  toggle.props.onClick(); await settle()
+  const panes = descendants(root).filter(item => item.type === 'pre')
+  expect(panes).toHaveLength(2)
+  expect(panes.map(item => String(item.props.tabindex))).toEqual(['0', '0'])
+  expect(panes.map(item => item.props['aria-label'])).toEqual(['long.ts 变更前', 'long.ts 变更后'])
+  function press(key: string, shiftKey = false) {
+    let prevented = false
+    listeners.get('keydown')!({ key, shiftKey, preventDefault() { prevented = true }, stopPropagation() {} })
+    return prevented
+  }
+  toggle.focus()
+  // The browser can move focus forward into the panes rather than wrapping early.
+  expect(press('Tab')).toBe(false)
+  panes[0]!.focus()
+  expect(press('PageDown')).toBe(false)
+  expect(press('ArrowRight')).toBe(false)
+  expect(press('Tab')).toBe(false)
+  panes[1]!.focus()
+  expect(press('Tab')).toBe(true)
+  expect(active).toBe(button(root, '刷新文件变更'))
+  expect(press('Tab', true)).toBe(true)
+  expect(active).toBe(panes[1])
 })
 
 test('real panel refreshes once after execution ends and bounds rendered file content', async () => {
