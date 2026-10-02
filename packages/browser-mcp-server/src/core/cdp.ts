@@ -50,13 +50,19 @@ export async function listCdpTargets(cdpUrl: string): Promise<CDPTarget[]> {
  * 创建新标签页
  */
 export async function createCdpTarget(cdpUrl: string, targetUrl: string): Promise<CDPTarget> {
+  try { new URL(targetUrl) } catch { throw new Error('Failed to create CDP target: invalid URL') }
   const url = new URL('/json/new', cdpUrl)
-  url.searchParams.set('url', targetUrl)
+  // Chromium expects the escaped URL as the raw query, not a named `url` parameter.
+  url.search = encodeURIComponent(targetUrl)
   const response = await fetch(url.toString(), { method: 'PUT' })
   if (!response.ok) {
     throw new Error(`Failed to create CDP target: ${response.status}`)
   }
-  return response.json()
+  const target = await response.json() as CDPTarget
+  if (!target || typeof target.id !== 'string' || !target.id.trim() || target.type !== 'page') {
+    throw new Error('Failed to create CDP target: invalid page target returned')
+  }
+  return target
 }
 
 /**
@@ -87,12 +93,15 @@ export async function activateCdpTarget(cdpUrl: string, targetId: string): Promi
 export class CDPSession {
   private ws: WebSocket
   private messageId = 0
-  private pendingMessages = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()
+  private closed = false
+  private pendingMessages = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   private eventHandlers = new Map<string, Set<(params: unknown) => void>>()
 
   constructor(ws: WebSocket) {
     this.ws = ws
     this.ws.on('message', (data) => this.handleMessage(data.toString()))
+    this.ws.on('close', () => this.failPending(new Error('CDP session closed')))
+    this.ws.on('error', (error) => this.failPending(error))
   }
 
   private handleMessage(data: string) {
@@ -104,6 +113,7 @@ export class CDPSession {
         const pending = this.pendingMessages.get(message.id)
         if (pending) {
           this.pendingMessages.delete(message.id)
+          clearTimeout(pending.timer)
           if (message.error) {
             pending.reject(new Error(message.error.message || 'CDP error'))
           } else {
@@ -130,27 +140,40 @@ export class CDPSession {
    * 发送 CDP 命令
    */
   async send(method: string, params?: Record<string, unknown>): Promise<unknown> {
+    if (this.closed || this.ws.readyState !== WebSocket.OPEN) throw new Error('CDP session closed')
     const id = ++this.messageId
+    const message = JSON.stringify({ id, method, params })
 
     return new Promise((resolve, reject) => {
-      this.pendingMessages.set(id, { resolve, reject })
-
-      const message = JSON.stringify({ id, method, params })
-      this.ws.send(message, (error) => {
-        if (error) {
-          this.pendingMessages.delete(id)
-          reject(error)
-        }
-      })
-
-      // 超时处理
-      setTimeout(() => {
-        if (this.pendingMessages.has(id)) {
-          this.pendingMessages.delete(id)
-          reject(new Error(`CDP command timeout: ${method}`))
-        }
+      const timer = setTimeout(() => {
+        this.pendingMessages.delete(id)
+        reject(new Error(`CDP command timeout: ${method}`))
       }, 30000)
+      this.pendingMessages.set(id, { resolve, reject, timer })
+
+      const fail = (error: Error) => {
+        const pending = this.pendingMessages.get(id)
+        if (!pending) return
+        this.pendingMessages.delete(id)
+        clearTimeout(pending.timer)
+        pending.reject(error)
+      }
+      try {
+        this.ws.send(message, (error) => { if (error) fail(error) })
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)))
+      }
     })
+  }
+
+  private failPending(error: Error): void {
+    this.closed = true
+    for (const pending of this.pendingMessages.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(error)
+    }
+    this.pendingMessages.clear()
+    this.eventHandlers.clear()
   }
 
   /**
@@ -169,9 +192,8 @@ export class CDPSession {
    * 关闭会话
    */
   close() {
+    this.failPending(new Error('CDP session closed'))
     this.ws.close()
-    this.pendingMessages.clear()
-    this.eventHandlers.clear()
   }
 }
 
@@ -181,22 +203,26 @@ export class CDPSession {
 export async function connectCdp(wsUrl: string): Promise<CDPSession> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl)
-
-    ws.on('open', () => {
+    const timer = setTimeout(() => {
+      reject(new Error('CDP connection timeout'))
+      ws.terminate()
+    }, 10000)
+    const onError = (error: Error) => {
+      clearTimeout(timer)
+      reject(error)
+    }
+    const onClose = () => {
+      clearTimeout(timer)
+      reject(new Error('CDP connection closed before opening'))
+    }
+    ws.once('error', onError)
+    ws.once('close', onClose)
+    ws.once('open', () => {
+      clearTimeout(timer)
+      ws.off('error', onError)
+      ws.off('close', onClose)
       resolve(new CDPSession(ws))
     })
-
-    ws.on('error', (error) => {
-      reject(error)
-    })
-
-    // 连接超时
-    setTimeout(() => {
-      if (ws.readyState !== WebSocket.OPEN) {
-        ws.close()
-        reject(new Error('CDP connection timeout'))
-      }
-    }, 10000)
   })
 }
 
@@ -230,15 +256,17 @@ export async function captureScreenshot(wsUrl: string, options?: {
 
     if (options?.fullPage) {
       const metrics = await session.send('Page.getLayoutMetrics') as {
-        cssContentSize?: { width?: number; height?: number }
-        contentSize?: { width?: number; height?: number }
+        cssContentSize?: { x?: number; y?: number; width?: number; height?: number }
+        contentSize?: { x?: number; y?: number; width?: number; height?: number }
       }
       const size = metrics?.cssContentSize ?? metrics?.contentSize
-      const width = Number(size?.width ?? 0)
-      const height = Number(size?.height ?? 0)
-      if (width > 0 && height > 0) {
-        clip = { x: 0, y: 0, width, height, scale: 1 }
+      const width = size?.width
+      const height = size?.height
+      if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0 ||
+          typeof height !== 'number' || !Number.isFinite(height) || height <= 0) {
+        throw new Error('Full-page screenshot failed: invalid page layout metrics')
       }
+      clip = { x: size?.x ?? 0, y: size?.y ?? 0, width, height, scale: 1 }
     }
 
     const format = options?.format ?? 'png'
@@ -352,6 +380,7 @@ export async function typeText(wsUrl: string, text: string, delay = 12): Promise
 export async function navigateToUrl(wsUrl: string, url: string): Promise<void> {
   return withCdpSession(wsUrl, async (session) => {
     await session.send('Page.enable')
-    await session.send('Page.navigate', { url })
+    const result = await session.send('Page.navigate', { url }) as { errorText?: string }
+    if (result?.errorText) throw new Error(`Navigation failed: ${result.errorText}`)
   })
 }

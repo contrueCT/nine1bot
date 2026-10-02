@@ -505,9 +505,11 @@ export const BrowserDialogTool = Tool.define("browser_dialog", {
   description: `Handle a JavaScript dialog (alert, confirm, prompt, beforeunload).
 
 Parameters:
+- tabId: Tab ID containing the dialog (from browser_status)
 - action: "accept" or "dismiss"
 - promptText: Text to enter for prompt dialogs`,
   parameters: z.object({
+    tabId: z.string().min(1).describe("Tab ID containing the dialog"),
     browser: browserParam,
     action: z.enum(["accept", "dismiss"]).describe("Accept or dismiss the dialog"),
     promptText: z.string().optional().describe("Text input for prompt dialogs"),
@@ -517,11 +519,11 @@ Parameters:
       permission: "browser_dialog",
       patterns: ["*"],
       always: ["*"],
-      metadata: {},
+      metadata: { tabId: params.tabId },
     })
 
     const bridge = requireBridge()
-    await bridge.handleDialog(params.action, params.promptText, params.browser as BrowserTarget | undefined)
+    await bridge.handleDialog(params.tabId, params.action, params.promptText, params.browser as BrowserTarget | undefined)
 
     return {
       title: `Dialog ${params.action}ed`,
@@ -663,17 +665,17 @@ Parameters:
 // ==================== 13. browser_upload ====================
 
 export const BrowserUploadTool = Tool.define("browser_upload", {
-  description: `Upload a file to a file input element.
+  description: `Upload a file to a file input element in the bot browser. User/extension browser uploads are unsupported because server paths are not paths on the user's computer. Select files manually in the user browser.
 
 Parameters:
 - tabId: Tab ID
 - ref: Ref ID of the file input element (from snapshot)
-- filePath: Path to the file on the server`,
+- filePath: Absolute path to a readable file on the bot browser host`,
   parameters: z.object({
     tabId: z.string().describe("Tab ID"),
     browser: browserParam,
     ref: z.string().describe("Ref ID of the file input element"),
-    filePath: z.string().describe("Server-side file path to upload"),
+    filePath: z.string().describe("Absolute path to a readable file on the bot browser host; requires browser=bot"),
   }),
   async execute(params, ctx) {
     await ctx.ask({

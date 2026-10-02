@@ -14,6 +14,9 @@
 
 import { Hono } from 'hono'
 import { Socket } from 'node:net'
+import { access, stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import {
   listCdpTargets,
   captureScreenshot,
@@ -102,6 +105,16 @@ function normalizeLocateResult(value: unknown, query: string): LocateResult {
     elapsedMs: typeof result.elapsedMs === 'number' ? result.elapsedMs : 0,
     inaccessibleFrames: typeof result.inaccessibleFrames === 'number' ? result.inaccessibleFrames : 0,
     warnings: Array.isArray(result.warnings) ? result.warnings : [],
+  }
+}
+
+function throwIfBrowserCommandFailed(result: unknown, action: string): void {
+  if (!result || typeof result !== 'object') return
+  const value = result as { isError?: boolean; errorText?: string; content?: ExtensionToolResult['content'] }
+  if (value.errorText) throw new Error(`${action} failed: ${value.errorText}`)
+  if (value.isError) {
+    const message = value.content?.filter(c => c.type === 'text').map(c => c.text).filter(Boolean).join('\n')
+    throw new Error(message || `${action} failed`)
   }
 }
 
@@ -396,11 +409,7 @@ export class BridgeServer {
 
     if (options?.url) {
       await new Promise(r => setTimeout(r, 500))
-      try {
-        await createCdpTarget(instance.cdpUrl, options.url)
-      } catch {
-        // First tab might already exist
-      }
+      await createCdpTarget(instance.cdpUrl, options.url)
     }
 
     return { success: true, message: `Bot browser launched on CDP port ${this.options.cdpPort}.` }
@@ -838,7 +847,9 @@ export class BridgeServer {
 
   // ==================== Handle Dialog ====================
 
-  async handleDialog(action: 'accept' | 'dismiss', promptText?: string, browser?: BrowserTarget): Promise<void> {
+  async handleDialog(tabId: string, action: 'accept' | 'dismiss', promptText?: string, browser?: BrowserTarget): Promise<void> {
+    if (typeof tabId !== 'string' || !tabId.trim()) throw new Error('tabId is required for dialog actions')
+    if (action !== 'accept' && action !== 'dismiss') throw new Error('Dialog action must be accept or dismiss')
     const channel = this.getChannel(browser)
     const accept = action === 'accept'
 
@@ -846,17 +857,15 @@ export class BridgeServer {
     if (promptText !== undefined) params.promptText = promptText
 
     if (channel === 'extension') {
-      await this.relay!.sendCommand('Page.handleJavaScriptDialog', params)
+      await this.relay!.sendCommand('Page.handleJavaScriptDialog', params, tabId)
       return
     }
 
-    const cdpUrl = await this.ensureBrowserAvailable()
-    const version = await getCdpVersion(cdpUrl)
-    if (version.webSocketDebuggerUrl) {
-      await withCdpSession(version.webSocketDebuggerUrl, async (session) => {
-        await session.send('Page.handleJavaScriptDialog', params)
-      })
-    }
+    const wsUrl = await this.getTargetWsUrl(tabId)
+    await withCdpSession(wsUrl, async (session) => {
+      await session.send('Page.enable')
+      await session.send('Page.handleJavaScriptDialog', params)
+    })
   }
 
   // ==================== Upload File ====================
@@ -865,23 +874,12 @@ export class BridgeServer {
     const channel = this.getChannel(browser)
 
     if (channel === 'extension') {
-      const docResult = await this.relay!.sendCommand('DOM.getDocument', {}, tabId) as { root?: { nodeId?: number } }
-      const rootNodeId = docResult?.root?.nodeId
-      if (!rootNodeId) throw new Error('Could not get document root')
-
-      const queryResult = await this.relay!.sendCommand('DOM.querySelector', {
-        nodeId: rootNodeId,
-        selector: `[data-mcp-ref="${ref}"]`,
-      }, tabId) as { nodeId?: number }
-
-      if (!queryResult?.nodeId) throw new Error(`Element with ref "${ref}" not found in DOM`)
-
-      await this.relay!.sendCommand('DOM.setFileInputFiles', {
-        files: [filePath],
-        nodeId: queryResult.nodeId,
-      }, tabId)
-      return
+      throw new Error('File upload is not supported in the user browser. Use browser="bot" with a file on the bot browser host, or select the file manually in the user browser.')
     }
+    if (!/^[A-Za-z0-9_-]+$/.test(ref)) throw new Error('Invalid file input ref')
+    if (!isAbsolute(filePath)) throw new Error('filePath must be an absolute path on the bot browser host')
+    if (!(await stat(filePath)).isFile()) throw new Error('filePath must refer to a regular file on the bot browser host')
+    await access(filePath, constants.R_OK)
 
     const wsUrl = await this.getTargetWsUrl(tabId)
     await withCdpSession(wsUrl, async (session) => {
@@ -914,7 +912,7 @@ export class BridgeServer {
     if (channel === 'extension') {
       const result = await this.relay!.sendCommand(
         'Page.captureScreenshot',
-        { format },
+        { format, fullPage: options?.fullPage, ...(format === 'jpeg' && options?.quality !== undefined ? { quality: options.quality } : {}) },
         tabId
       ) as { data?: string }
 
@@ -923,7 +921,7 @@ export class BridgeServer {
     }
 
     const wsUrl = await this.getTargetWsUrl(tabId)
-    const buffer = await captureScreenshot(wsUrl, { fullPage: options?.fullPage, format })
+    const buffer = await captureScreenshot(wsUrl, { fullPage: options?.fullPage, format, quality: options?.quality })
     return { data: buffer.toString('base64'), mimeType }
   }
 
@@ -938,10 +936,12 @@ export class BridgeServer {
     if (channel === 'extension') {
       const relay = this.relay!
       switch (action) {
-        case 'goto':
+        case 'goto': {
           if (!options.url) throw new Error('url is required for goto action')
-          await relay.sendCommand('Page.navigate', { url: options.url }, tabId)
+          const result = await relay.sendCommand('Page.navigate', { url: options.url }, tabId)
+          throwIfBrowserCommandFailed(result, 'Navigation')
           return {}
+        }
         case 'back':
           await relay.sendCommand('Runtime.evaluate', { expression: 'history.back()', returnByValue: true }, tabId)
           return {}
@@ -954,12 +954,16 @@ export class BridgeServer {
         case 'new_tab': {
           const result = await this.callExtensionTool(tabId, 'tabs_create_mcp', { url: options.url || 'about:blank' })
           const text = result.content?.find(c => c.type === 'text')?.text ?? ''
+          let parsed: { id?: unknown }
           try {
-            const parsed = JSON.parse(text)
-            return { tabId: parsed.id?.toString() }
+            parsed = JSON.parse(text)
           } catch {
-            return {}
+            throw new Error('New tab failed: extension returned invalid JSON')
           }
+          if (!parsed || typeof parsed.id !== 'number' || !Number.isSafeInteger(parsed.id) || parsed.id <= 0) {
+            throw new Error('New tab failed: extension did not return a valid tab ID')
+          }
+          return { tabId: String(parsed.id) }
         }
         case 'close_tab':
           await relay.sendCommand('Runtime.evaluate', { expression: 'window.close()', returnByValue: true }, tabId)
@@ -1069,6 +1073,7 @@ export class BridgeServer {
       },
       tabId
     )
+    throwIfBrowserCommandFailed(result, toolName)
     return result as ExtensionToolResult
   }
 
@@ -1125,11 +1130,13 @@ export class BridgeServer {
   }
 
   private async getTargetWsUrl(targetId: string): Promise<string> {
+    if (typeof targetId !== 'string' || !targetId.trim()) throw new Error('A browser tab ID is required')
     const cdpUrl = await this.ensureBrowserAvailable()
     const targets = await listCdpTargets(cdpUrl)
     const target = targets.find(t => t.id === targetId)
 
     if (!target) throw new Error(`Target not found: ${targetId}`)
+    if (target.type !== 'page') throw new Error(`Target is not a browser page: ${targetId}`)
     if (!target.webSocketDebuggerUrl) throw new Error(`Target has no WebSocket URL: ${targetId}`)
 
     return target.webSocketDebuggerUrl
@@ -1534,9 +1541,10 @@ export class BridgeServer {
     app.post('/dialog', async (c) => {
       try {
         const browser = c.req.query('browser') as BrowserTarget | undefined
-        const { action, promptText } = await c.req.json<{ action: 'accept' | 'dismiss'; promptText?: string }>()
-        if (!action) return c.json({ ok: false, error: 'action is required' }, 400)
-        await this.handleDialog(action, promptText, browser)
+        const { tabId, action, promptText } = await c.req.json<{ tabId: string; action: 'accept' | 'dismiss'; promptText?: string }>()
+        if (typeof tabId !== 'string' || !tabId.trim()) return c.json({ ok: false, error: 'tabId is required' }, 400)
+        if (action !== 'accept' && action !== 'dismiss') return c.json({ ok: false, error: 'action must be accept or dismiss' }, 400)
+        await this.handleDialog(tabId, action, promptText, browser)
         return c.json({ ok: true })
       } catch (error) {
         return c.json({ ok: false, error: String(error) }, 500)
