@@ -361,7 +361,7 @@ export interface ContextEnrichmentSummary {
 }
 
 export interface MessageSubmission {
-  messageID: string
+  requestID: string
   // Serialize once. A replay must include exactly the original model, files and page context.
   body: string
 }
@@ -375,18 +375,9 @@ export interface MessageAttempt {
   notificationId?: string
 }
 
-let lastMessageTime = 0
-let messageCounter = 0
-export function createMessageID(): string {
-  // Match the server's ascending IDs: 48-bit time/counter followed by randomness.
-  const now = Math.max(Date.now(), lastMessageTime)
-  messageCounter = now === lastMessageTime ? messageCounter + 1 : 1
-  lastMessageTime = now + Math.floor(messageCounter / 0x1000)
-  messageCounter %= 0x1000
-  const time = (BigInt(lastMessageTime) * 0x1000n + BigInt(messageCounter)).toString(16).padStart(12, '0').slice(-12)
-  const bytes = crypto.getRandomValues(new Uint8Array(14))
-  const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-  return `msg_${time}${Array.from(bytes, byte => alphabet[byte % alphabet.length]).join('')}`
+export function createRequestID(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return `req_${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`
 }
 
 export function createMessageSubmission(
@@ -394,12 +385,12 @@ export function createMessageSubmission(
   files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
   pageContext?: RequestPagePayload,
   model?: { providerID: string; modelID: string },
-  messageID = createMessageID(),
+  requestID = createRequestID(),
 ): MessageSubmission {
   return Object.freeze({
-    messageID,
+    requestID,
     body: JSON.stringify({
-      messageID,
+      requestID,
       ...(model ? { model } : {}),
       parts: [...(content.trim() ? [{ type: 'text', text: content }] : []), ...(files || [])],
       entry: controllerEntry(pageContext),
@@ -934,6 +925,7 @@ export interface MessageInfo {
     completed?: number
   }
   // user message fields
+  requestID?: string
   agent?: string
   model?: { providerID: string; modelID: string }
   // assistant message fields
@@ -1201,6 +1193,7 @@ export const api = {
     if (!res.ok) {
       if (res.status === 409) {
         const error = await res.json().catch(() => ({}))
+        if (error.error?.code === 'REQUEST_INCOMPLETE') throw new Error(error.error.message)
         throw new SessionBusyError(error.sessionId || error.data?.sessionID || sessionId)
       }
       throw new Error(`HTTP error! status: ${res.status}`)

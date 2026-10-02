@@ -2,7 +2,7 @@ import { ref, computed } from 'vue'
 import { createInteractionResponder } from './interaction-state'
 import {
   api,
-  createMessageID,
+  createRequestID,
   createMessageSubmission,
   type MessageAttempt,
   type ContextEnrichmentSummary,
@@ -563,7 +563,7 @@ export function useSession() {
     content: string,
     model?: { providerID: string; modelID: string },
     files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
-    attempt: MessageAttempt = { id: createMessageID() },
+    attempt: MessageAttempt = { id: createRequestID() },
   ): Promise<boolean> {
     // Lock before the first await, and never reuse a cancelled local operation.
     if (localSends.value.some(send => !send.cancelled && ownsCurrentView(send))) return false
@@ -632,11 +632,9 @@ export function useSession() {
     } catch (error: any) {
       if (sessionId) {
         await reconcileCurrentSessionState(sessionId)
-        // A lost 202 can still be confirmed by its exact user-message ID.
-        if (isOwner() && messages.value.some(message => message.info.id === attempt.id && message.info.role === 'user')) {
-          if (attempt.notificationId) dismissNotification(attempt.notificationId)
-          return true
-        }
+        // A matching requestID identifies the persisted user message, but is not
+        // proof that acceptance/receipt persistence completed. Keep the attempt
+        // until the same request receives a positive acknowledgement on replay.
         if (!operation.cancelled) {
           if (attempt.notificationId) dismissNotification(attempt.notificationId)
           attempt.notificationId = pushSessionNotification({

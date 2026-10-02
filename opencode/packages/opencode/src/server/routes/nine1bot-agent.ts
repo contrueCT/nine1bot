@@ -368,19 +368,20 @@ async function compileControllerPrompt(input: {
 }
 
 export async function sendControllerMessage(sessionID: string, body: RuntimeControllerProtocol.MessageSendRequest) {
+  SessionRequest.assertIdentity(body)
   let turnSnapshotId = ulid()
   let prompt: SessionPrompt.PromptInput
   let preparedBody = body
   let contextEnrichment: RuntimeControllerProtocol.ContextEnrichmentSummary | undefined
   try {
-    if (!(await SessionRequest.isAccepted(sessionID, body.messageID))) SessionPrompt.assertNotBusy(sessionID)
+    if (!(await SessionRequest.isAccepted(sessionID, body.messageID, body.requestID))) SessionPrompt.assertNotBusy(sessionID)
     const configuredBody = await applyBrowserExtensionPrompt(sessionID, body)
     const prepared = await prepareFeishuControllerMessageContext(configuredBody, {
       cacheScope: sessionID,
     })
     preparedBody = prepared.body
     contextEnrichment = prepared.contextEnrichment
-    prompt = await compileControllerPrompt({ sessionID, body: preparedBody, turnSnapshotId })
+    prompt = { ...await compileControllerPrompt({ sessionID, body: preparedBody, turnSnapshotId }), requestID: body.requestID }
   } catch (error) {
     if (error instanceof Session.BusyError) {
       return {

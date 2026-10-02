@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { api, createMessageID, createMessageSubmission, setApiDirectory } from '../src/api/client'
+import { api, createRequestID, createMessageSubmission, setApiDirectory } from '../src/api/client'
 import type { RequestPagePayload } from '../src/api/page-context'
 
 type FetchCall = {
@@ -88,6 +88,8 @@ describe('Controller message page context', () => {
       },
     })
     expect(calls[0]?.body.entry.templateIds).toBeUndefined()
+    expect(calls[0]?.body.requestID).toMatch(/^req_/)
+    expect(calls[0]?.body.messageID).toBeUndefined()
   })
 
   it('keeps standalone Web messages free of page context', async () => {
@@ -201,16 +203,10 @@ describe('Controller message page context', () => {
 
 
 describe('immutable message submissions', () => {
-  it('uses a valid unique ascending message ID, including same-millisecond overflow', () => {
-    const now = Date.now()
-    const originalNow = Date.now
-    let ids: string[]
-    Date.now = () => now
-    try { ids = Array.from({ length: 4200 }, () => createMessageID()) }
-    finally { Date.now = originalNow }
-    expect(ids.every(id => /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(id))).toBe(true)
+  it('uses bounded request identities independent of client-clock ordering', () => {
+    const ids = Array.from({ length: 4200 }, () => createRequestID())
+    expect(ids.every(id => /^req_[A-Za-z0-9_-]{1,124}$/.test(id))).toBe(true)
     expect(new Set(ids).size).toBe(ids.length)
-    expect([...ids].sort()).toEqual(ids)
   })
 
   it('replays the identical wire body after a lost 202 without reserializing mutated context/model/files', async () => {
@@ -224,13 +220,13 @@ describe('immutable message submissions', () => {
     globalThis.fetch = (async (_input, init) => {
       const body = String(init?.body)
       bodies.push(body)
-      const { messageID } = JSON.parse(body)
-      if (!receipts.has(messageID)) {
-        receipts.set(messageID, body)
+      const { requestID } = JSON.parse(body)
+      if (!receipts.has(requestID)) {
+        receipts.set(requestID, body)
         executions++
         throw new Error('202 response lost')
       }
-      expect(receipts.get(messageID)).toBe(body)
+      expect(receipts.get(requestID)).toBe(body)
       return jsonResponse({ accepted: true, sessionId: 'ses_1' }, 202)
     }) as typeof fetch
     await expect(api.sendMessage('ses_1', submission)).rejects.toThrow('202 response lost')
@@ -240,6 +236,11 @@ describe('immutable message submissions', () => {
     await api.sendMessage('ses_1', submission)
     expect(bodies).toEqual([submission.body, submission.body])
     expect(executions).toBe(1)
-    expect(JSON.parse(submission.body)).toMatchObject({ messageID: submission.messageID, model: { modelID: 'm' }, context: { page: { title: 'original' } } })
+    expect(JSON.parse(submission.body)).toMatchObject({ requestID: submission.requestID, model: { modelID: 'm' }, context: { page: { title: 'original' } } })
   })
+})
+
+it('reports incomplete persisted requests distinctly from a busy session', async () => {
+  globalThis.fetch = (async () => jsonResponse({ error: { code: 'REQUEST_INCOMPLETE', message: '上次请求未完整保存，请检查并清理未完成消息后重试' } }, 409)) as typeof fetch
+  await expect(api.sendMessage('ses_1', createMessageSubmission('hello'))).rejects.toThrow('未完整保存')
 })

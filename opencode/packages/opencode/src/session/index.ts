@@ -503,6 +503,7 @@ export namespace Session {
 
         // 移除无 parts 的幽灵消息 info
         await Storage.remove(["message", input.sessionID, input.messageID])
+        await SessionRequest.remove(input.messageID)
         Bus.publish(MessageV2.Event.Removed, {
           sessionID: input.sessionID,
           messageID: input.messageID,

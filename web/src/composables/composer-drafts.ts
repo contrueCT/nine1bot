@@ -1,5 +1,5 @@
 import { markRaw, reactive } from 'vue'
-import { createMessageID, type MessageAttempt } from '../api/client'
+import { createRequestID, type MessageAttempt } from '../api/client'
 import { useFileUpload, type FileAttachment } from './useFileUpload'
 
 export interface SendAttempt extends MessageAttempt {
@@ -41,7 +41,7 @@ export function moveComposerDraft(from: string, to: string) {
 
 export function beginSend(draft: ComposerDraft): SendAttempt {
   const attempt: SendAttempt = reactive({
-    id: createMessageID(),
+    id: createRequestID(),
     text: draft.text.trim(),
     planMode: draft.planMode,
     attachments: [...draft.uploads.attachments.value],

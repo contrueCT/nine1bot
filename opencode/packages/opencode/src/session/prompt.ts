@@ -206,6 +206,7 @@ export namespace SessionPrompt {
   export const PromptInput = z.object({
     sessionID: Identifier.schema("session"),
     messageID: Identifier.schema("message").optional(),
+    requestID: SessionRequest.ID.optional(),
     model: z
       .object({
         providerID: z.string(),
@@ -398,11 +399,15 @@ export namespace SessionPrompt {
   }
 
   async function acceptPrompt(input: PromptInput, timing?: RuntimeTiming.Trace, signal?: AbortSignal) {
-    using requestLock = await SessionRequest.lock(input.messageID)
+    SessionRequest.assertIdentity(input)
+    using requestLock = await SessionRequest.lock(input.messageID, input.requestID)
     signal?.throwIfAborted()
+    const replay = await SessionRequest.replay(input)
+    if (replay) return { kind: "replayed" as const, receipt: replay }
     await SessionRequest.assertNew(input)
     const lease = RunLease.reserve(input.sessionID, signal)
     try {
+      if (input.requestID) input = { ...input, messageID: await SessionRequest.prepare(input) }
       timing?.mark("busy.reserved")
       if (input.runtimeTurnSnapshotId) {
         RuntimeControllerEvents.bindTurn(input.sessionID, input.runtimeTurnSnapshotId)
@@ -475,6 +480,7 @@ export namespace SessionPrompt {
 
       lease.controller.signal.throwIfAborted()
       return {
+        kind: "accepted" as const,
         lease,
         message,
       }
@@ -588,14 +594,14 @@ export namespace SessionPrompt {
 
   async function runPrompt(input: PromptInput, signal?: AbortSignal) {
     signal?.throwIfAborted()
-    const replay = await SessionRequest.replay(input)
-    if (replay) {
-      const messages = await Session.messages({ sessionID: input.sessionID })
-      return messages.findLast((message) => message.info.role === "assistant" && message.info.parentID === input.messageID)
-        ?? await MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID! })
-    }
     const timing = RuntimeTiming.start({ sessionID: input.sessionID, operation: "prompt", source: "session.prompt" })
     const accepted = await acceptPrompt(input, timing, signal)
+    if (accepted.kind === "replayed") {
+      const messageID = accepted.receipt.messageID ?? input.messageID!
+      const messages = await Session.messages({ sessionID: input.sessionID })
+      return messages.findLast((message) => message.info.role === "assistant" && message.info.parentID === messageID)
+        ?? await MessageV2.get({ sessionID: input.sessionID, messageID })
+    }
     if (input.noReply === true) {
       await publishTurnTerminalSafely({
         sessionID: input.sessionID,
@@ -618,14 +624,13 @@ export namespace SessionPrompt {
   }
 
   export const promptAsync = fn(PromptInput, async (input) => {
-    const replay = await SessionRequest.replay(input)
-    if (replay) return { replayed: true as const, turnSnapshotId: replay.turnSnapshotId }
     const timing = RuntimeTiming.start({
       sessionID: input.sessionID,
       operation: "prompt_async",
       source: "session.prompt_async",
     })
     const accepted = await acceptPrompt(input, timing)
+    if (accepted.kind === "replayed") return { replayed: true as const, turnSnapshotId: accepted.receipt.turnSnapshotId }
     if (input.noReply === true) {
       await publishTurnTerminalSafely({
         sessionID: input.sessionID,
@@ -1787,6 +1792,7 @@ export namespace SessionPrompt {
       : undefined
     const info: MessageV2.Info = {
       id: input.messageID ?? Identifier.ascending("message"),
+      requestID: input.requestID,
       role: "user",
       sessionID: input.sessionID,
       time: {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { api, createMessageID, permissionApi, questionApi, setApiDirectory, type EventStreamOptions, type Message, type MessageAttempt, type MessageSubmission, type Session } from '../src/api/client'
+import { api, createRequestID, permissionApi, questionApi, setApiDirectory, type EventStreamOptions, type Message, type MessageAttempt, type MessageSubmission, type Session } from '../src/api/client'
 import { useSession } from '../src/composables/useSession'
 import { useParallelSessions } from '../src/composables/useParallelSessions'
 import { beginSend, clearComposerDrafts, finishSend, getComposerDraft, restoreAttempt } from '../src/composables/composer-drafts'
@@ -147,26 +147,29 @@ describe('stoppable and replayable sends', () => {
     expect(second).toBe(true)
     expect(payloads).toHaveLength(2)
     expect(payloads[1]).toBe(payloads[0])
-    expect(JSON.parse(payloads[0])).toMatchObject({ messageID: attempt.id, model: { providerID: 'p', modelID: 'original' }, context: { page: { title: 'original page' } }, parts: [{ type: 'text', text: 'original text' }, { filename: 'original.txt' }] })
+    expect(JSON.parse(payloads[0])).toMatchObject({ requestID: attempt.id, model: { providerID: 'p', modelID: 'original' }, context: { page: { title: 'original page' } }, parts: [{ type: 'text', text: 'original text' }, { filename: 'original.txt' }] })
     expect(page.requests).toBe(1)
     expect(modelChanges).toBe(1)
     expect(active.sessionNotifications.value).toHaveLength(0)
   })
-  it('confirms a lost response by exact user-message ID, without a second POST', async () => {
+  it('keeps a request identifiable in the snapshot but awaits a positive replay acknowledgement', async () => {
     await active.selectSession(session('A'))
-    const attempt: MessageAttempt = { id: createMessageID() }
+    const attempt: MessageAttempt = { id: createRequestID() }
     let posts = 0
     api.sendMessage = async () => {
       posts++
-      api.getMessages = async () => [message(attempt.id, 'A')]
-      throw new Error('response lost')
+      api.getMessages = async () => [{ ...message('msg_server_owned', 'A'), info: { ...message('msg_server_owned', 'A').info, requestID: attempt.id } }]
+      if (posts === 1) throw new Error('response lost')
+      return { accepted: true, sessionId: 'A' }
     }
+    expect(await active.sendMessage('hello', undefined, undefined, attempt)).toBe(false)
+    expect(active.messages.value[0].info.requestID).toBe(attempt.id)
     expect(await active.sendMessage('hello', undefined, undefined, attempt)).toBe(true)
-    expect(posts).toBe(1)
+    expect(posts).toBe(2)
   })
   it('reconciles a completed replay that emits no new idle event', async () => {
     await active.selectSession(session('A'))
-    const attempt: MessageAttempt = { id: createMessageID() }
+    const attempt: MessageAttempt = { id: createRequestID() }
     let posts = 0
     api.sendMessage = async () => {
       if (++posts === 1) throw new Error('response lost')
@@ -179,14 +182,14 @@ describe('stoppable and replayable sends', () => {
   })
   it('can safely retry an unknown POST even when the recovery snapshot also failed', async () => {
     await active.selectSession(session('A'))
-    const attempt: MessageAttempt = { id: createMessageID() }
+    const attempt: MessageAttempt = { id: createRequestID() }
     let posts = 0
     api.sendMessage = async () => {
       if (++posts === 1) {
         api.getMessages = async () => { throw new Error('history offline') }
         throw new Error('response lost')
       }
-      api.getMessages = async () => [message(attempt.id, 'A')]
+      api.getMessages = async () => [{ ...message('msg_server_owned', 'A'), info: { ...message('msg_server_owned', 'A').info, requestID: attempt.id } }]
       return { accepted: true, sessionId: 'A' }
     }
     const originalError = console.error

@@ -303,6 +303,7 @@ export namespace MessageV2 {
   })
 
   export const User = Base.extend({
+    requestID: z.string().optional(),
     role: z.literal("user"),
     time: z.object({
       created: z.number(),

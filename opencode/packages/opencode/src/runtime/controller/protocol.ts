@@ -134,6 +134,7 @@ export namespace RuntimeControllerProtocol {
   export type SessionCreateRequest = z.infer<typeof SessionCreateRequest>
 
   export const MessageSendRequest = z.object({
+    requestID: z.string().regex(/^req_[A-Za-z0-9_-]{1,124}$/).optional(),
     messageID: z.string().optional(),
     parts: z.array(z.any()),
     context: z
