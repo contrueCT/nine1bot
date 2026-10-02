@@ -20,6 +20,15 @@ export namespace JsonFile {
 
   export async function canonical(filename: string) {
     const absolute = path.resolve(filename)
+    // The observed deleted-inode race is on Bun/Linux. Keep native path identity
+    // (including Windows casing and short names) on the other platforms.
+    if (process.platform !== "linux") {
+      return fs.realpath(absolute).catch(async (error) => {
+        if (error.code !== "ENOENT") throw error
+        const parent = await fs.realpath(path.dirname(absolute)).catch(() => path.dirname(absolute))
+        return path.join(parent, path.basename(absolute))
+      })
+    }
     const split = (name: string) => name.split(path.sep === "\\" ? /[\\/]+/ : /\/+/)
     let current = path.parse(absolute).root
     const pending = split(absolute.slice(current.length))

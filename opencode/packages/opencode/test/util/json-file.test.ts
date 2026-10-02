@@ -5,6 +5,9 @@ import path from "node:path"
 import { JsonFile } from "../../src/util/json-file"
 import { Lock } from "../../src/util/lock"
 
+// The deleted-inode behavior and component traversal are specific to Linux.
+const linuxTest = process.platform === "linux" ? test : test.skip
+
 const roots: string[] = []
 afterEach(async () => {
   mock.restore()
@@ -21,7 +24,7 @@ function barrier() {
   return { promise, resolve }
 }
 
-test("atomic replacement cannot redirect an acknowledged update to a deleted-inode pathname", async () => {
+linuxTest("atomic replacement cannot redirect an acknowledged update to a deleted-inode pathname", async () => {
   const root = await directory()
   const filename = path.join(root, "preferences.json")
   await fs.writeFile(filename, JSON.stringify({ preferences: ["seed"] }))
@@ -62,7 +65,7 @@ test("atomic replacement cannot redirect an acknowledged update to a deleted-ino
   expect(await fs.readdir(root)).toEqual(["preferences.json"])
 })
 
-test("literal deleted suffix and file/directory symlink aliases retain one identity", async () => {
+linuxTest("literal deleted suffix and file/directory symlink aliases retain one identity", async () => {
   const root = await directory()
   const targetDirectory = path.join(root, "real")
   const aliasDirectory = path.join(root, "alias")
@@ -79,7 +82,7 @@ test("literal deleted suffix and file/directory symlink aliases retain one ident
   expect((await fs.lstat(link)).isSymbolicLink()).toBe(true)
 })
 
-test("missing targets through symlinks use the target path and cyclic symlinks fail", async () => {
+linuxTest("missing targets through symlinks use the target path and cyclic symlinks fail", async () => {
   const root = await directory()
   const target = path.join(root, "new.json"), link = path.join(root, "link.json")
   await fs.symlink(path.basename(target), link)
@@ -94,7 +97,7 @@ test("missing targets through symlinks use the target path and cyclic symlinks f
 })
 
 
-test("an update cancelled behind the canonical file lock never writes", async () => {
+linuxTest("an update cancelled behind the canonical file lock never writes", async () => {
   const root = await directory()
   const filename = path.join(root, "preferences.json"), alias = path.join(root, "alias.json")
   const original = '{"preferences":["seed"]}'
@@ -119,7 +122,7 @@ test("an update cancelled behind the canonical file lock never writes", async ()
 })
 
 for (const existing of [false, true]) {
-  test(`cancellation during rename restores the original file state (existing=${existing})`, async () => {
+  linuxTest(`cancellation during rename restores the original file state (existing=${existing})`, async () => {
     const root = await directory()
     const filename = path.join(root, "preferences.json")
     const original = '{"preferences":["seed"]}'
@@ -137,7 +140,7 @@ for (const existing of [false, true]) {
   })
 }
 
-test("symlink targets resolve directory links before parent components", async () => {
+linuxTest("symlink targets resolve directory links before parent components", async () => {
   const root = await directory()
   await fs.mkdir(path.join(root, "real", "subdir"), { recursive: true })
   await fs.symlink("real/subdir", path.join(root, "alias"), "dir")
@@ -159,7 +162,7 @@ test("symlink targets resolve directory links before parent components", async (
   expect((await fs.lstat(absolute)).isSymbolicLink()).toBe(true)
 })
 
-test("exactly forty file symlinks resolve, while a forty-first is rejected", async () => {
+linuxTest("exactly forty file symlinks resolve, while a forty-first is rejected", async () => {
   const root = await directory()
   const target = path.join(root, "preferences.json")
   await fs.writeFile(target, '{"preferences":[]}')
@@ -176,7 +179,7 @@ test("exactly forty file symlinks resolve, while a forty-first is rejected", asy
   await expect(JsonFile.canonical(fortyOne)).rejects.toMatchObject({ code: "ELOOP" })
 })
 
-test("missing parents in symlink targets retain resolved directory ownership", async () => {
+linuxTest("missing parents in symlink targets retain resolved directory ownership", async () => {
   const root = await directory()
   await fs.mkdir(path.join(root, "real", "subdir"), { recursive: true })
   await fs.mkdir(path.join(root, "new"))
@@ -199,7 +202,7 @@ for (const [target, code] of [
   ["blocker.json/../preferences.json", "ENOTDIR"],
   ["preferences.json/", "ENOTDIR"],
 ] as const) {
-  test(`invalid symlink traversal ${target} fails closed with ${code}`, async () => {
+  linuxTest(`invalid symlink traversal ${target} fails closed with ${code}`, async () => {
     const root = await directory()
     const filename = path.join(root, "preferences.json"), link = path.join(root, "link.json")
     const sentinel = '{"preferences":["unrelated"]}'
@@ -216,7 +219,7 @@ for (const [target, code] of [
   })
 }
 
-test("directory and leaf symlinks share the native forty-hop limit", async () => {
+linuxTest("directory and leaf symlinks share the native forty-hop limit", async () => {
   const root = await directory()
   const real = path.join(root, "real"), alias = path.join(root, "alias")
   await fs.mkdir(real)
@@ -234,3 +237,43 @@ test("directory and leaf symlinks share the native forty-hop limit", async () =>
     .rejects.toMatchObject({ code: "ELOOP" })
   expect(await fs.readFile(filename, "utf8")).toBe(sentinel)
 })
+
+for (const platform of ["darwin", "win32"] as const) {
+  test(`non-Linux canonicalization preserves native resolution (${platform}, branch contract only)`, async () => {
+    // This checks dispatch on the current host, not a native Windows/macOS filesystem.
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!
+    Object.defineProperty(process, "platform", { ...descriptor, value: platform })
+    try {
+      const filename = path.resolve("preferences-case-probe.json")
+      const native = platform === "win32" ? "C:\\CanonicalLongName\\Preferences.json" : "/canonical/Preferences.json"
+      const realpath = spyOn(fs, "realpath").mockResolvedValue(native)
+      const readlink = spyOn(fs, "readlink")
+      expect(await JsonFile.canonical(filename)).toBe(native)
+      expect(realpath).toHaveBeenCalledWith(filename)
+      expect(realpath).toHaveBeenCalledTimes(1)
+      expect(readlink).not.toHaveBeenCalled()
+
+      realpath.mockReset()
+      const parent = path.resolve("NativeParent")
+      realpath.mockImplementation(async (name) => {
+        if (name === filename) throw Object.assign(new Error("missing leaf"), { code: "ENOENT" })
+        return parent as any
+      })
+      expect(await JsonFile.canonical(filename)).toBe(path.join(parent, path.basename(filename)))
+      expect(realpath).toHaveBeenCalledWith(path.dirname(filename))
+      expect(realpath).toHaveBeenCalledTimes(2)
+
+      realpath.mockReset()
+      realpath.mockRejectedValue(Object.assign(new Error("missing parent"), { code: "ENOENT" }))
+      expect(await JsonFile.canonical(filename)).toBe(filename)
+      expect(realpath).toHaveBeenCalledTimes(2)
+
+      realpath.mockReset()
+      realpath.mockRejectedValue(Object.assign(new Error("access denied"), { code: "EACCES" }))
+      await expect(JsonFile.canonical(filename)).rejects.toMatchObject({ code: "EACCES" })
+      expect(realpath).toHaveBeenCalledTimes(1)
+    } finally {
+      Object.defineProperty(process, "platform", descriptor)
+    }
+  })
+}
