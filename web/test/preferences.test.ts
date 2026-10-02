@@ -27,7 +27,32 @@ test('requests pin query and headers to the displayed project after active proje
   setApiDirectory('/project-b')
   await preferencesApi.add('saved', 'project', 'user', '/project-a')
   expect(calls[0].url).toBe('/preferences?directory=%2Fproject-a')
-  expect(new Headers(calls[0].options?.headers).get('x-opencode-directory')).toBe('/project-a')
+  expect(new Headers(calls[0].options?.headers).get('x-opencode-directory')).toBe(encodeURIComponent('/project-a'))
+})
+
+test('all preference requests encode the Unicode default directory without inheriting a newer active project', async () => {
+  const directory = '/tmp/项目 🚀'
+  const calls: { url: string; options?: RequestInit }[] = []
+  globalThis.fetch = (async (input, options) => {
+    calls.push({ url: String(input), options })
+    return Response.json(calls.length === 1 ? state(directory) : record('saved', 'project'))
+  }) as typeof fetch
+  setApiDirectory('')
+  const displayed = await preferencesApi.list()
+  expect(displayed.directory).toBe(directory)
+  expect(calls[0].url).toBe('/preferences')
+  setApiDirectory('/tmp/另一个项目')
+  await preferencesApi.add('saved', 'project', 'user', displayed.directory)
+  await preferencesApi.update('saved', 'updated', displayed.directory)
+  await preferencesApi.assign('legacy', displayed.directory)
+  await preferencesApi.delete('saved', displayed.directory)
+  await preferencesApi.getPrompt(displayed.directory)
+  for (const call of calls.slice(1)) {
+    expect(new URL(call.url, 'http://localhost').searchParams.get('directory')).toBe(directory)
+    const header = new Headers(call.options?.headers).get('x-opencode-directory')!
+    expect(header).toBe(encodeURIComponent(directory))
+    expect(header).not.toMatch(/[^\x00-\x7f]/)
+  }
 })
 
 test('separate panels and out-of-order loads cannot reuse another project state', async () => {

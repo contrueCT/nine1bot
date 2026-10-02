@@ -65,7 +65,8 @@ function applyDirectoryHeaders(options: RequestInit, directory = activeDirectory
   if (!directory) return options
   const headers = new Headers(options.headers || {})
   if (!headers.has('x-opencode-directory')) {
-    headers.set('x-opencode-directory', directory)
+    // The server decodes URI-encoded headers; raw Unicode is not a valid ByteString.
+    headers.set('x-opencode-directory', encodeURIComponent(directory))
   }
   return {
     ...options,
@@ -2759,7 +2760,7 @@ export const configApi = {
     const suffix = directory ? `?directory=${encodeURIComponent(directory)}` : ''
     const res = await requireOk(await fetchWithTimeout(`${BASE_URL}/config${suffix}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'x-opencode-directory': directory },
+      headers: { 'Content-Type': 'application/json', 'x-opencode-directory': encodeURIComponent(directory) },
       body: JSON.stringify(config)
     }, DEFAULT_TIMEOUT, false))
     const data = await res.json()
@@ -2933,7 +2934,8 @@ export interface PreferencesState {
 async function preferenceRequest(path: string, options: RequestInit = {}, directory = getApiDirectory()) {
   const query = directory ? `?${new URLSearchParams({ directory })}` : ''
   const headers = new Headers(options.headers)
-  if (directory) headers.set('x-opencode-directory', directory)
+  // Headers require ByteString values; the server decodes this URI-encoded fallback.
+  if (directory) headers.set('x-opencode-directory', encodeURIComponent(directory))
   return requireOk(await fetchWithTimeout(`${BASE_URL}/preferences${path}${query}`, { ...options, headers }, DEFAULT_TIMEOUT, false))
 }
 
