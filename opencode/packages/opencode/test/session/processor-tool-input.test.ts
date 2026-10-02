@@ -97,7 +97,8 @@ test("invalid SDK tool inputs remain tool errors and a corrected call can comple
         expect(await processor.process({} as LLM.StreamInput)).toBe("continue")
         expect(processor.message.error).toBeUndefined()
         expect(executions).toBe(1)
-        expect(SessionProcessor.getDoomLoopCount(session.id)).toBe(1)
+        expect(SessionProcessor.getDoomLoopCount(session.id)).toBe(0)
+        expect((await MessageV2.parts(message.id)).some((part) => part.type === "text" && part.text.includes("<system-hint>"))).toBe(true)
         const parts = (await MessageV2.parts(message.id)).filter((p): p is MessageV2.ToolPart => p.type === "tool")
         expect(parts).toHaveLength(calls.length)
         for (const [index] of invalidInputs.entries()) {

@@ -10,6 +10,7 @@ import { Flag } from "../flag/flag"
 import { Shell } from "../shell/shell"
 
 import { Truncate } from "./truncation"
+import { Filesystem } from "../util/filesystem"
 import { CommandAnalyzer } from "./command-analyzer"
 
 const MAX_METADATA_LENGTH = 30_000
@@ -19,7 +20,7 @@ export const log = Log.create({ service: "bash-tool" })
 
 // TODO: we may wanna rename this tool so it works better on other shells
 export const BashTool = Tool.define("bash", async () => {
-  const shell = Shell.acceptable()
+  const shell = Shell.bash()
   log.info("bash tool using shell", { shell })
 
   return {
@@ -42,7 +43,8 @@ export const BashTool = Tool.define("bash", async () => {
         ),
     }),
     async execute(params, ctx) {
-      const cwd = params.workdir || ctx.cwd
+      ctx.abort.throwIfAborted()
+      const cwd = path.resolve(ctx.cwd, params.workdir || ctx.cwd)
       if (params.timeout !== undefined && params.timeout < 0) {
         throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
       }
@@ -51,12 +53,17 @@ export const BashTool = Tool.define("bash", async () => {
       // Use shared command analyzer for parsing and permission checking
       const analysis = await CommandAnalyzer.analyze(params.command, cwd)
 
+      if (!Filesystem.contains(ctx.cwd, cwd)) analysis.externalDirectories.push(cwd)
+      ctx.abort.throwIfAborted()
+
       // Request external_directory permission if accessing paths outside project
       if (analysis.externalDirectories.length > 0) {
         await ctx.ask({
           permission: "external_directory",
           patterns: analysis.externalDirectories,
-          always: analysis.externalDirectories.map((x) => path.dirname(x) + "*"),
+          always: analysis.externalDirectories.flatMap((x) =>
+            x === cwd ? [cwd, path.join(cwd, "*")] : [path.dirname(x) + "*"],
+          ),
           metadata: {},
         })
       }
@@ -71,12 +78,14 @@ export const BashTool = Tool.define("bash", async () => {
         })
       }
 
+      const environment = await ProjectEnvironment.getAll(Instance.project.id)
+      ctx.abort.throwIfAborted()
       const proc = spawn(params.command, {
         shell,
         cwd,
         env: {
           ...process.env,
-          ...(await ProjectEnvironment.getAll(Instance.project.id)),
+          ...environment,
         },
         stdio: ["ignore", "pipe", "pipe"],
         detached: process.platform !== "win32",

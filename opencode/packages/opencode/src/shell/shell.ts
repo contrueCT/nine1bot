@@ -53,6 +53,22 @@ export namespace Shell {
     return "/bin/sh"
   }
 
+  /** The command analyzer uses the Bash grammar, so executable tools must too. */
+  export function bash(): string {
+    const supported = (shell: string | null): shell is string => {
+      if (!shell) return false
+      const name = (process.platform === "win32" ? path.win32 : path).basename(shell).toLowerCase()
+      return ["bash", "bash.exe", "sh", "sh.exe"].includes(name)
+    }
+    const preferred = acceptable()
+    if (supported(preferred)) return preferred
+    const bash = Bun.which("bash")
+    if (bash) return bash
+    const fallbackShell = process.platform === "win32" ? fallback() : Bun.which("sh")
+    if (supported(fallbackShell)) return fallbackShell
+    throw new Error("Bash execution requires Bash or POSIX sh. Install Bash (Git Bash on Windows) and retry.")
+  }
+
   export const preferred = lazy(() => {
     const s = process.env.SHELL
     if (s) return s
