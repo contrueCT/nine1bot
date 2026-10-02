@@ -4,7 +4,7 @@
 
 ```bash
 # 一行命令安装
-curl -fsSL https://raw.githubusercontent.com/your-username/nine1bot/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/contrueCT/nine1bot/main/install.sh | bash
 ```
 
 安装脚本会自动完成：
@@ -28,7 +28,7 @@ source ~/.bashrc  # 或 source ~/.zshrc
 ### 2. 克隆项目
 
 ```bash
-git clone https://github.com/your-username/nine1bot.git ~/.nine1bot
+git clone https://github.com/contrueCT/nine1bot.git ~/.nine1bot
 cd ~/.nine1bot
 ```
 
@@ -126,7 +126,7 @@ rm ~/.local/bin/nine1bot
 
 ## 配置文件
 
-配置文件位于 `~/.nine1bot/nine1bot.config.jsonc`
+运行 `nine1bot config show` 查看实际生效配置与来源。全局配置默认位于 `~/.config/nine1bot/config.jsonc`（Windows 为 `%USERPROFILE%\.config\nine1bot\config.jsonc`）；项目配置可能覆盖全局配置。
 
 ```json
 {
@@ -136,21 +136,26 @@ rm ~/.local/bin/nine1bot
     "openBrowser": true
   },
   "auth": {
-    "enabled": false,
-    "password": "your-password"
+    "enabled": false
   },
   "tunnel": {
-    "enabled": true,
-    "provider": "natapp",
-    "natapp": {
-      "authToken": "your-natapp-token"
-    }
-  },
-  "model": "anthropic/claude-3-5-sonnet-20241022"
+    "enabled": false,
+    "provider": "ngrok"
+  }
 }
 ```
 
+在设置向导或 Web「设置 → 模型」中从当前可用目录选择模型。保存 API Key 不代表已验证凭据或模型权限；向导不会执行付费模型请求。已有默认模型不会被静默替换，失效时请重新选择。
+
 ## 隧道配置
+
+公开隧道要求启用 Web 访问认证。先运行以下命令，交互设置密码并仅存储 Argon2id 哈希，再开启隧道：
+
+```bash
+nine1bot config set-password
+```
+
+旧配置中的明文 `auth.password` 可通过 `nine1bot config migrate-auth` 迁移。不要将密码写进配置示例或 shell 命令参数。
 
 ### ngrok（国际）
 
@@ -191,8 +196,8 @@ rm ~/.local/bin/nine1bot
 
 ## 系统要求
 
-- **操作系统**: Linux, macOS
-- **运行时**: Bun >= 1.0.0（安装脚本会自动安装）
+- **操作系统**: Linux、macOS；Windows 可从 [Releases](https://github.com/contrueCT/nine1bot/releases) 下载预编译发行包
+- **运行时**: 源码安装需要 Bun（安装脚本会自动安装）；预编译发行包不需要单独安装运行时
 - **网络**: 需要访问 AI 提供商 API
 
 ## 常见问题

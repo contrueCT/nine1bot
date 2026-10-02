@@ -64,6 +64,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
     description,
     parameters,
     async execute(params: z.infer<typeof parameters>, ctx) {
+      ctx.abort.throwIfAborted()
       const config = await Config.get()
 
       const agent = await Agent.get(params.subagent_type, { includeDeclaredOnly: true, includeRecommendable: true })
@@ -119,6 +120,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         gitLabReviewBoundary,
       })
 
+      ctx.abort.throwIfAborted()
       const session = await iife(async () => {
         if (params.session_id) {
           const found = await Session.get(params.session_id).catch(() => {})
@@ -142,6 +144,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
             },
             permission,
           })
+          ctx.abort.throwIfAborted()
           return await Session.createNext({
             parentID: ctx.sessionID,
             title: params.description + ` (@${agent.name} subagent)`,
@@ -153,12 +156,14 @@ export const TaskTool = Tool.define("task", async (ctx) => {
           })
         }
 
+        ctx.abort.throwIfAborted()
         return await Session.create({
           parentID: ctx.sessionID,
           title: params.description + ` (@${agent.name} subagent)`,
           permission,
         })
       })
+      ctx.abort.throwIfAborted()
       const msg = await MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID })
       if (msg.info.role !== "assistant") throw new Error("Not an assistant message")
 
@@ -200,15 +205,13 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         })
       })
 
-      function cancel() {
-        SessionPrompt.cancel(session.id)
-      }
-      ctx.abort.addEventListener("abort", cancel)
-      using _ = defer(() => ctx.abort.removeEventListener("abort", cancel))
+      using subscription = defer(unsub)
+      ctx.abort.throwIfAborted()
       const promptParts: SessionPrompt.PromptInput["parts"] = gitLabReviewBoundary
         ? [{ type: "text", text: params.prompt }]
         : await SessionPrompt.resolvePromptParts(params.prompt)
 
+      ctx.abort.throwIfAborted()
       const result = await SessionPrompt.prompt({
         messageID,
         sessionID: session.id,
@@ -226,8 +229,8 @@ export const TaskTool = Tool.define("task", async (ctx) => {
               ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
             },
         parts: promptParts,
-      })
-      unsub()
+      }, ctx.abort)
+      ctx.abort.throwIfAborted()
       const messages = await Session.messages({ sessionID: session.id })
       const summary = messages
         .filter((x) => x.info.role === "assistant")
