@@ -156,78 +156,75 @@ export namespace PermissionNext {
         : []
       const runtimeRuleset = PermissionNext.merge(ruleset, profileRuleset)
 
+      let needsApproval = false
+      // Evaluate the whole request before creating an approval. A preceding ask
+      // must never hide a deny on another command/path in the same operation.
       for (const pattern of request.patterns ?? []) {
         const rule = evaluateWithSessionGrants(request.permission, pattern, ruleset, profileRuleset)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
-
         if (rule.action === "deny")
           throw new DeniedError(runtimeRuleset.filter((r) => Wildcard.match(request.permission, r.permission)))
-
-        if (rule.action === "ask") {
-          if (isAutonomous && !isSecurityCritical(request.permission)) {
-            log.info("auto-allowed in autonomous mode", {
-              permission: request.permission,
-              pattern,
-            })
-            continue
-          }
-
-          const id = input.id ?? Identifier.ascending("permission")
-          return new Promise<void>((resolve, reject) => {
-            const info: Request = {
-              id,
-              ...request,
-            }
-            let settled = false
-            const onAbort = () => settleReject(abortError(signal), cancellationReason(signal))
-            const cleanup = () => {
-              clearTimeout(timeout)
-              signal?.removeEventListener("abort", onAbort)
-            }
-            const settleResolve = () => {
-              if (settled) return
-              settled = true
-              cleanup()
-              resolve()
-            }
-            const settleReject = (error: unknown, reason?: CancellationReason) => {
-              if (settled) return
-              settled = true
-              if (s.pending[id]?.info === info) delete s.pending[id]
-              cleanup()
-              if (reason) {
-                Bus.publish(Event.Cancelled, {
-                  sessionID: info.sessionID,
-                  requestID: info.id,
-                  reason,
-                })
-              }
-              reject(error)
-            }
-
-            // 5分钟超时，防止权限请求永远等待
-            const PERMISSION_TIMEOUT = 5 * 60 * 1000
-            const timeout = setTimeout(() => {
-              log.warn("permission request timeout", { id, permission: request.permission })
-              settleReject(new Error(`Permission request timeout after 5 minutes: ${request.permission}`), "timeout")
-            }, PERMISSION_TIMEOUT)
-
-            s.pending[id] = {
-              info,
-              ruleset: runtimeRuleset,
-              resolve: settleResolve,
-              reject: settleReject,
-            }
-            Bus.publish(Event.Asked, info)
-            signal?.addEventListener("abort", onAbort, { once: true })
-            if (signal?.aborted) {
-              onAbort()
-              return
-            }
-          })
+        if (rule.action === "ask" && (!isAutonomous || isSecurityCritical(request.permission))) {
+          needsApproval = true
         }
-        if (rule.action === "allow") continue
       }
+      if (!needsApproval) {
+        signal?.throwIfAborted()
+        return
+      }
+      const id = input.id ?? Identifier.ascending("permission")
+      return new Promise<void>((resolve, reject) => {
+        const info: Request = {
+          id,
+          ...request,
+        }
+        let settled = false
+        const onAbort = () => settleReject(abortError(signal), cancellationReason(signal))
+        const cleanup = () => {
+          clearTimeout(timeout)
+          signal?.removeEventListener("abort", onAbort)
+        }
+        const settleResolve = () => {
+          if (settled) return
+          settled = true
+          cleanup()
+          resolve()
+        }
+        const settleReject = (error: unknown, reason?: CancellationReason) => {
+          if (settled) return
+          settled = true
+          if (s.pending[id]?.info === info) delete s.pending[id]
+          cleanup()
+          if (reason) {
+            Bus.publish(Event.Cancelled, {
+              sessionID: info.sessionID,
+              requestID: info.id,
+              reason,
+            })
+          }
+          reject(error)
+        }
+
+        // 5分钟超时，防止权限请求永远等待
+        const PERMISSION_TIMEOUT = 5 * 60 * 1000
+        const timeout = setTimeout(() => {
+          log.warn("permission request timeout", { id, permission: request.permission })
+          settleReject(new Error(`Permission request timeout after 5 minutes: ${request.permission}`), "timeout")
+        }, PERMISSION_TIMEOUT)
+
+        s.pending[id] = {
+          info,
+          ruleset: runtimeRuleset,
+          resolve: settleResolve,
+          reject: settleReject,
+        }
+        Bus.publish(Event.Asked, info)
+        signal?.addEventListener("abort", onAbort, { once: true })
+        if (signal?.aborted) {
+          onAbort()
+          return
+        }
+      })
     },
   )
 

@@ -933,3 +933,41 @@ test("ask - allows all patterns when all match allow rules", async () => {
     },
   })
 })
+
+for (const permission of ["bash", "external_directory"]) {
+  for (const enabled of [false, true]) {
+    test(`ask checks a later deny before approval (${permission}, autonomous=${enabled})`, async () => {
+      await using tmp = await tmpdir({ config: { autonomous: { enabled, maxRetries: 3, askAfterRetries: true, allowDoomLoop: true } } })
+      await Instance.provide({ directory: tmp.path, fn: async () => {
+        let asked = 0
+        const unsubscribe = Bus.subscribe(PermissionNext.Event.Asked, () => { asked++ })
+        try {
+          await expect(PermissionNext.ask({
+            sessionID: "session_deny_all_patterns",
+            permission, patterns: ["first", "blocked"], always: ["*"], metadata: {},
+            ruleset: [
+              { permission, pattern: "*", action: "ask" },
+              { permission, pattern: "blocked", action: "deny" },
+            ],
+          })).rejects.toBeInstanceOf(PermissionNext.DeniedError)
+          expect(asked).toBe(0)
+          expect(await PermissionNext.list()).toEqual([])
+        } finally { unsubscribe() }
+      } })
+    })
+  }
+}
+
+test("already cancelled permissions do not auto-allow", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({ directory: tmp.path, fn: async () => {
+    const controller = new AbortController()
+    controller.abort(new Error("stopped"))
+    await expect(PermissionNext.ask({
+      sessionID: "session_aborted_allow", permission: "bash", patterns: ["true"],
+      always: [], metadata: {}, ruleset: [{ permission: "*", pattern: "*", action: "allow" }],
+      signal: controller.signal,
+    })).rejects.toThrow("stopped")
+    expect(await PermissionNext.list()).toEqual([])
+  } })
+})

@@ -36,7 +36,7 @@ export namespace CommandAnalyzer {
 
   /** Result of command analysis */
   export interface AnalysisResult {
-    /** Whether the input appears to be a command (vs interactive input) */
+    /** Whether nonempty execution input was provided */
     isCommand: boolean
     /** Parsed commands found in the input */
     commands: CommandInfo[]
@@ -215,87 +215,102 @@ export namespace CommandAnalyzer {
       requiresPermission: false,
     }
 
-    // Check if this looks like a command
-    if (!isLikelyCommand(command)) {
+    // Execution commands must never be classified as interactive input.
+    // Terminal callers apply the interactive heuristic before calling analyze.
+    if (!command.trim()) {
       return { ...result, isCommand: false }
     }
 
     // Parse with tree-sitter
     const p = await parser()
     const tree = p.parse(command.trim())
-    if (!tree) {
-      return { ...result, isCommand: false }
-    }
+    if (!tree) throw new Error("Unable to parse shell command; execution was not authorized")
+    try {
+      if (tree.rootNode.hasError) throw new Error("Unable to parse shell command; execution was not authorized")
 
-    const directories = new Set<string>()
+      const directories = new Set<string>()
 
-    // Extract commands from AST
-    for (const node of tree.rootNode.descendantsOfType("command")) {
-      if (!node) continue
+      // Extract commands from AST
+      for (const node of tree.rootNode.descendantsOfType("command")) {
+        if (!node) continue
 
-      const tokens: string[] = []
-      for (let i = 0; i < node.childCount; i++) {
-        const child = node.child(i)
-        if (!child) continue
-        if (
-          child.type !== "command_name" &&
-          child.type !== "word" &&
-          child.type !== "string" &&
-          child.type !== "raw_string" &&
-          child.type !== "concatenation"
-        ) {
-          continue
-        }
-        tokens.push(child.text)
-      }
-
-      if (tokens.length === 0) continue
-
-      const commandName = tokens[0]!
-
-      // Check for path-accessing commands
-      if (DANGEROUS_PATH_COMMANDS.includes(commandName as typeof DANGEROUS_PATH_COMMANDS[number])) {
-        for (const arg of tokens.slice(1)) {
-          // Skip flags
-          if (arg.startsWith("-") || (commandName === "chmod" && arg.startsWith("+"))) {
+        const tokens: string[] = []
+        for (let i = 0; i < node.childCount; i++) {
+          const child = node.child(i)
+          if (!child) continue
+          if (
+            child.type !== "command_name" &&
+            child.type !== "word" &&
+            child.type !== "string" &&
+            child.type !== "raw_string" &&
+            child.type !== "concatenation"
+          ) {
             continue
           }
+          tokens.push(child.text)
+        }
 
-          // Resolve the path
-          const resolved = await $`realpath ${arg}`
-            .cwd(cwd)
-            .quiet()
-            .nothrow()
-            .text()
-            .then((x) => x.trim())
+        if (tokens.length === 0) continue
 
-          log.info("resolved path", { arg, resolved })
+        const commandName = tokens[0]!
 
-          if (resolved) {
-            const normalized = normalizePathForPlatform(resolved)
-            if (!Filesystem.contains(cwd, normalized)) {
-              directories.add(normalized)
+        // Check for path-accessing commands
+        if (DANGEROUS_PATH_COMMANDS.includes(commandName as typeof DANGEROUS_PATH_COMMANDS[number])) {
+          for (const arg of tokens.slice(1)) {
+            // Skip flags
+            if (arg.startsWith("-") || (commandName === "chmod" && arg.startsWith("+"))) {
+              continue
+            }
+
+            // Resolve the path
+            const resolved = await $`realpath ${arg}`
+              .cwd(cwd)
+              .quiet()
+              .nothrow()
+              .text()
+              .then((x) => x.trim())
+
+            log.info("resolved path", { arg, resolved })
+
+            if (resolved) {
+              const normalized = normalizePathForPlatform(resolved)
+              if (!Filesystem.contains(cwd, normalized)) {
+                directories.add(normalized)
+              }
             }
           }
         }
+
+        // Build command patterns (skip cd as it's covered by directory check)
+        if (commandName !== "cd") {
+          result.commands.push({
+            name: commandName,
+            tokens,
+            pattern: tokens.join(" "),
+            alwaysPattern: BashArity.prefix(tokens).join(" ") + "*",
+          })
+        }
       }
 
-      // Build command patterns (skip cd as it's covered by directory check)
-      if (commandName !== "cd") {
+      // Assignments and redirects can have side effects without a command node.
+      // Keep their complete input in the permission request instead of allowing silently.
+      if (tree.rootNode.descendantsOfType("command").length === 0) {
         result.commands.push({
-          name: commandName,
-          tokens,
-          pattern: tokens.join(" "),
-          alwaysPattern: BashArity.prefix(tokens).join(" ") + "*",
+          name: command.trim(),
+          tokens: [command.trim()],
+          pattern: command.trim(),
+          alwaysPattern: command.trim(),
         })
       }
+
+      result.externalDirectories = Array.from(directories)
+      result.requiresPermission =
+        result.externalDirectories.length > 0 || result.commands.length > 0
+
+      return result
+    } finally {
+      tree.delete()
     }
-
-    result.externalDirectories = Array.from(directories)
-    result.requiresPermission =
-      result.externalDirectories.length > 0 || result.commands.length > 0
-
-    return result
   }
 
   /**

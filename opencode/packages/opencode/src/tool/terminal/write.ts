@@ -66,9 +66,11 @@ Examples:
     }
 
     // Security check: analyze command and request permissions if needed
-    const analysis = await CommandAnalyzer.analyze(input, ctx.cwd)
+    const analysis = CommandAnalyzer.isLikelyCommand(input)
+      ? await CommandAnalyzer.analyze(input, ctx.cwd)
+      : undefined
 
-    if (analysis.isCommand && analysis.requiresPermission) {
+    if (analysis?.requiresPermission) {
       // Request external_directory permission if accessing paths outside project
       if (analysis.externalDirectories.length > 0) {
         await ctx.ask({
@@ -98,6 +100,7 @@ Examples:
       }
     }
 
+    ctx.abort.throwIfAborted()
     const success = AgentTerminal.write(params.id, input, ctx.sessionID)
     if (!success) {
       throw new Error(`Failed to write to terminal: ${params.id}`)

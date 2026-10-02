@@ -397,10 +397,11 @@ export namespace SessionPrompt {
     resolveTools,
   }
 
-  async function acceptPrompt(input: PromptInput, timing?: RuntimeTiming.Trace) {
+  async function acceptPrompt(input: PromptInput, timing?: RuntimeTiming.Trace, signal?: AbortSignal) {
     using requestLock = await SessionRequest.lock(input.messageID)
+    signal?.throwIfAborted()
     await SessionRequest.assertNew(input)
-    const lease = RunLease.reserve(input.sessionID)
+    const lease = RunLease.reserve(input.sessionID, signal)
     try {
       timing?.mark("busy.reserved")
       if (input.runtimeTurnSnapshotId) {
@@ -421,6 +422,7 @@ export namespace SessionPrompt {
       }
 
       let session = await Session.get(input.sessionID)
+      lease.controller.signal.throwIfAborted()
       timing?.mark("session.loaded", { directory: session.directory })
       session = await ensureRuntimeProfile(input, session, timing)
       const preparedContextEvent = await RuntimeContextEvents.preparePageEvent({
@@ -429,8 +431,10 @@ export namespace SessionPrompt {
         page: input.context?.page,
       })
       const promptInput = await prepareRuntimeContextInput(input, timing)
+      lease.controller.signal.throwIfAborted()
       await RuntimeTiming.measure(timing, "revert.cleanup", () => SessionRevert.cleanup(session))
 
+      lease.controller.signal.throwIfAborted()
       const message = await RuntimeTiming.measure(timing, "user_message.create", () => createUserMessage(promptInput, session))
       if (preparedContextEvent) {
         await RuntimeContextEvents.commitPageEvent({
@@ -464,6 +468,7 @@ export namespace SessionPrompt {
         timing?.mark("legacy_tools_permissions.applied", { count: permissions.length })
       }
 
+      lease.controller.signal.throwIfAborted()
       await SessionRequest.accept(input)
       return {
         lease,
@@ -571,7 +576,14 @@ export namespace SessionPrompt {
     }
   }
 
-  export const prompt = fn(PromptInput, async (input) => {
+  // Keep the public JSON schema unchanged; the optional signal is in-process only.
+  export const prompt = Object.assign(
+    (input: PromptInput, signal?: AbortSignal) => runPrompt(PromptInput.parse(input), signal),
+    { schema: PromptInput, force: runPrompt },
+  )
+
+  async function runPrompt(input: PromptInput, signal?: AbortSignal) {
+    signal?.throwIfAborted()
     const replay = await SessionRequest.replay(input)
     if (replay) {
       const messages = await Session.messages({ sessionID: input.sessionID })
@@ -579,7 +591,7 @@ export namespace SessionPrompt {
         ?? await MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID! })
     }
     const timing = RuntimeTiming.start({ sessionID: input.sessionID, operation: "prompt", source: "session.prompt" })
-    const accepted = await acceptPrompt(input, timing)
+    const accepted = await acceptPrompt(input, timing, signal)
     if (input.noReply === true) {
       await publishTurnTerminalSafely({
         sessionID: input.sessionID,
@@ -599,7 +611,7 @@ export namespace SessionPrompt {
       input.runtimeTurnSnapshotId,
       input.runtimeTimeoutMs,
     )
-  })
+  }
 
   export const promptAsync = fn(PromptInput, async (input) => {
     const replay = await SessionRequest.replay(input)
@@ -712,6 +724,7 @@ export namespace SessionPrompt {
     })
 
     let step = 0
+    const contextRecovery: SessionProcessor.ContextRecovery = { attempts: 0 }
     const session = await Session.get(sessionID)
     let contextCache: { userMessageID: string; compiled: RuntimeContextPipeline.CompiledContext } | undefined
     let resourceCache: { userMessageID: string; resolved: RuntimeResourceResolver.Resolved } | undefined
@@ -882,6 +895,7 @@ export namespace SessionPrompt {
               ...req,
               sessionID: sessionID,
               ruleset: PermissionNext.merge(taskAgent.permission, session.permission ?? []),
+              signal: abort,
             })
           },
         }
@@ -1076,6 +1090,7 @@ export namespace SessionPrompt {
         sessionID: sessionID,
         model,
         abort,
+        contextRecovery,
       })
       timing?.mark("assistant_message.created", { step, messageID: processor.message.id })
 
@@ -1345,7 +1360,7 @@ export namespace SessionPrompt {
 
     const context = (args: any, options: ToolCallOptions): Tool.Context => ({
       sessionID: input.session.id,
-      abort: options.abortSignal ?? input.abort,
+      abort: options.abortSignal ? AbortSignal.any([input.abort, options.abortSignal]) : input.abort,
       messageID: input.processor.message.id,
       callID: options.toolCallId,
       cwd: input.session.directory,
@@ -1370,12 +1385,15 @@ export namespace SessionPrompt {
         }
       },
       async ask(req) {
+        const abort = options.abortSignal ? AbortSignal.any([input.abort, options.abortSignal]) : input.abort
         await PermissionNext.ask({
           ...req,
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
           ruleset: PermissionNext.merge(input.agent.permission, input.session.permission ?? []),
+          signal: abort,
         })
+        abort.throwIfAborted()
       },
     })
 
@@ -1399,6 +1417,7 @@ export namespace SessionPrompt {
         inputSchema: jsonSchema(schema as any),
         async execute(args, options) {
           const ctx = context(args, options)
+          ctx.abort.throwIfAborted()
           if (!gitLabReviewBoundary) {
             await Plugin.trigger(
               "tool.execute.before",
@@ -1412,7 +1431,9 @@ export namespace SessionPrompt {
               },
             )
           }
+          ctx.abort.throwIfAborted()
           const result = await item.execute(args, ctx)
+          ctx.abort.throwIfAborted()
           if (!gitLabReviewBoundary) {
             await Plugin.trigger(
               "tool.execute.after",
@@ -1473,6 +1494,7 @@ export namespace SessionPrompt {
       // Wrap execute to add plugin hooks and format output
       item.execute = async (args, opts) => {
         const ctx = context(args, opts)
+        ctx.abort.throwIfAborted()
 
         await Plugin.trigger(
           "tool.execute.before",
@@ -1493,7 +1515,9 @@ export namespace SessionPrompt {
           always: ["*"],
         })
 
-        const result = await execute(args, opts)
+        ctx.abort.throwIfAborted()
+        const result = await execute(args, { ...opts, abortSignal: ctx.abort })
+        ctx.abort.throwIfAborted()
 
         await Plugin.trigger(
           "tool.execute.after",
@@ -1613,7 +1637,7 @@ export namespace SessionPrompt {
               templateIds: [...input.templateIds],
               messageId: input.processor.message.id,
               callId: options.toolCallId,
-              signal: options.abortSignal ?? input.abort,
+              signal: ctx.abort,
               async reportProgress(progress) {
                 await ctx.metadata(progress)
               },
