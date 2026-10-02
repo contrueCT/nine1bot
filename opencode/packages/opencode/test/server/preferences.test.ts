@@ -9,6 +9,8 @@ import { InstructionPrompt } from "../../src/session/instruction"
 import { addPreference, getGlobalPreferencesPath, loadPreferences } from "../../../../../packages/nine1bot/src/preferences/store"
 import { preferencesApi, setApiDirectory } from "../../../../../web/src/api/client"
 import { Server } from "../../src/server/server"
+import { createOpencodeClient as createSdkV1 } from "../../../sdk/js/src/client"
+import { createOpencodeClient as createSdkV2 } from "../../../sdk/js/src/v2/client"
 
 let root: string
 let a: string
@@ -21,11 +23,14 @@ beforeEach(async () => {
   b = path.join(root, "b")
   await Promise.all([a, b].map((directory) => fs.mkdir(path.join(directory, ".git"), { recursive: true })))
   process.env.NINE1BOT_PREFERENCES_PATH = path.join(root, "preferences.json")
+  Server.App.reset()
 })
 afterEach(async () => {
   await Instance.disposeAll()
   for (const key of Object.keys(process.env)) if (!(key in env)) delete process.env[key]
   Object.assign(process.env, env)
+  // Re-evaluate startup-only route gates under the next test's environment.
+  Server.App.reset()
   await fs.rm(root, { recursive: true, force: true })
 })
 
@@ -37,6 +42,24 @@ async function request(directory: string, pathname = "/", method = "GET", body?:
 function prompt(directory: string) {
   return Instance.provide({ directory, fn: async () => (await InstructionPrompt.system()).join("\n") })
 }
+
+test("server app reset creates isolated routes without changing the startup preference gate", () => {
+  const first = Server.App()
+  expect(Server.App()).toBe(first)
+  const count = first.routes.length
+  expect(first.routes.some((route) => route.path.startsWith("/preferences"))).toBe(true)
+  Server.App.reset()
+  const second = Server.App()
+  expect(second).not.toBe(first)
+  expect(second.routes).toHaveLength(count)
+  delete process.env.NINE1BOT_PREFERENCES_PATH
+  delete process.env.NINE1BOT_PREFERENCES_MODULE
+  Server.App.reset()
+  expect(Server.App().routes.some((route) => route.path.startsWith("/preferences"))).toBe(false)
+  process.env.NINE1BOT_PREFERENCES_PATH = path.join(root, "preferences.json")
+  Server.App.reset()
+  expect(Server.App().routes).toHaveLength(count)
+})
 
 test("API and instruction injection use the real current project, without cross-project caching", async () => {
   const global = await request(a, "/", "POST", { content: "global sentinel" }).then((res) => res.json())
@@ -141,9 +164,12 @@ test("HTTP copied global/project IDs return a visible conflict and preserve both
   expect(listed.preferences).toHaveLength(2)
 })
 
-test("Web preference API pins every mutation to a Unicode server default directory and query ownership wins", async () => {
-  const directory = path.join(root, "项目 🚀")
+test.each(["项目 🚀", "project%20A", "project%2Fchild", "project%25A", "project%broken", "project A"])("Web preference API preserves the exact default directory %s through every mutation", async (name) => {
+  const directory = path.join(root, name)
   await fs.mkdir(path.join(directory, ".git"), { recursive: true })
+  const decoded = (() => { try { return decodeURIComponent(directory) } catch { return directory } })()
+  const other = decoded === directory ? b : decoded
+  await fs.mkdir(path.join(other, ".git"), { recursive: true })
   delete process.env.NINE1BOT_PROJECT_DIR
   await fs.writeFile(process.env.NINE1BOT_PREFERENCES_PATH!, JSON.stringify({ version: 1, preferences: [
     { id: "unowned", content: "unowned sentinel", scope: "project", source: "user", createdAt: 1 },
@@ -156,34 +182,56 @@ test("Web preference API pins every mutation to a Unicode server default directo
   process.chdir(directory)
   try {
     expect((await preferencesApi.list()).directory).toBe(directory)
+    process.env.NINE1BOT_PROJECT_DIR = directory
+    process.chdir(originalCwd)
+    expect((await preferencesApi.list()).directory).toBe(directory)
+    delete process.env.NINE1BOT_PROJECT_DIR
+    process.chdir(directory)
+    const headerOnly = await Server.App().request("/preferences", {
+      headers: { "x-opencode-directory": encodeURIComponent(directory) },
+    })
+    expect((await headerOnly.json()).directory).toBe(directory)
+    if (name === "project%broken") {
+      const malformedHeader = await Server.App().request("/preferences", { headers: { "x-opencode-directory": directory } })
+      expect((await malformedHeader.json()).directory).toBe(directory)
+    }
     // A fresh Web session selects '.', then the panel pins the resolved absolute cwd.
     setApiDirectory(".")
     const displayed = await preferencesApi.list()
     expect(displayed.directory).toBe(directory)
     expect(displayed.unresolved.map((entry) => entry.id)).toEqual(["unowned"])
-    setApiDirectory(b)
+    const sdkFetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      expect(request.headers.get("x-opencode-directory")).toBe(encodeURIComponent(directory))
+      return Server.App().request(request)
+    }) as typeof fetch
+    for (const createClient of [createSdkV1, createSdkV2]) {
+      const sdk = createClient({ baseUrl: "http://localhost", directory, fetch: sdkFetch })
+      expect((await sdk.project.current()).data?.id).toBe(displayed.projectID)
+    }
+    setApiDirectory(other)
     const saved = await preferencesApi.add("unicode sentinel", "project", "user", displayed.directory)
     expect(saved.projectID).toBe(displayed.projectID)
-    expect((await preferencesApi.list(b)).project).toEqual([])
+    expect((await preferencesApi.list(other)).project).toEqual([])
     expect(await preferencesApi.update(saved.id, "edited unicode sentinel", displayed.directory)).toMatchObject({ content: "edited unicode sentinel" })
     expect(await preferencesApi.assign("unowned", displayed.directory)).toMatchObject({ projectID: displayed.projectID })
     expect(await preferencesApi.getPrompt(displayed.directory)).toContain("edited unicode sentinel")
-    expect(await preferencesApi.getPrompt(b)).not.toContain("unowned sentinel")
+    expect(await preferencesApi.getPrompt(other)).not.toContain("unowned sentinel")
     // A mismatched fallback header and forged body ID cannot override the query's owner.
     const response = await Server.App().request(`/preferences?${new URLSearchParams({ directory })}`, {
-      method: "POST", headers: { "Content-Type": "application/json", "x-opencode-directory": encodeURIComponent(b) },
+      method: "POST", headers: { "Content-Type": "application/json", "x-opencode-directory": encodeURIComponent(other) },
       body: JSON.stringify({ content: "query owner", scope: "project", projectID: "forged" }),
     })
     expect(response.status).toBe(200)
     const queryOwned = await response.json()
     expect(queryOwned.projectID).toBe(displayed.projectID)
-    await expect(preferencesApi.update(saved.id, "wrong project", b)).rejects.toThrow()
-    await expect(preferencesApi.delete(saved.id, b)).rejects.toThrow()
+    await expect(preferencesApi.update(saved.id, "wrong project", other)).rejects.toThrow()
+    await expect(preferencesApi.delete(saved.id, other)).rejects.toThrow()
     expect(await preferencesApi.delete(saved.id, displayed.directory)).toBe(true)
     expect(await preferencesApi.delete("unowned", displayed.directory)).toBe(true)
     expect(await preferencesApi.delete(queryOwned.id, displayed.directory)).toBe(true)
     expect((await preferencesApi.list(displayed.directory)).preferences).toEqual([])
-    expect((await preferencesApi.list(b)).project).toEqual([])
+    expect((await preferencesApi.list(other)).project).toEqual([])
   } finally {
     globalThis.fetch = originalFetch
     setApiDirectory("")

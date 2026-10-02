@@ -37,7 +37,7 @@ export function createHttpFeishuControllerBridge(options: FeishuHttpControllerBr
     const headers = new Headers()
     if (options.authHeader) headers.set('authorization', options.authHeader)
     if (init.directory) {
-      headers.set('x-opencode-directory', init.directory)
+      headers.set('x-opencode-directory', encodeURIComponent(init.directory))
       if (!url.searchParams.has('directory')) url.searchParams.set('directory', init.directory)
     }
     if (init.acceptSse) {

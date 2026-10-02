@@ -16,6 +16,11 @@ import { Session } from "../../src/session"
 import { SessionRuntimeProfile } from "../../src/runtime/session/profile"
 import type { SessionProfileSnapshot } from "../../src/runtime/protocol/agent-run-spec"
 import { PermissionNext } from "../../src/permission/next"
+import { Project } from "../../src/project/project"
+import { InstructionPrompt } from "../../src/session/instruction"
+import { Hono } from "hono"
+import { PreferencesRoutes } from "../../src/server/routes/preferences"
+import { addPreference, loadPreferences } from "../../../../../packages/nine1bot/src/preferences/store"
 
 let root: string
 let env: NodeJS.ProcessEnv
@@ -254,6 +259,39 @@ async function productionRemember(session: Session.Info, controller: AbortContro
     { toolCallId: "call_remember", messages: [], abortSignal: sdkController.signal },
   )
 }
+
+test("remember, routes, wrapper and prompts keep the session owner after its first Git commit", async () => {
+  await Instance.provide({ directory: root, fn: async () => {
+    const session = await Session.createNext({ directory: root, runtimeProfile: emptyProfile() })
+    const owner = Instance.project.id
+    expect(session.projectID).toBe(owner)
+    const init = Bun.spawn(["git", "init", "--quiet"], { cwd: root, stdout: "pipe", stderr: "pipe" })
+    expect(await init.exited).toBe(0)
+    const commit = Bun.spawn(["git", "-c", "user.name=Preference Test", "-c", "user.email=preference-test@example.invalid", "commit", "--quiet", "--allow-empty", "-m", "First commit"], {
+      cwd: root, stdout: "pipe", stderr: "pipe",
+    })
+    expect(await commit.exited).toBe(0)
+    expect((await Project.fromDirectory(root)).project.id).not.toBe(owner)
+    expect(Instance.project.id).toBe(owner)
+    const execute = await productionRemember(session, new AbortController())
+    const saved = execute("same session remembered sentinel")
+    const approval = await pendingRemember(session.id)
+    expect(approval.patterns).toEqual([`project:${owner}`])
+    await PermissionNext.reply({ requestID: approval.id, reply: "once" })
+    await saved
+    const wrapper = await addPreference({ content: "same session wrapper sentinel", scope: "project" }, root)
+    expect(wrapper.projectID).toBe(owner)
+    const response = await new Hono().route("/preferences", PreferencesRoutes()).request("/preferences")
+    const state = await response.json()
+    expect(state.projectID).toBe(owner)
+    expect(state.project.map((entry: { projectID: string }) => entry.projectID)).toEqual([owner, owner])
+    expect((await loadPreferences(root)).project.map((entry) => entry.id)).toEqual(state.project.map((entry: { id: string }) => entry.id))
+    const prompt = (await InstructionPrompt.system()).join("\n")
+    expect(prompt).toContain("same session remembered sentinel")
+    expect(prompt).toContain("same session wrapper sentinel")
+    expect((await Session.get(session.id)).projectID).toBe(owner)
+  } })
+})
 
 test("production remember cancellation removes its approval and ignores late approval without writing", async () => {
   await Instance.provide({ directory: root, fn: async () => {

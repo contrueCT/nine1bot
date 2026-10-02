@@ -2,8 +2,7 @@
 import { join } from 'path'
 import { getGlobalConfigDir } from '../config/loader'
 import { Preferences } from '../../../../opencode/packages/opencode/src/preferences'
-import { Project } from '../../../../opencode/packages/opencode/src/project/project'
-import { Instance } from '../../../../opencode/packages/opencode/src/project/instance'
+import { preferenceContext } from '../../../../opencode/packages/opencode/src/preferences/context'
 import type { AddPreferenceInput, UpdatePreferenceInput, Preference, PreferencesState } from './types'
 
 export function getGlobalPreferencesPath(): string {
@@ -16,9 +15,7 @@ export function getProjectPreferencesPath(projectDir = process.env.NINE1BOT_PROJ
 }
 
 async function context(projectDir = process.env.NINE1BOT_PROJECT_DIR || process.cwd()): Promise<Preferences.Context> {
-  const directory = await Instance.normalizeDirectory(projectDir)
-  const { project } = await Project.fromDirectory(directory)
-  return { projectID: project.id, directory: project.rootDirectory, workingDirectory: directory }
+  return preferenceContext(projectDir)
 }
 
 export async function loadPreferences(projectDir?: string, _forceReload = false): Promise<PreferencesState> {

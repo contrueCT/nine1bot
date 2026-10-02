@@ -2,8 +2,7 @@ import z from "zod"
 import { Tool } from "./tool"
 import { rememberPermissionDescription } from "../preferences/permission"
 import { Preferences } from "../preferences"
-import { Project } from "../project/project"
-import { Instance } from "../project/instance"
+import { preferenceContext } from "../preferences/context"
 
 export const RememberTool = Tool.define("remember", {
   description: "Save a preference only when the user explicitly asks you to remember it. Specify global for all projects or project for this session's project. Do not save credentials or secrets. Ask the user if the scope is unclear. Uses the local preference store without HTTP or server credentials.",
@@ -15,17 +14,15 @@ export const RememberTool = Tool.define("remember", {
     ctx.abort.throwIfAborted()
     if (!Preferences.enabled()) throw new Error("Preferences are only available in Nine1Bot")
     // cwd is supplied by the session executor, never by model arguments.
-    const directory = await Instance.normalizeDirectory(ctx.cwd)
-    ctx.abort.throwIfAborted()
-    const { project } = await Project.fromDirectory(directory)
-    const context = { projectID: project.id, directory: project.rootDirectory, workingDirectory: directory }
+    // Re-discovery after a first Git commit can change the ID mid-session.
+    const context = await preferenceContext(ctx.cwd)
     ctx.abort.throwIfAborted()
     const content = Preferences.Content.parse(input.content)
     const metadata = { content, scope: input.scope, directory: context.directory }
     await ctx.ask({
       permission: "remember",
-      patterns: [input.scope === "global" ? "global" : `project:${project.id}`],
-      always: [input.scope === "global" ? "global" : `project:${project.id}`],
+      patterns: [input.scope === "global" ? "global" : `project:${context.projectID}`],
+      always: [input.scope === "global" ? "global" : `project:${context.projectID}`],
       metadata: { ...metadata, description: rememberPermissionDescription(metadata) },
     })
     ctx.abort.throwIfAborted()
