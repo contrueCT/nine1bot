@@ -2,9 +2,11 @@ import z from "zod"
 import { Tool } from "../tool"
 import { AgentTerminal } from "../../pty/agent-terminal"
 import { Instance } from "../../project/instance"
+import { Shell } from "../../shell/shell"
 
 export const TerminalCreateTool = Tool.define("terminal_create", {
-  description: `Create a new persistent terminal session.
+  description: `Create a new persistent Bash-compatible terminal session.
+The initial shell is Bash or POSIX sh, matching terminal_write's command analyzer, regardless of the user's interactive shell preference.
 
 Use this to start interactive terminal sessions for tasks like:
 - SSH connections to remote servers
@@ -29,6 +31,7 @@ Example usage:
 
   async execute(params, ctx) {
     const terminal = await AgentTerminal.create({
+      command: Shell.bash(),
       name: params.name,
       sessionID: ctx.sessionID,
       cwd: params.cwd || ctx.cwd,

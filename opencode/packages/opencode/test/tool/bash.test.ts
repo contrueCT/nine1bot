@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import path from "path"
 import { BashTool } from "../../src/tool/bash"
 import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
 import type { PermissionNext } from "../../src/permission/next"
+import { CommandAnalyzer } from "../../src/tool/command-analyzer"
 import { Truncate } from "../../src/tool/truncation"
 
 const projectRoot = path.join(__dirname, "../..")
@@ -146,6 +147,7 @@ describe("tool.bash permissions", () => {
         const extDirReq = requests.find((r) => r.permission === "external_directory")
         expect(extDirReq).toBeDefined()
         expect(extDirReq!.patterns).toContain("/tmp")
+        expect(extDirReq!.always).toEqual(["/tmp", "/tmp/*"])
       },
     })
   })
@@ -319,4 +321,56 @@ describe("tool.bash truncation", () => {
       },
     })
   })
+})
+
+for (const command of ["ls", "pwd", "true", "./custom-command", "/usr/bin/printf hi", "VALUE=1", "> permission-marker"]) {
+  test(`execution requires permission without interactive heuristics: ${command}`, async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({ directory: tmp.path, fn: async () => {
+      const bash = await BashTool.init()
+      const requests: string[][] = []
+      await expect(bash.execute({ command, description: "Check authorization" }, {
+        ...ctx, cwd: tmp.path,
+        ask: async (request) => { requests.push(request.patterns); throw new Error("permission denied") },
+      })).rejects.toThrow("permission denied")
+      expect(requests).toHaveLength(1)
+      expect(requests[0]).toContain(command)
+      expect(await Bun.file(path.join(tmp.path, "permission-marker")).exists()).toBe(false)
+    } })
+  })
+}
+
+test("parser failures cannot execute a command", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({ directory: tmp.path, fn: async () => {
+    const bash = await BashTool.init()
+    const parser = await CommandAnalyzer.getParser()
+    const parse = spyOn(parser, "parse").mockReturnValue(null)
+    try {
+      await expect(bash.execute({ command: "touch permission-marker", description: "Check parser failure" }, {
+        ...ctx, cwd: tmp.path,
+      })).rejects.toThrow("Unable to parse shell command")
+      expect(await Bun.file(path.join(tmp.path, "permission-marker")).exists()).toBe(false)
+    } finally { parse.mockRestore() }
+  } })
+})
+
+test("syntax errors fail closed and interactive terminal replies remain distinguishable", async () => {
+  await expect(CommandAnalyzer.analyze("echo 'unterminated", projectRoot)).rejects.toThrow("Unable to parse shell command")
+  expect(CommandAnalyzer.isLikelyCommand("yes\n")).toBe(false)
+  expect(CommandAnalyzer.isLikelyCommand("\x03")).toBe(false)
+  expect(CommandAnalyzer.isLikelyCommand("pwd\n")).toBe(true)
+})
+
+test("abort while permission resolves prevents spawning side effects", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({ directory: tmp.path, fn: async () => {
+    const bash = await BashTool.init()
+    const controller = new AbortController()
+    await expect(bash.execute({ command: "touch cancelled-marker", description: "Check cancelled permission" }, {
+      ...ctx, cwd: tmp.path, abort: controller.signal,
+      ask: async () => { controller.abort(new Error("stopped before spawn")) },
+    })).rejects.toThrow("stopped before spawn")
+    expect(await Bun.file(path.join(tmp.path, "cancelled-marker")).exists()).toBe(false)
+  } })
 })

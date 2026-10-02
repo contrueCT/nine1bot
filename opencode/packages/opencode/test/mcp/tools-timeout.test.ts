@@ -89,3 +89,32 @@ describe("MCP prompt tool resolution", () => {
     expect(result[0]?.tools[0]?.name).toBe("cached-tool")
   })
 })
+
+
+test("MCP execution forwards cancellation and does not dispatch already-aborted calls", async () => {
+  const controller = new AbortController()
+  let calls = 0
+  let receivedSignal: AbortSignal | undefined
+  const started = Promise.withResolvers<void>()
+  const mcpTool = await MCP._testing.convertMcpTool("test", {
+    name: "cancel-test", inputSchema: { type: "object" },
+  }, {
+    async callTool(_request: unknown, _schema: unknown, options: { signal?: AbortSignal }) {
+      calls++
+      receivedSignal = options.signal
+      started.resolve()
+      return await new Promise((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true })
+      })
+    },
+  } as never)
+  const options = { toolCallId: "test", messages: [], abortSignal: controller.signal }
+  const execution = mcpTool.execute!({}, options)
+  const outcome = Promise.resolve(execution).catch((error: unknown) => error)
+  await started.promise
+  controller.abort(new Error("MCP stopped"))
+  expect(await outcome).toMatchObject({ message: "MCP stopped" })
+  expect(receivedSignal).toBe(controller.signal)
+  await expect(mcpTool.execute!({}, options)).rejects.toThrow("MCP stopped")
+  expect(calls).toBe(1)
+})

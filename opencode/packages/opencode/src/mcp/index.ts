@@ -230,7 +230,9 @@ export namespace MCP {
     return dynamicTool({
       description: mcpTool.description ?? "",
       inputSchema: jsonSchema(schema),
-      execute: async (args: unknown) => {
+      execute: async (args: unknown, options) => {
+        const signal = options.abortSignal
+        signal?.throwIfAborted()
         try {
           return await client.callTool(
             {
@@ -241,9 +243,11 @@ export namespace MCP {
             {
               resetTimeoutOnProgress: true,
               timeout,
+              signal,
             },
           )
         } catch (error) {
+          signal?.throwIfAborted()
           if (!isAuthenticationError(error)) {
             throw error
           }
@@ -257,6 +261,7 @@ export namespace MCP {
             throw error
           }
 
+          signal?.throwIfAborted()
           const recovered = await ensureServerConnected(serverName, entry, { interactiveAuth: true })
           if (!recovered) {
             throw error
@@ -267,6 +272,7 @@ export namespace MCP {
             throw error
           }
 
+          signal?.throwIfAborted()
           return refreshedClient.callTool(
             {
               name: mcpTool.name,
@@ -276,6 +282,7 @@ export namespace MCP {
             {
               resetTimeoutOnProgress: true,
               timeout,
+              signal,
             },
           )
         }
@@ -339,6 +346,7 @@ export namespace MCP {
 
   export const _testing = {
     resolveToolSources,
+    convertMcpTool,
   }
 
   async function refreshTools(serverName: string, client: MCPClient, timeout?: number) {

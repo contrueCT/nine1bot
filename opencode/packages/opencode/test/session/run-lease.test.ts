@@ -36,3 +36,20 @@ describe("RunLease", () => {
     })
   })
 })
+
+
+test("parent cancellation is scoped to its admitted lease", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({ directory: tmp.path, fn: async () => {
+    const parent = new AbortController()
+    const first = RunLease.reserve("session_child", parent.signal)
+    parent.abort(new Error("parent cancelled"))
+    expect(first.controller.signal.reason.message).toBe("parent cancelled")
+    RunLease.release(first.sessionID, first.id)
+    const next = RunLease.reserve("session_child")
+    expect(next.controller.signal.aborted).toBe(false)
+    RunLease.release(next.sessionID, next.id)
+    expect(() => RunLease.reserve("session_child", parent.signal)).toThrow("parent cancelled")
+    expect(RunLease.current("session_child")).toBeUndefined()
+  } })
+})

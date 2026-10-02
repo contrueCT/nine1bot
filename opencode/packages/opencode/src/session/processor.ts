@@ -68,13 +68,35 @@ export namespace SessionProcessor {
   }
 
   export type Info = Awaited<ReturnType<typeof create>>
-  export type Result = Awaited<ReturnType<Info["process"]>>
+  export type Result = "continue" | "stop" | "compact"
+  // Shared by model steps in a turn; a successful normal step resets the budget.
+  export type ContextRecovery = { attempts: number }
+
+  // Each model step writes a new assistant message. Inspect a bounded slice of
+  // this user turn rather than only the current message's display parts.
+  async function recentToolAttempts(message: MessageV2.Assistant) {
+    const result: MessageV2.ToolPart[] = []
+    let messages = 0
+    let parts = 0
+    for await (const item of MessageV2.stream(message.sessionID)) {
+      if (++messages > 32 || item.info.role !== "assistant" || item.info.parentID !== message.parentID) break
+      if (item.info.id > message.id) continue
+      for (const part of item.parts.toReversed()) {
+        if (++parts > 128) return result
+        if (part.type !== "tool") continue
+        result.push(part)
+        if (result.length === DOOM_LOOP_THRESHOLD) return result
+      }
+    }
+    return result
+  }
 
   export function create(input: {
     assistantMessage: MessageV2.Assistant
     sessionID: string
     model: Provider.Model
     abort: AbortSignal
+    contextRecovery?: ContextRecovery
   }) {
     const toolcalls: Record<string, MessageV2.ToolPart> = {}
     let snapshot: string | undefined
@@ -82,6 +104,7 @@ export namespace SessionProcessor {
     let attempt = 0
     let needsCompaction = false
     let firstResponseAt: number | undefined
+    const contextRecovery = input.contextRecovery ?? { attempts: 0 }
 
     const markFirstResponse = () => {
       firstResponseAt ??= Date.now()
@@ -147,7 +170,7 @@ export namespace SessionProcessor {
       partFromToolCall(toolCallID: string) {
         return toolcalls[toolCallID]
       },
-      async process(streamInput: LLM.StreamInput, options?: { timing?: RuntimeTiming.Trace }) {
+      async process(streamInput: LLM.StreamInput, options?: { timing?: RuntimeTiming.Trace }): Promise<Result> {
         log.info("process")
         const timing = options?.timing
         timing?.mark("processor.process.started")
@@ -164,6 +187,49 @@ export namespace SessionProcessor {
           let providerTimedOut = false
           const attemptController = new AbortController()
           const attemptAbort = AbortSignal.any([input.abort, attemptController.signal])
+          let attemptFinalized = false
+          const hasPendingTools = () => Object.values(toolcalls).some(
+            (part) => part.state.status === "pending" || part.state.status === "running",
+          )
+          const finalizeAttempt = async () => {
+            if (attemptFinalized) return
+            attemptFinalized = true
+            if (hasPendingTools()) attemptController.abort(new Error("Tool execution aborted"))
+            if (snapshot) {
+              const patch = await Snapshot.patch(snapshot)
+              if (patch.files.length) {
+                await Session.updatePart({
+                  id: Identifier.ascending("part"),
+                  messageID: input.assistantMessage.id,
+                  sessionID: input.sessionID,
+                  type: "patch",
+                  hash: patch.hash,
+                  files: patch.files,
+                })
+              }
+              snapshot = undefined
+            }
+            const p = await MessageV2.parts(input.assistantMessage.id)
+            for (const part of p) {
+              if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
+                const start = "time" in part.state ? part.state.time.start : Date.now()
+                const updated = (await Session.updatePart({
+                  ...part,
+                  state: {
+                    ...part.state,
+                    status: "error",
+                    error: "Tool execution aborted",
+                    time: {
+                      start,
+                      end: Date.now(),
+                    },
+                  },
+                })) as MessageV2.ToolPart
+                delete toolcalls[part.callID]
+                await publishToolFailed(updated, new Error("Tool execution aborted"))
+              }
+            }
+          }
           const watchdog = ProgressWatchdog.create({
             timeoutMs: ProgressWatchdog.PROVIDER_INACTIVITY_TIMEOUT_MS,
             onTimeout() {
@@ -290,19 +356,18 @@ export namespace SessionProcessor {
                       await publishToolStarted(toolcalls[value.toolCallId]!)
                     }
 
-                    const parts = await MessageV2.parts(input.assistantMessage.id)
-                    const lastThree = parts.slice(-DOOM_LOOP_THRESHOLD)
-
+                    const recent = await recentToolAttempts(input.assistantMessage)
                     if (
-                      lastThree.length === DOOM_LOOP_THRESHOLD &&
-                      lastThree.every(
-                        (p) =>
-                          p.type === "tool" &&
-                          p.tool === value.toolName &&
-                          p.state.status !== "pending" &&
-                          (value.invalid
-                            ? p.state.status === "error" && p.state.metadata?.invalidToolInputHash === invalidToolInputHash
-                            : JSON.stringify(p.state.input) === JSON.stringify(toolInput)),
+                      recent.length === DOOM_LOOP_THRESHOLD &&
+                      recent.every((p, index) =>
+                        p.tool === value.toolName &&
+                        // A completed call is real progress, even if its arguments
+                        // match an earlier poll. Only repeated failures form a loop.
+                        (index === 0 || p.state.status === "error") &&
+                        p.state.status !== "pending" &&
+                        (value.invalid
+                          ? p.state.status === "error" && p.state.metadata?.invalidToolInputHash === invalidToolInputHash
+                          : JSON.stringify(p.state.input) === JSON.stringify(toolInput)),
                       )
                     ) {
                       const doomLoopCount = incrementDoomLoopCount(input.sessionID)
@@ -365,6 +430,7 @@ Possible questions to ask:
                           },
                           always: [value.toolName],
                           ruleset: agent.permission,
+                          signal: input.abort,
                         })
                       }
                     }
@@ -390,6 +456,7 @@ Possible questions to ask:
                       },
                     })) as MessageV2.ToolPart
                     await publishToolCompleted(updated)
+                    resetDoomLoopCount(input.sessionID)
 
                     delete toolcalls[value.toolCallId]
                   }
@@ -552,13 +619,21 @@ Possible questions to ask:
                   })
                   continue
               }
-              if (needsCompaction) break
+              if (needsCompaction) {
+                if (hasPendingTools()) attemptController.abort(new Error("Compacting incomplete provider attempt"))
+                break
+              }
             }
           } catch (e: any) {
+            // Closing fullStream alone does not cancel SDK tool executions.
+            // Retire this attempt before retrying, compacting, or finalizing it,
+            // while leaving the parent turn available for recovery.
+            attemptController.abort(e)
             await partUpdates.flushAll()
+            await finalizeAttempt()
             log.error("process", {
               error: e,
-              stack: JSON.stringify(e.stack),
+              stack: JSON.stringify(e?.stack),
             })
             const error = providerTimedOut
               ? new MessageV2.APIError({
@@ -566,74 +641,50 @@ Possible questions to ask:
                   isRetryable: true,
                 }).toObject()
               : MessageV2.fromError(e, { providerID: input.model.providerID })
-            if (SessionCompaction.isContextLengthError(error)) {
+            if (
+              SessionCompaction.isContextLengthError(error) &&
+              !input.assistantMessage.summary &&
+              contextRecovery.attempts === 0 &&
+              !input.abort.aborted
+            ) {
               log.info("context length error, triggering compaction", { sessionID: input.sessionID })
+              contextRecovery.attempts++
               needsCompaction = true
-              break
-            }
-            const retry = SessionRetry.retryable(error)
-            if (retry !== undefined) {
-              attempt++
-              if (SessionRetry.canRetry(attempt)) {
-                const delay = SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
-                SessionStatus.set(input.sessionID, {
-                  type: "retry",
-                  attempt,
-                  message: retry,
-                  next: Date.now() + delay,
-                })
-                await SessionRetry.sleep(delay, input.abort).catch(() => {})
-                input.abort.throwIfAborted()
-                continue
+            } else {
+              const retry = SessionRetry.retryable(error)
+              if (retry !== undefined && !input.abort.aborted) {
+                attempt++
+                if (SessionRetry.canRetry(attempt)) {
+                  const delay = SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
+                  SessionStatus.set(input.sessionID, {
+                    type: "retry",
+                    attempt,
+                    message: retry,
+                    next: Date.now() + delay,
+                  })
+                  await SessionRetry.sleep(delay, input.abort).catch(() => {})
+                  if (!input.abort.aborted) continue
+                }
               }
+              input.assistantMessage.error = input.abort.aborted
+                ? MessageV2.fromError(input.abort.reason, { providerID: input.model.providerID })
+                : error
+              Bus.publish(Session.Event.Error, {
+                sessionID: input.assistantMessage.sessionID,
+                error: input.assistantMessage.error,
+              })
             }
-            input.assistantMessage.error = error
-            Bus.publish(Session.Event.Error, {
-              sessionID: input.assistantMessage.sessionID,
-              error: input.assistantMessage.error,
-            })
           } finally {
             watchdog.stop()
             await partUpdates.flushAll()
           }
-          if (snapshot) {
-            const patch = await Snapshot.patch(snapshot)
-            if (patch.files.length) {
-              await Session.updatePart({
-                id: Identifier.ascending("part"),
-                messageID: input.assistantMessage.id,
-                sessionID: input.sessionID,
-                type: "patch",
-                hash: patch.hash,
-                files: patch.files,
-              })
-            }
-            snapshot = undefined
-          }
-          const p = await MessageV2.parts(input.assistantMessage.id)
-          for (const part of p) {
-            if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
-              const start = "time" in part.state ? part.state.time.start : Date.now()
-              const updated = (await Session.updatePart({
-                ...part,
-                state: {
-                  ...part.state,
-                  status: "error",
-                  error: "Tool execution aborted",
-                  time: {
-                    start,
-                    end: Date.now(),
-                  },
-                },
-              })) as MessageV2.ToolPart
-              await publishToolFailed(updated, new Error("Tool execution aborted"))
-            }
-          }
+          await finalizeAttempt()
           input.assistantMessage.time.completed = Date.now()
           await Session.updateMessage(input.assistantMessage)
           if (needsCompaction) return "compact"
           if (input.assistantMessage.error) return "stop"
           if (blocked) return "stop"
+          contextRecovery.attempts = 0
           return "continue"
         }
       },

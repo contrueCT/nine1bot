@@ -20,14 +20,18 @@ export namespace RunLease {
     },
   )
 
-  export function reserve(sessionID: string): Info {
+  export function reserve(sessionID: string, signal?: AbortSignal): Info {
+    signal?.throwIfAborted()
     if (active.has(sessionID)) throw new Session.BusyError(sessionID)
     const lease = { id: randomUUID(), sessionID, controller: new AbortController() }
+    const onAbort = () => lease.controller.abort(signal?.reason)
+    signal?.addEventListener("abort", onAbort, { once: true })
     const ids = owned()
     ids.add(sessionID)
     active.set(sessionID, {
       lease,
       release: Instance.bind(() => {
+        signal?.removeEventListener("abort", onAbort)
         ids.delete(sessionID)
         SessionStatus.set(sessionID, { type: "idle" })
       }),
