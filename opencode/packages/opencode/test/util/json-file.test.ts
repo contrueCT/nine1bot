@@ -136,3 +136,60 @@ for (const existing of [false, true]) {
     expect(await fs.readdir(root)).toEqual(existing ? ["preferences.json"] : [])
   })
 }
+
+test("symlink targets resolve directory links before parent components", async () => {
+  const root = await directory()
+  await fs.mkdir(path.join(root, "real", "subdir"), { recursive: true })
+  await fs.symlink("real/subdir", path.join(root, "alias"), "dir")
+  const target = path.join(root, "real", "preferences.json")
+  const unrelated = path.join(root, "preferences.json")
+  const sentinel = '{"preferences":["unrelated"]}'
+  await fs.writeFile(target, '{"preferences":[]}')
+  await fs.writeFile(unrelated, sentinel)
+  const relative = path.join(root, "relative.json"), absolute = path.join(root, "absolute.json")
+  await fs.symlink("alias/../preferences.json", relative)
+  await fs.symlink(`${root}/alias/../preferences.json`, absolute)
+  const aliases = [target, relative, absolute]
+  expect(await Promise.all(aliases.map((name) => fs.realpath(name)))).toEqual(aliases.map(() => target))
+  expect(await Promise.all(aliases.map(JsonFile.canonical))).toEqual(aliases.map(() => target))
+  await Promise.all(aliases.map((name, index) => JsonFile.update(name, (data) => { data.preferences.push(index) })))
+  expect((await JsonFile.read(target)).data.preferences.toSorted()).toEqual([0, 1, 2])
+  expect(await fs.readFile(unrelated, "utf8")).toBe(sentinel)
+  expect((await fs.lstat(relative)).isSymbolicLink()).toBe(true)
+  expect((await fs.lstat(absolute)).isSymbolicLink()).toBe(true)
+})
+
+test("exactly forty file symlinks resolve, while a forty-first is rejected", async () => {
+  const root = await directory()
+  const target = path.join(root, "preferences.json")
+  await fs.writeFile(target, '{"preferences":[]}')
+  for (let index = 39; index >= 0; index--) {
+    await fs.symlink(index === 39 ? "preferences.json" : `link-${index + 1}`, path.join(root, `link-${index}`))
+  }
+  const forty = path.join(root, "link-0")
+  expect(await fs.realpath(forty)).toBe(target)
+  expect(await JsonFile.canonical(forty)).toBe(target)
+  await JsonFile.update(forty, (data) => { data.preferences.push("through forty links") })
+  expect((await JsonFile.read(target)).data.preferences).toEqual(["through forty links"])
+  const fortyOne = path.join(root, "forty-one")
+  await fs.symlink("link-0", fortyOne)
+  await expect(JsonFile.canonical(fortyOne)).rejects.toMatchObject({ code: "ELOOP" })
+})
+
+test("missing parents in symlink targets retain resolved directory ownership", async () => {
+  const root = await directory()
+  await fs.mkdir(path.join(root, "real", "subdir"), { recursive: true })
+  await fs.mkdir(path.join(root, "new"))
+  await fs.symlink("real/subdir", path.join(root, "alias"), "dir")
+  const target = path.join(root, "real", "new", "preferences.json")
+  const unrelated = path.join(root, "new", "preferences.json")
+  const sentinel = '{"preferences":["unrelated"]}'
+  await fs.writeFile(unrelated, sentinel)
+  const link = path.join(root, "preferences-link.json")
+  await fs.symlink("alias/../new/preferences.json", link)
+  expect(await JsonFile.canonical(link)).toBe(target)
+  await JsonFile.update(link, (data) => { data.preferences = ["owned"] })
+  expect((await JsonFile.read(target)).data.preferences).toEqual(["owned"])
+  expect(await fs.readFile(unrelated, "utf8")).toBe(sentinel)
+  expect((await fs.lstat(link)).isSymbolicLink()).toBe(true)
+})

@@ -9,26 +9,44 @@ export namespace JsonFile {
   export type Object = Record<string, any>
   export type Document = { path: string; text: string; data: Object; existed: boolean; mode: number }
 
+  async function canonicalDirectory(directory: string) {
+    const resolve = (name: string) => fs.realpath(name).catch((error) => {
+      if (error.code === "ENOENT") return name
+      throw error
+    })
+    const root = path.parse(directory).root
+    const parts = directory.slice(root.length).split(path.sep === "\\" ? /[\\/]+/ : /\/+/)
+    if (!parts.includes("..")) return resolve(directory)
+    // realpath normalizes its input first. Resolve each prefix before ".." so
+    // a symlink target such as alias/../file follows the filesystem's order.
+    let resolved = root
+    for (const part of parts) {
+      if (!part || part === ".") continue
+      if (part === "..") resolved = path.dirname(resolved)
+      else resolved = await resolve(path.join(resolved, part))
+    }
+    return resolved
+  }
+
   export async function canonical(filename: string) {
     let absolute = path.resolve(filename)
     const seen = new Set<string>()
-    for (let depth = 0; depth < 40; depth++) {
+    for (let depth = 0; depth <= 40; depth++) {
       // Canonicalize the stable parent, not the file inode replaced by write().
       // Bun/Linux can resolve that old inode as "filename (deleted)" during a
       // concurrent rename, which would create a different lock and output file.
-      const parent = await fs.realpath(path.dirname(absolute)).catch((error) => {
-        if (error.code === "ENOENT") return path.dirname(absolute)
-        throw error
-      })
+      const parent = await canonicalDirectory(path.dirname(absolute))
       absolute = path.join(parent, path.basename(absolute))
       const target = await fs.readlink(absolute).catch((error) => {
         if (error.code === "EINVAL" || error.code === "ENOENT") return undefined
         throw error
       })
       if (target === undefined) return absolute
-      if (seen.has(absolute)) break
+      if (depth === 40 || seen.has(absolute)) break
       seen.add(absolute)
-      absolute = path.resolve(parent, target)
+      // Resolve directory symlinks before interpreting a target's "..".
+      // path.resolve/join would collapse those components prematurely.
+      absolute = path.isAbsolute(target) ? target : `${parent}${path.sep}${target}`
     }
     throw Object.assign(new Error(`Too many symbolic links: ${filename}`), { code: "ELOOP" })
   }
