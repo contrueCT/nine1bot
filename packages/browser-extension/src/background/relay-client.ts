@@ -10,6 +10,7 @@
 
 import { toolExecutors } from '../tools'
 import { executePageCdpCommand } from './page-cdp'
+import { InputOwnership } from './input-ownership'
 import {
   DEFAULT_SERVER_ORIGIN,
   SERVER_ORIGIN_STORAGE_KEY,
@@ -23,6 +24,8 @@ import {
   addTabToNine1Group,
   getDefaultNine1Tab,
   getActiveNine1GroupId,
+  getActiveNine1GroupSnapshot,
+  getNine1GroupRevision,
   getTabsInActiveNine1Group,
   getTabsInGroupByTab,
   isTabInActiveNine1Group,
@@ -82,6 +85,7 @@ interface RunningCommand {
   cancelReason?: string
   taskLabel?: string
   activeCounted?: boolean
+  groupRevision?: number
 }
 
 // WebSocket 连接状态
@@ -103,8 +107,10 @@ const runningCommands = new Map<number, RunningCommand>()
 const tabActiveCommandCount = new Map<number, number>()
 const tabStopRequestedAt = new Map<number, number>()
 const tabStopVersions = new Map<number, number>()
-const tabCommandOwners = new Map<number, RunningCommand>()
+const inputOwnership = new InputOwnership()
 let stopRequestVersion = 0
+const tabStateVersions = new Map<number, number>()
+let tabStateVersion = 0
 
 /**
  * 生成唯一的 session ID
@@ -157,7 +163,10 @@ function targetInfoForTab(tab: chrome.tabs.Tab) {
 function detachManagedTarget(tabId: number, reason = 'target_detached'): void {
   const sessionId = activeSessions.get(tabId)
   const hasCommand = Array.from(runningCommands.values()).some(command => command.tabId === tabId)
-  if (!sessionId && !hasCommand && !tabCommandOwners.has(tabId)) return
+  if (!sessionId && !hasCommand) {
+    inputOwnership.forgetTab(tabId)
+    return
+  }
 
   if (sessionId) {
     forwardCdpEvent('Target.detachedFromTarget', {
@@ -170,7 +179,8 @@ function detachManagedTarget(tabId: number, reason = 'target_detached'): void {
   cancelRunningCommands({ tabId, reason })
   tabActiveCommandCount.delete(tabId)
   tabStopRequestedAt.delete(tabId)
-  tabCommandOwners.delete(tabId)
+  inputOwnership.forgetTab(tabId)
+  tabStateVersions.delete(tabId)
 }
 
 function detachAllActiveSessions(): void {
@@ -230,7 +240,9 @@ function sendExtensionHealth(): void {
   })
 }
 
-async function sendAgentStateToTabs(tabId: number, taskLabel?: string, generation = connectionGeneration): Promise<void> {
+async function sendAgentStateToTabs(tabId: number, taskLabel?: string, generation = connectionGeneration, stateVersion = tabStateVersions.get(tabId), groupRevision = getNine1GroupRevision()): Promise<void> {
+  const ownsState = () => generation === connectionGeneration && stateVersion === tabStateVersions.get(tabId) &&
+    groupRevision === getNine1GroupRevision()
   const activeForTab = (tabActiveCommandCount.get(tabId) ?? 0) > 0
   const stopRequestedAt = tabStopRequestedAt.get(tabId) ?? 0
   const isStopping = !activeForTab && stopRequestedAt > 0 && Date.now() - stopRequestedAt < 5000
@@ -243,7 +255,7 @@ async function sendAgentStateToTabs(tabId: number, taskLabel?: string, generatio
     groupTabs = [tabId]
   }
 
-  if (generation !== connectionGeneration) return
+  if (!ownsState()) return
   const now = Date.now()
   const sendPromises = groupTabs.map(async (targetTabId) => {
     try {
@@ -261,7 +273,7 @@ async function sendAgentStateToTabs(tabId: number, taskLabel?: string, generatio
   })
 
   await Promise.all(sendPromises)
-  if (generation !== connectionGeneration) return
+  if (!ownsState()) return
 
   sendToRelay({
     method: 'extension.agentState',
@@ -294,22 +306,30 @@ async function markCommandStart(command: RunningCommand): Promise<void> {
   tabStopRequestedAt.delete(command.tabId)
   command.activeCounted = true
   bumpTabActiveCount(command.tabId, 1)
-  await setNine1GroupActive(command.tabId, command.taskLabel)
-  if (command.generation !== connectionGeneration) return
-  await sendAgentStateToTabs(command.tabId, command.taskLabel, command.generation)
+  const version = ++tabStateVersion
+  tabStateVersions.set(command.tabId, version)
+  const ownsState = () => command.generation === connectionGeneration &&
+    command.groupRevision === getNine1GroupRevision() && !command.controller.signal.aborted &&
+    tabStateVersions.get(command.tabId!) === version
+  await setNine1GroupActive(command.tabId, command.taskLabel, ownsState)
+  if (ownsState()) await sendAgentStateToTabs(command.tabId, command.taskLabel, command.generation, version, command.groupRevision)
 }
 
-async function markCommandFinish(command: RunningCommand): Promise<void> {
-  if (command.generation !== connectionGeneration) return
-  if (command.tabId === undefined) return
-  if (!command.activeCounted) return
+function markCommandFinish(command: RunningCommand): void {
+  if (command.generation !== connectionGeneration || command.tabId === undefined || !command.activeCounted) return
   command.activeCounted = false
-  const remaining = bumpTabActiveCount(command.tabId, -1)
-  if (remaining === 0) {
-    await setNine1GroupIdle(command.tabId)
-  }
-  if (command.generation !== connectionGeneration) return
-  await sendAgentStateToTabs(command.tabId, command.taskLabel, command.generation)
+  const tabId = command.tabId
+  const remaining = bumpTabActiveCount(tabId, -1)
+  const version = ++tabStateVersion
+  tabStateVersions.set(tabId, version)
+  const ownsState = () => command.generation === connectionGeneration &&
+    command.groupRevision === getNine1GroupRevision() && tabStateVersions.get(tabId) === version
+  // UI reporting must never delay cancellation/timeout responses. Every eventual
+  // write is guarded so an obsolete idle update cannot overwrite newer activity.
+  void (async () => {
+    if (remaining === 0) await setNine1GroupIdle(tabId, ownsState)
+    if (ownsState()) await sendAgentStateToTabs(tabId, command.taskLabel, command.generation, version, command.groupRevision)
+  })().catch(() => {})
 }
 
 function startHealthReporting(): void {
@@ -423,6 +443,11 @@ async function executeTrackedCommand<T>(options: {
 
   const assertOwned = () => {
     controller.signal.throwIfAborted()
+    if (command.groupRevision !== undefined && command.groupRevision !== getNine1GroupRevision()) {
+      command.cancelReason = 'active_group_changed'
+      controller.abort(command.cancelReason)
+      controller.signal.throwIfAborted()
+    }
     if (command.generation !== connectionGeneration || runningCommands.get(commandId) !== command) {
       throw new Error('Browser command no longer owns this relay connection')
     }
@@ -435,15 +460,16 @@ async function executeTrackedCommand<T>(options: {
         controller.abort(command.cancelReason)
         controller.signal.throwIfAborted()
       }
-      const groupId = await getActiveNine1GroupId()
+      const { groupId, revision: groupRevision } = await getActiveNine1GroupSnapshot()
       assertOwned()
       const tab = await chrome.tabs.get(command.tabId)
       assertOwned()
-      if (groupId === null || tab.groupId !== groupId || (requirePage && !isAutomatableTabUrl(tab.url))) {
+      if (groupRevision !== getNine1GroupRevision() || groupId === null || tab.groupId !== groupId || (requirePage && !isAutomatableTabUrl(tab.url))) {
         command.cancelReason = 'target_no_longer_managed_or_automatable'
         controller.abort(command.cancelReason)
         controller.signal.throwIfAborted()
       }
+      command.groupRevision = groupRevision
     }
   }
 
@@ -453,14 +479,16 @@ async function executeTrackedCommand<T>(options: {
       throw new Error('Input cleanup only permits release events')
     }
     const assertLease = () => {
-      if (command.generation !== connectionGeneration || command.tabId === undefined ||
-          tabCommandOwners.get(command.tabId) !== command) {
+      if (command.generation !== connectionGeneration || command.tabId === undefined || command.groupRevision !== getNine1GroupRevision()) {
         throw new Error('Input cleanup no longer owns its target')
       }
     }
     assertLease()
-    const groupId = await getActiveNine1GroupId()
+    const assertInput = await inputOwnership.assertOwned(command, command.tabId!, method, params)
     assertLease()
+    const { groupId, revision: groupRevision } = await getActiveNine1GroupSnapshot()
+    assertLease()
+    if (groupRevision !== command.groupRevision) throw new Error('Input cleanup no longer owns its target')
     const tab = await chrome.tabs.get(command.tabId!)
     assertLease()
     if (groupId === null || tab.groupId !== groupId || !isAutomatableTabUrl(tab.url)) {
@@ -468,7 +496,20 @@ async function executeTrackedCommand<T>(options: {
     }
     // No await between the final lease check and dispatch.
     assertLease()
-    await chrome.debugger.sendCommand({ tabId: command.tabId! }, method, params)
+    assertInput()
+    await inputOwnership.send(command, command.tabId!, method, params, () => {
+      assertLease()
+      assertInput()
+      return chrome.debugger.sendCommand({ tabId: command.tabId! }, method, params)
+    })
+  }
+  const dispatchInput = async (method: string, params: Record<string, unknown>) => {
+    await assertActive()
+    if (command.tabId === undefined) throw new Error('Input command requires a managed target')
+    return inputOwnership.send(command, command.tabId, method, params, () => {
+      assertOwned()
+      return chrome.debugger.sendCommand({ tabId: command.tabId! }, method, params)
+    })
   }
 
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null
@@ -489,7 +530,7 @@ async function executeTrackedCommand<T>(options: {
     const result = await Promise.race([
       (async () => {
         assertOwned()
-        return executor({ signal: controller.signal, commandId, tabId, assertActive, releaseOwnedInput }, command)
+        return executor({ signal: controller.signal, commandId, tabId, assertActive, releaseOwnedInput, dispatchInput }, command)
       })(),
       aborted,
     ])
@@ -514,7 +555,7 @@ async function executeTrackedCommand<T>(options: {
     }
     if (runningCommands.get(commandId) === command) {
       runningCommands.delete(commandId)
-      await markCommandFinish(command)
+      markCommandFinish(command)
     }
   }
 }
@@ -646,7 +687,6 @@ async function handleCdpCommand(commandId: number, method: string, params: any, 
     command.tabId = tabManagement ? undefined : tabId
     context.tabId = command.tabId
     await context.assertActive!()
-    if (command.tabId !== undefined) tabCommandOwners.set(command.tabId, command)
     await markCommandStart(command)
     await context.assertActive!()
 
@@ -685,7 +725,7 @@ async function handleCdpCommand(commandId: number, method: string, params: any, 
             return { frameId: 'main' }
           }
         }
-        return executePageCdpCommand(tabId, method, params, ensureDebuggerAttached, context.assertActive, context.releaseOwnedInput)
+        return executePageCdpCommand(tabId, method, params, ensureDebuggerAttached, context.assertActive, context.releaseOwnedInput, context.dispatchInput)
       }
     }
   })
@@ -905,7 +945,8 @@ function cleanup(): void {
   tabActiveCommandCount.clear()
   tabStopRequestedAt.clear()
   tabStopVersions.clear()
-  tabCommandOwners.clear()
+  inputOwnership.clear()
+  tabStateVersions.clear()
   stopRequestVersion = 0
 }
 

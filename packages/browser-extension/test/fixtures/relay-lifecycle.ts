@@ -9,6 +9,9 @@ const event = () => ({ listeners: [] as Function[], addListener(fn: Function) { 
 let activeGroup: number | null = 7
 let tabs = [{id: 11, groupId: 7, active: true, windowId: 1, url: 'about:blank', title:'Blank'}]
 const created: any[] = []
+const groupUpdates: any[] = []
+let currentWindowId=1
+let nextGroupId=7
 const updates: any[] = []
 const debuggerCalls: any[] = []
 const debuggerAttachments: number[] = []
@@ -23,12 +26,12 @@ const sync = {browserRelayOrigin:'http://127.0.0.1:4096'}
   tabs: {
     async query(query: any) { return tabs.filter(t => (query.groupId === undefined || query.groupId === t.groupId) && (!query.active || t.active)) },
     async get(id: number) { await getTabPending; const tab=tabs.find(t => t.id === id); if(!tab) throw Error('No tab'); return {...tab} },
-    async create(args: any) { created.push(args); const t={id:100+created.length,groupId:-1,active:true,windowId:1,url:args.url,title:'New'}; tabs.forEach(t=>t.active=false); tabs.push(t); return {...t} },
-    async group(args: any) { const g=args.groupId ?? 7; for(const t of tabs) if(args.tabIds.includes(t.id)) t.groupId=g; activeGroup=g; return g },
+    async create(args: any) { created.push(args); const t={id:100+created.length,groupId:-1,active:true,windowId:currentWindowId,url:args.url,title:'New'}; tabs.forEach(t=>t.active=false); tabs.push(t); return {...t} },
+    async group(args: any) { const g=args.groupId ?? nextGroupId; for(const t of tabs) if(args.tabIds.includes(t.id)) t.groupId=g; activeGroup=g; return g },
     async update(id: number, args: any) { updates.push({id,args}); if(rejectUpdate) throw Error('Navigation rejected by Chrome fixture'); Object.assign(tabs.find(t=>t.id===id)!,args); return tabs.find(t=>t.id===id) },
     async sendMessage() {}, onCreated:event(),onUpdated:event(),onRemoved:event(),onActivated:event(),
   },
-  tabGroups: { async get(g: number) { if(activeGroup === g) return {id:g, windowId:1}; throw Error('No group') }, async update() {} },
+  tabGroups: { async get(g: number) { const tab=tabs.find(t=>t.groupId===g); if(tab) return {id:g, windowId:tab.windowId}; throw Error('No group') }, async update(id:number,args:any) {groupUpdates.push({id,args})} },
   storage: { local:{ async get() { return {activeNine1TabGroupId:activeGroup ?? -1} }, async set(v:any) {activeGroup=v.activeNine1TabGroupId}, async remove() {} }, sync:{ async get() {return sync},async set(v:any) {Object.assign(sync,v)}, async remove() {} }, onChanged:event() },
   debugger: {onDetach:event(), async attach({tabId}: any) { debuggerAttachments.push(tabId); await attachPending }, async sendCommand(source: any, method:string,params:any) { debuggerCalls.push({source,method,params}); await debuggerPending; afterDebuggerCommand?.(method,params); if(method==='Input.dispatchMouseEvent' && params.type==='mouseWheel' && (params.deltaX===undefined || params.deltaY===undefined)) throw Error('Invalid parameters: mouseWheel deltaX/deltaY required'); return debuggerResults[method] ?? {data:'fake-image'} } },
   runtime: {getManifest() {return {version:'0.1.0'}},onMessage:event()},
@@ -359,6 +362,7 @@ if(scenario==='owned_input_cleanup') {
     const before=debuggerCalls.length
     assert.ok(debuggerCalls.some(call=>call.params.type==='mousePressed'||call.params.type==='keyDown'))
     ws.receive({id:nextId++,method:'cancelCDPCommand',params:{commandId:id}});await flush()
+    assert.match(ws.sent.find(x=>x.id===id).error,/cancelled/,'cancellation reply must not wait for group/state reporting')
     getTabPending=undefined;release();await flush()
     assert.equal(debuggerCalls.length,before+1)
     const cleanup=debuggerCalls.at(-1)
@@ -386,7 +390,7 @@ if(scenario==='cleanup_target_boundary') {
     ws.receive({id:nextId++,method:'cancelCDPCommand',params:{commandId:id}});await flush()
     getTabPending=undefined
     if(boundary==='group') tabs[0].groupId=9
-    if(boundary==='new_command') await command('Input.dispatchMouseEvent',{type:'mouseMoved',x:40,y:50},'11')
+    if(boundary==='new_command') await command('Input.dispatchMouseEvent',{type:'mousePressed',x:40,y:50,button:'left'},'11')
     if(boundary==='disconnect') relay.disconnectFromRelay()
     const before=debuggerCalls.length
     release();await flush()
@@ -396,14 +400,107 @@ if(scenario==='cleanup_target_boundary') {
 if(scenario==='native_owned_cleanup') {
   tabs[0].url='https://inside.test'
   await connect()
+  for(const params of [
+    {type:'mousePressed',x:20,y:30,button:'left',clickCount:1},
+    {type:'rawKeyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13},
+    {type:'keyDown',text:'x'},
+  ]) {
+    debuggerCalls.length=0
+    let release!:()=>void
+    debuggerPending=new Promise(resolve=>release=resolve)
+    const id=nextId++
+    const method=params.type==='mousePressed'?'Input.dispatchMouseEvent':'Input.dispatchKeyEvent'
+    ws.receive({id,method:'forwardCDPCommand',params:{method,targetId:'11',params}})
+    await flush();assert.equal(debuggerCalls.length,1)
+    ws.receive({id:nextId++,method:'cancelCDPCommand',params:{commandId:id}});await flush()
+    assert.match(ws.sent.find(x=>x.id===id).error,/cancelled/,'cancellation must settle before the pending press acknowledgement')
+    debuggerPending=undefined;release();await flush()
+    assert.deepEqual(debuggerCalls.map(c=>c.params.type),[params.type,params.type==='mousePressed'?'mouseReleased':'keyUp'])
+    if(params.type==='mousePressed') assert.equal(debuggerCalls.at(-1).params.clickCount,0)
+    else assert.equal(debuggerCalls.at(-1).params.key,params.key??params.text)
+  }
+}
+if(scenario==='readonly_does_not_steal_input') {
+  tabs[0].url='https://inside.test'
+  await connect()
+  for(const [method,action] of [['Page.captureScreenshot','left_click'],['Runtime.evaluate','left_click'],['Page.captureScreenshot','key'],['Runtime.evaluate','key']]) {
+    debuggerCalls.length=0
+    let release!:()=>void
+    afterDebuggerCommand=(_method,params)=>{
+      if(params.type==='mousePressed'||params.type==='keyDown') {
+        afterDebuggerCommand=undefined
+        getTabPending=new Promise(resolve=>release=resolve)
+      }
+    }
+    const id=nextId++
+    ws.receive({id,method:'forwardCDPCommand',params:{method:'Extension.callTool',targetId:'11',params:{toolName:'computer',args:{action,coordinate:[20,30],text:'Enter'}}}})
+    await flush();assert.equal(debuggerCalls.at(-1).params.type,action==='key'?'keyDown':'mousePressed')
+    getTabPending=undefined
+    await command(method,method==='Runtime.evaluate'?{expression:'document.title'}:{},'11')
+    ws.receive({id:nextId++,method:'cancelCDPCommand',params:{commandId:id}});await flush()
+    assert.match(ws.sent.find(x=>x.id===id).error,/cancelled/)
+    release();await flush()
+    assert.equal(debuggerCalls.filter(call=>call.params.type===(action==='key'?'keyUp':'mouseReleased')).length,1,`${method} must not take held-input ownership`)
+  }
+}
+if(scenario==='finish_reporting_is_detached') {
+  tabs[0].url='https://inside.test'
+  await connect()
+  ws.receive({id:301,method:'forwardCDPCommand',params:{method:'Extension.callTool',targetId:'11',params:{toolName:'computer',args:{action:'wait',duration:2000},timeoutMs:50}}})
+  await flush()
   let release!:()=>void
-  debuggerPending=new Promise(resolve=>release=resolve)
-  ws.receive({id:301,method:'forwardCDPCommand',params:{method:'Input.dispatchMouseEvent',targetId:'11',params:{type:'mousePressed',x:20,y:30,button:'left',clickCount:1}}})
-  await flush();assert.equal(debuggerCalls.length,1)
+  getTabPending=new Promise(resolve=>release=resolve)
+  timers.find(timer=>timer.delay===50)!.callback();await flush()
+  assert.match(ws.sent.find(x=>x.id===301).error,/timeout/,'timeout reply must not wait for Chrome UI lookups')
+  getTabPending=undefined
+  ws.receive({id:302,method:'forwardCDPCommand',params:{method:'Extension.callTool',targetId:'11',params:{toolName:'computer',args:{action:'wait',duration:3000}}}})
+  await flush()
+  assert.equal(groupUpdates.at(-1).args.collapsed,false)
+  const before=groupUpdates.length
+  release();await flush()
+  assert.equal(groupUpdates.length,before,'obsolete idle report must not overwrite newer active state')
+  ws.receive({id:303,method:'cancelCDPCommand',params:{commandId:302}});await flush()
+}
+if(scenario==='active_group_revision') {
+  tabs[0].url='https://inside.test'
+  await connect()
+  let release!:()=>void
+  afterDebuggerCommand=(_method,params)=>{
+    if(params.type==='mousePressed') {
+      afterDebuggerCommand=undefined
+      getTabPending=new Promise(resolve=>release=resolve)
+    }
+  }
+  ws.receive({id:301,method:'forwardCDPCommand',params:{method:'Extension.callTool',targetId:'11',params:{toolName:'computer',args:{action:'left_click',coordinate:[20,30]}}}})
+  await flush();assert.equal(debuggerCalls.at(-1).params.type,'mousePressed')
   ws.receive({id:302,method:'cancelCDPCommand',params:{commandId:301}});await flush()
-  debuggerPending=undefined;release();await flush()
-  assert.deepEqual(debuggerCalls.map(c=>c.params.type),['mousePressed','mouseReleased'])
-  assert.equal(debuggerCalls.at(-1).params.clickCount,0)
+  assert.match(ws.sent.find(x=>x.id===301).error,/cancelled/)
+  getTabPending=undefined;currentWindowId=2;nextGroupId=9
+  await command('Extension.callTool',{toolName:'tabs_create_mcp',args:{url:'https://new-window.test'}})
+  assert.equal(activeGroup,9)
+  assert.equal(tabs.find(tab=>tab.id===11)!.groupId,7)
+  release();await flush()
+  assert.equal(debuggerCalls.some(call=>call.params.type==='mouseReleased'),false,'a group switch during lookup must invalidate old cleanup')
+}
+if(scenario==='active_group_dispatch_revision') {
+  tabs[0].url='https://inside.test'
+  await connect()
+  let release!:()=>void
+  afterDebuggerCommand=(_method,params)=>{
+    if(params.type==='mouseMoved') {
+      afterDebuggerCommand=undefined
+      getTabPending=new Promise(resolve=>release=resolve)
+    }
+  }
+  ws.receive({id:301,method:'forwardCDPCommand',params:{method:'Extension.callTool',targetId:'11',params:{toolName:'computer',args:{action:'left_click',coordinate:[20,30]}}}})
+  await flush();assert.equal(debuggerCalls.at(-1).params.type,'mouseMoved')
+  getTabPending=undefined;currentWindowId=2;nextGroupId=9
+  await command('Extension.callTool',{toolName:'tabs_create_mcp',args:{url:'https://new-window.test'}})
+  assert.equal(activeGroup,9)
+  assert.equal(tabs.find(tab=>tab.id===11)!.groupId,7)
+  release();await flush()
+  assert.match(ws.sent.find(x=>x.id===301).error,/cancelled/)
+  assert.deepEqual(debuggerCalls.map(call=>call.params.type),['mouseMoved'],'a group switch during lookup must prevent a subsequent press')
 }
 if(scenario==='reconnect_superseded') {
   for (const failure of ['error', 'constructor', 'close']) {

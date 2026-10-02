@@ -3,6 +3,7 @@ export interface ToolExecutionContext {
   commandId?: number
   tabId?: number
   assertActive?: () => Promise<void>
+  dispatchInput?: (method: string, params: Record<string, unknown>) => Promise<unknown>
   releaseOwnedInput?: (method: string, params: Record<string, unknown>) => Promise<void>
 }
 

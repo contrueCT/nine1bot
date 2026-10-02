@@ -22,6 +22,7 @@ export async function executePageCdpCommand(
   ensureDebuggerAttached: (tabId: number) => Promise<void>,
   assertActive: () => void | Promise<void> = () => {},
   releaseOwnedInput?: (method: string, params: Record<string, unknown>) => Promise<void>,
+  dispatchInput?: (method: string, params: Record<string, unknown>) => Promise<unknown>,
 ): Promise<unknown> {
   if (method === 'DOM.setFileInputFiles') {
     // Server paths are not paths on the extension host. Never transfer files or
@@ -72,7 +73,10 @@ export async function executePageCdpCommand(
   // Preserve the original CDP payload, including wheel deltas, modifiers and
   // optional protocol fields. Chrome validates method-specific parameters.
   await assertActive()
-  const result = await chrome.debugger.sendCommand(target, method, commandParams) as {
+  const isInput = method === 'Input.dispatchMouseEvent' || method === 'Input.dispatchKeyEvent'
+  const result = (isInput && dispatchInput
+    ? await dispatchInput(method, commandParams)
+    : await chrome.debugger.sendCommand(target, method, commandParams)) as {
     errorText?: string
     data?: string
   } | undefined
@@ -84,9 +88,9 @@ export async function executePageCdpCommand(
     let release: Record<string, unknown> | undefined
     if (method === 'Input.dispatchMouseEvent' && commandParams.type === 'mousePressed') {
       release = { type: 'mouseReleased', x: commandParams.x, y: commandParams.y, button: commandParams.button ?? 'left', clickCount: 0 }
-    } else if (method === 'Input.dispatchKeyEvent' && commandParams.type === 'keyDown') {
+    } else if (method === 'Input.dispatchKeyEvent' && (commandParams.type === 'keyDown' || commandParams.type === 'rawKeyDown')) {
       const { text: _text, ...keyParams } = commandParams
-      release = { ...keyParams, type: 'keyUp' }
+      release = { ...keyParams, ...(keyParams.key === undefined && commandParams.text !== undefined ? { key: commandParams.text } : {}), type: 'keyUp' }
     }
     if (release && releaseOwnedInput) {
       try {

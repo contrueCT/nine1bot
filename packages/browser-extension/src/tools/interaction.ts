@@ -43,7 +43,7 @@ function recordInput(inputs: Map<string, OwnedInput>, method: string, params?: R
     const key = `key:${params?.key ?? params?.text ?? ''}`
     if (params?.type === 'keyDown') {
       const { text: _text, ...release } = params
-      inputs.set(key, { method, release: { ...release, type: 'keyUp' } })
+      inputs.set(key, { method, release: { ...release, ...(release.key === undefined && params.text !== undefined ? { key: params.text } : {}), type: 'keyUp' } })
     } else if (params?.type === 'keyUp') {
       inputs.delete(key)
     }
@@ -79,7 +79,9 @@ async function sendDebuggerCommand(context: ToolExecutionContext | undefined, in
   await assertExecutionActive(context)
   await ensureDebuggerAttached(tabId)
   await assertExecutionActive(context)
-  const result = await chrome.debugger.sendCommand({ tabId }, method, params)
+  const result = context?.dispatchInput
+    ? await context.dispatchInput(method, params ?? {})
+    : await chrome.debugger.sendCommand({ tabId }, method, params)
   recordInput(inputs, method, params)
   return result
 }
@@ -483,7 +485,7 @@ export const computerTool = {
     } finally {
       // Release only inputs successfully pressed by this command, and only while
       // it retains its target lease. Never move/click a target that has become
-      // unmanaged or release an input after a newer command has taken over.
+      // unmanaged or release a button/key after another input command has taken it over.
       if (targetTabId !== undefined && context?.releaseOwnedInput) {
         for (const input of inputs.values()) {
           try {
