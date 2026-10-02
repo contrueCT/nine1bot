@@ -436,6 +436,11 @@ export namespace SessionPrompt {
 
       lease.controller.signal.throwIfAborted()
       const message = await RuntimeTiming.measure(timing, "user_message.create", () => createUserMessage(promptInput, session))
+      // Once the complete user message is durable, preserve its replay receipt
+      // even if cancellation arrived during a hook or persistence. Do not leave
+      // saved text behind an unaccepted ID that every subsequent retry rejects.
+      await SessionRequest.accept(input)
+      lease.controller.signal.throwIfAborted()
       if (preparedContextEvent) {
         await RuntimeContextEvents.commitPageEvent({
           sessionID: session.id,
@@ -469,7 +474,6 @@ export namespace SessionPrompt {
       }
 
       lease.controller.signal.throwIfAborted()
-      await SessionRequest.accept(input)
       return {
         lease,
         message,
@@ -1368,6 +1372,7 @@ export namespace SessionPrompt {
       agent: input.agent.name,
       messages: input.messages,
       metadata: async (val: { title?: string; metadata?: any }) => {
+        if (input.abort.aborted || options.abortSignal?.aborted) return
         const match = input.processor.partFromToolCall(options.toolCallId)
         if (match && match.state.status === "running") {
           await Session.updatePart({

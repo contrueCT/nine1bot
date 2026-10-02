@@ -1,5 +1,13 @@
 import { expect, spyOn, test } from "bun:test"
-import { APICallError } from "ai"
+import { APICallError, streamText } from "ai"
+import type { LanguageModelV2 } from "@ai-sdk/provider"
+import z from "zod"
+import type { Agent } from "../../src/agent/agent"
+import { Plugin } from "../../src/plugin"
+import { MCP } from "../../src/mcp"
+import { SessionPrompt } from "../../src/session/prompt"
+import { SessionRetry } from "../../src/session/retry"
+import { ToolRegistry } from "../../src/tool/registry"
 import type { Provider } from "../../src/provider/provider"
 import { Instance } from "../../src/project/instance"
 import { Identifier } from "../../src/id/id"
@@ -214,6 +222,194 @@ for (const variant of [
           stream.mockRestore()
           summary.mockRestore()
           SessionProcessor.resetDoomLoopCount(session.id)
+          await Session.remove(session.id)
+        }
+      },
+    })
+  })
+}
+
+for (const outcome of ["compact", "retry", "stop", "success", "overflow", "cancel-retry"] as const) {
+  test(`real SDK ${outcome} retires only discarded attempts before a pending tool resumes`, async () => {
+    await using tmp = await tmpdir({ config: { snapshot: false, model: "test/test" } })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({})
+        const parent = new AbortController()
+        const started = Promise.withResolvers<void>()
+        const resume = Promise.withResolvers<void>()
+        const settled = Promise.withResolvers<void>()
+        let effects = 0
+        let resourceCancellations = 0
+        let sdkSignal: AbortSignal | undefined
+        let streams = 0
+        const successful = outcome === "success" || outcome === "overflow"
+        const processor = SessionProcessor.create({
+          assistantMessage: await assistant(session.id, Identifier.ascending("message")),
+          sessionID: session.id,
+          model,
+          abort: parent.signal,
+        })
+        const registry = spyOn(ToolRegistry, "resolve").mockResolvedValue({
+          declaredIDs: ["pending_tool"],
+          conflicts: [],
+          tools: [
+            {
+              id: "pending_tool",
+              description: "Pending test tool",
+              parameters: z.object({}),
+              async execute(_args: unknown, ctx: { abort: AbortSignal }) {
+                effects++
+                ctx.abort.addEventListener(
+                  "abort",
+                  () => {
+                    resourceCancellations++
+                  },
+                  { once: true },
+                )
+                return { title: "Resource started", output: "Resource started", metadata: {} }
+              },
+            },
+          ],
+        } as never)
+        const mcp = spyOn(MCP, "tools").mockResolvedValue({})
+        const sleep = spyOn(SessionRetry, "sleep").mockImplementation(async () => {
+          if (outcome === "cancel-retry") parent.abort(new DOMException("Cancelled during retry", "AbortError"))
+        })
+        const summary = spyOn(SessionSummary, "summarize").mockResolvedValue(undefined)
+        const hooks = await Plugin.list()
+        const hook = {
+          "tool.execute.before": async () => {
+            started.resolve()
+            await resume.promise
+          },
+        }
+        hooks.push(hook)
+        const tools = (
+          await SessionPrompt._testing.resolveTools({
+            agent: { name: "build", permission: [] } as unknown as Agent.Info,
+            model,
+            session,
+            processor,
+            bypassAgentCheck: false,
+            messages: [],
+            templateIds: [],
+            abort: parent.signal,
+          })
+        ).tools
+        const execute = tools.pending_tool.execute!
+        tools.pending_tool.execute = async (args, options) => {
+          sdkSignal = options.abortSignal
+          try {
+            return await execute(args, options)
+          } finally {
+            settled.resolve()
+          }
+        }
+        const stream = spyOn(LLM, "stream").mockImplementation(async (input) => {
+          const index = streams++
+          if (index > 0) {
+            expect(sdkSignal?.aborted).toBe(true)
+            expect((await MessageV2.parts(processor.message.id)).find((part) => part.type === "tool")).toMatchObject({
+              state: { status: "error" },
+            })
+          }
+          const provider: LanguageModelV2 = {
+            specificationVersion: "v2",
+            provider: "test",
+            modelId: "test",
+            supportedUrls: {},
+            doGenerate: async () => {
+              throw new Error("Streaming only")
+            },
+            doStream: async () => ({
+              stream: new ReadableStream({
+                async start(controller) {
+                  if (index === 0) {
+                    controller.enqueue({ type: "tool-input-start", id: "pending_call", toolName: "pending_tool" })
+                    controller.enqueue({ type: "tool-input-delta", id: "pending_call", delta: "{}" })
+                    controller.enqueue({ type: "tool-input-end", id: "pending_call" })
+                    controller.enqueue({
+                      type: "tool-call",
+                      toolCallId: "pending_call",
+                      toolName: "pending_tool",
+                      input: "{}",
+                    })
+                    await started.promise
+                    if (!successful) {
+                      controller.enqueue({
+                        type: "error",
+                        error:
+                          outcome === "compact"
+                            ? overflow()
+                            : new APICallError({
+                                message: "Provider attempt failed",
+                                url: "https://example.invalid",
+                                requestBodyValues: {},
+                                statusCode: outcome === "retry" || outcome === "cancel-retry" ? 503 : 400,
+                                isRetryable: outcome === "retry" || outcome === "cancel-retry",
+                              }),
+                      })
+                      controller.close()
+                      return
+                    }
+                  }
+                  controller.enqueue({
+                    type: "finish",
+                    finishReason: index === 0 ? "tool-calls" : "stop",
+                    usage: {
+                      inputTokens: outcome === "overflow" ? 100_000 : 5,
+                      outputTokens: 5,
+                      totalTokens: outcome === "overflow" ? 100_005 : 10,
+                    },
+                  })
+                  controller.close()
+                },
+              }),
+            }),
+          }
+          return streamText({
+            model: provider,
+            tools,
+            abortSignal: input.abort,
+            prompt: "Run the pending tool",
+            maxRetries: 0,
+            onError: () => {},
+          }) as unknown as Awaited<ReturnType<typeof LLM.stream>>
+        })
+        try {
+          const processing = processor.process({} as LLM.StreamInput)
+          await started.promise
+          if (successful) resume.resolve()
+          const expected =
+            outcome === "retry" || outcome === "success"
+              ? "continue"
+              : outcome === "overflow"
+                ? "compact"
+                : outcome === "cancel-retry"
+                  ? "stop"
+                  : outcome
+          expect(await processing).toBe(expected)
+          expect(processor.message.time.completed).toBeNumber()
+          expect(parent.signal.aborted).toBe(outcome === "cancel-retry")
+          expect(sdkSignal?.aborted).toBe(!successful)
+          expect(streams).toBe(outcome === "retry" ? 2 : 1)
+          resume.resolve()
+          await settled.promise
+          expect(effects).toBe(successful ? 1 : 0)
+          expect(resourceCancellations).toBe(0)
+          const part = (await MessageV2.parts(processor.message.id)).find((part) => part.type === "tool")
+          expect(part).toMatchObject({ state: { status: successful ? "completed" : "error" } })
+          if (!successful) expect(processor.partFromToolCall("pending_call")).toBeUndefined()
+        } finally {
+          resume.resolve()
+          hooks.splice(hooks.indexOf(hook), 1)
+          stream.mockRestore()
+          registry.mockRestore()
+          mcp.mockRestore()
+          sleep.mockRestore()
+          summary.mockRestore()
           await Session.remove(session.id)
         }
       },

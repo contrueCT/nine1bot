@@ -187,6 +187,49 @@ export namespace SessionProcessor {
           let providerTimedOut = false
           const attemptController = new AbortController()
           const attemptAbort = AbortSignal.any([input.abort, attemptController.signal])
+          let attemptFinalized = false
+          const hasPendingTools = () => Object.values(toolcalls).some(
+            (part) => part.state.status === "pending" || part.state.status === "running",
+          )
+          const finalizeAttempt = async () => {
+            if (attemptFinalized) return
+            attemptFinalized = true
+            if (hasPendingTools()) attemptController.abort(new Error("Tool execution aborted"))
+            if (snapshot) {
+              const patch = await Snapshot.patch(snapshot)
+              if (patch.files.length) {
+                await Session.updatePart({
+                  id: Identifier.ascending("part"),
+                  messageID: input.assistantMessage.id,
+                  sessionID: input.sessionID,
+                  type: "patch",
+                  hash: patch.hash,
+                  files: patch.files,
+                })
+              }
+              snapshot = undefined
+            }
+            const p = await MessageV2.parts(input.assistantMessage.id)
+            for (const part of p) {
+              if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
+                const start = "time" in part.state ? part.state.time.start : Date.now()
+                const updated = (await Session.updatePart({
+                  ...part,
+                  state: {
+                    ...part.state,
+                    status: "error",
+                    error: "Tool execution aborted",
+                    time: {
+                      start,
+                      end: Date.now(),
+                    },
+                  },
+                })) as MessageV2.ToolPart
+                delete toolcalls[part.callID]
+                await publishToolFailed(updated, new Error("Tool execution aborted"))
+              }
+            }
+          }
           const watchdog = ProgressWatchdog.create({
             timeoutMs: ProgressWatchdog.PROVIDER_INACTIVITY_TIMEOUT_MS,
             onTimeout() {
@@ -576,13 +619,21 @@ Possible questions to ask:
                   })
                   continue
               }
-              if (needsCompaction) break
+              if (needsCompaction) {
+                if (hasPendingTools()) attemptController.abort(new Error("Compacting incomplete provider attempt"))
+                break
+              }
             }
           } catch (e: any) {
+            // Closing fullStream alone does not cancel SDK tool executions.
+            // Retire this attempt before retrying, compacting, or finalizing it,
+            // while leaving the parent turn available for recovery.
+            attemptController.abort(e)
             await partUpdates.flushAll()
+            await finalizeAttempt()
             log.error("process", {
               error: e,
-              stack: JSON.stringify(e.stack),
+              stack: JSON.stringify(e?.stack),
             })
             const error = providerTimedOut
               ? new MessageV2.APIError({
@@ -601,7 +652,7 @@ Possible questions to ask:
               needsCompaction = true
             } else {
               const retry = SessionRetry.retryable(error)
-              if (retry !== undefined) {
+              if (retry !== undefined && !input.abort.aborted) {
                 attempt++
                 if (SessionRetry.canRetry(attempt)) {
                   const delay = SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
@@ -612,11 +663,12 @@ Possible questions to ask:
                     next: Date.now() + delay,
                   })
                   await SessionRetry.sleep(delay, input.abort).catch(() => {})
-                  input.abort.throwIfAborted()
-                  continue
+                  if (!input.abort.aborted) continue
                 }
               }
-              input.assistantMessage.error = error
+              input.assistantMessage.error = input.abort.aborted
+                ? MessageV2.fromError(input.abort.reason, { providerID: input.model.providerID })
+                : error
               Bus.publish(Session.Event.Error, {
                 sessionID: input.assistantMessage.sessionID,
                 error: input.assistantMessage.error,
@@ -626,39 +678,7 @@ Possible questions to ask:
             watchdog.stop()
             await partUpdates.flushAll()
           }
-          if (snapshot) {
-            const patch = await Snapshot.patch(snapshot)
-            if (patch.files.length) {
-              await Session.updatePart({
-                id: Identifier.ascending("part"),
-                messageID: input.assistantMessage.id,
-                sessionID: input.sessionID,
-                type: "patch",
-                hash: patch.hash,
-                files: patch.files,
-              })
-            }
-            snapshot = undefined
-          }
-          const p = await MessageV2.parts(input.assistantMessage.id)
-          for (const part of p) {
-            if (part.type === "tool" && part.state.status !== "completed" && part.state.status !== "error") {
-              const start = "time" in part.state ? part.state.time.start : Date.now()
-              const updated = (await Session.updatePart({
-                ...part,
-                state: {
-                  ...part.state,
-                  status: "error",
-                  error: "Tool execution aborted",
-                  time: {
-                    start,
-                    end: Date.now(),
-                  },
-                },
-              })) as MessageV2.ToolPart
-              await publishToolFailed(updated, new Error("Tool execution aborted"))
-            }
-          }
+          await finalizeAttempt()
           input.assistantMessage.time.completed = Date.now()
           await Session.updateMessage(input.assistantMessage)
           if (needsCompaction) return "compact"
