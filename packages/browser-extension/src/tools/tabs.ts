@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolResult } from './index'
+import { assertExecutionActive, type ToolExecutionContext } from './execution-context'
 import { addTabToNine1Group, getDefaultNine1Tab, getTabsInActiveNine1Group } from '../background/tab-group-manager'
 
 interface TabsContextArgs {
@@ -66,14 +67,16 @@ export const tabsContextTool = {
     },
   } satisfies ToolDefinition,
 
-  async execute(args: unknown): Promise<ToolResult> {
+  async execute(args: unknown, context?: ToolExecutionContext): Promise<ToolResult> {
     const { createIfEmpty = false, url, includeAll = false } = (args as TabsContextArgs) || {}
 
     try {
       let managedTabs = await listManagedTabs()
 
       if (createIfEmpty && managedTabs.length === 0) {
+        await assertExecutionActive(context)
         const newTab = await chrome.tabs.create({ url: normalizeNewTabUrl(url) })
+        await assertExecutionActive(context)
         if (newTab.id) {
           await addTabToNine1Group(newTab.id)
           managedTabs = await listManagedTabs()
@@ -126,11 +129,13 @@ export const tabsCreateTool = {
     },
   } satisfies ToolDefinition,
 
-  async execute(args: unknown): Promise<ToolResult> {
+  async execute(args: unknown, context?: ToolExecutionContext): Promise<ToolResult> {
     try {
       const { url } = (args as TabsCreateArgs) || {}
       const initialUrl = normalizeNewTabUrl(url)
+      await assertExecutionActive(context)
       const newTab = await chrome.tabs.create({ url: initialUrl })
+      await assertExecutionActive(context)
 
       if (!newTab.id) {
         return {
