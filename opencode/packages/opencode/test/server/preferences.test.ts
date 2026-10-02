@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import { Hono } from "hono"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
 import { PreferencesRoutes } from "../../src/server/routes/preferences"
 import { Instance } from "../../src/project/instance"
+import { Project } from "../../src/project/project"
+import { Filesystem } from "../../src/util/filesystem"
 import { InstructionPrompt } from "../../src/session/instruction"
 import { addPreference, getGlobalPreferencesPath, loadPreferences } from "../../../../../packages/nine1bot/src/preferences/store"
 import { preferencesApi, setApiDirectory } from "../../../../../web/src/api/client"
@@ -16,6 +18,7 @@ let root: string
 let a: string
 let b: string
 let env: NodeJS.ProcessEnv
+let restoreGitDiscovery: (() => void) | undefined
 beforeEach(async () => {
   env = { ...process.env }
   root = await fs.mkdtemp(path.join(os.tmpdir(), "preferences-routes-"))
@@ -26,6 +29,8 @@ beforeEach(async () => {
   Server.App.reset()
 })
 afterEach(async () => {
+  restoreGitDiscovery?.()
+  restoreGitDiscovery = undefined
   await Instance.disposeAll()
   for (const key of Object.keys(process.env)) if (!(key in env)) delete process.env[key]
   Object.assign(process.env, env)
@@ -41,6 +46,19 @@ async function request(directory: string, pathname = "/", method = "GET", body?:
 }
 function prompt(directory: string) {
   return Instance.provide({ directory, fn: async () => (await InstructionPrompt.system()).join("\n") })
+}
+
+function standaloneGitBoundary() {
+  const up = Filesystem.up
+  // Some test hosts have an ancestor .git marker (for example /tmp/.git).
+  // Model a standalone filesystem only for this fixture's Git discovery; keep
+  // real markers inside it so the first commit still exercises real discovery.
+  const discovery = spyOn(Filesystem, "up").mockImplementation((options) => {
+    if (options.targets.length !== 1 || options.targets[0] !== ".git" || !Filesystem.contains(root, options.start)) return up(options)
+    const stop = options.stop && Filesystem.contains(root, options.stop) ? options.stop : root
+    return up({ ...options, stop })
+  })
+  restoreGitDiscovery = () => discovery.mockRestore()
 }
 
 async function git(directory: string, ...args: string[]) {
@@ -124,8 +142,14 @@ test("legacy launcher API uses the shared store and resolves A/B independently",
 })
 
 test.each(["directory", "empty-git"])("%s preferences can be explicitly recovered after the first commit and instance restart", async (initial) => {
-  if (initial === "directory") await fs.rm(path.join(a, ".git"), { recursive: true })
-  else await git(a, "init", "--quiet")
+  if (initial === "directory") {
+    await fs.rm(path.join(a, ".git"), { recursive: true })
+    standaloneGitBoundary()
+  } else await git(a, "init", "--quiet")
+  const initialProject = (await Project.fromDirectory(a)).project
+  expect({ id: initialProject.id, rootDirectory: initialProject.rootDirectory, projectType: initialProject.projectType }).toEqual({
+    id: Project.directoryProjectID(a), rootDirectory: a, projectType: initial === "directory" ? "directory" : "git",
+  })
   const saved = await addPreference({ content: "before first commit sentinel", scope: "project" }, a)
   const disposable = await request(a, "/", "POST", { content: "recoverable deletion", scope: "project" }).then((res) => res.json())
   const oldID = saved.projectID
@@ -165,9 +189,16 @@ test.each(["directory", "empty-git"])("%s preferences can be explicitly recovere
 
 test("first-commit recovery recognizes only the exact root and cwd without activating a former subdirectory project", async () => {
   await fs.rm(path.join(a, ".git"), { recursive: true })
+  standaloneGitBoundary()
   const app = path.join(a, "apps", "one")
   const sibling = path.join(a, "apps", "two")
   await Promise.all([app, sibling].map((directory) => fs.mkdir(directory, { recursive: true })))
+  for (const directory of [a, app, sibling]) {
+    const initialProject = (await Project.fromDirectory(directory)).project
+    expect({ id: initialProject.id, rootDirectory: initialProject.rootDirectory, projectType: initialProject.projectType }).toEqual({
+      id: Project.directoryProjectID(directory), rootDirectory: directory, projectType: "directory",
+    })
+  }
   const nested = await addPreference({ content: "formerly standalone app sentinel", scope: "project" }, app)
   const rootPreference = await addPreference({ content: "formerly standalone root sentinel", scope: "project" }, a)
   await firstCommit(a)
