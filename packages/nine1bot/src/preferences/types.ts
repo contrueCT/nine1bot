@@ -13,6 +13,8 @@ export interface Preference {
   createdAt: number
   /** 作用域：全局 或 项目级 */
   scope: 'global' | 'project'
+  projectID?: string
+  [key: string]: unknown
 }
 
 export interface PreferencesFile {
@@ -29,6 +31,9 @@ export interface PreferencesState {
   project: Preference[]
   /** 合并后的偏好（项目优先） */
   merged: Preference[]
+  unresolved: Preference[]
+  projectID: string
+  directory: string
 }
 
 export interface AddPreferenceInput {
@@ -43,6 +48,7 @@ export interface AddPreferenceInput {
 export interface UpdatePreferenceInput {
   /** 新的偏好内容 */
   content?: string
+  assignToCurrentProject?: true
 }
 
 /** 生成唯一 ID */

@@ -46,7 +46,7 @@ describe('session history loading', () => {
 
     expect(result.map((item) => item.id)).toEqual(['one', 'two'])
     expect(requestedUrl).toBe('/session?roots=true')
-    expect(requestedHeaders?.get('x-opencode-directory')).toBe('/workspace/one')
+    expect(requestedHeaders?.get('x-opencode-directory')).toBe(encodeURIComponent('/workspace/one'))
   })
 
   it('reports an HTTP failure so the sidebar can retry instead of treating it as empty history', async () => {

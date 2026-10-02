@@ -133,7 +133,7 @@ export namespace PermissionNext {
     }
   })
 
-  const SECURITY_CRITICAL_PERMISSIONS = new Set(["sandbox", "external_directory"])
+  const SECURITY_CRITICAL_PERMISSIONS = new Set(["sandbox", "external_directory", "remember"])
   const SECURITY_CRITICAL_PREFIXES = ["gitlab_cli_publish_"]
 
   export function isSecurityCritical(permission: string) {

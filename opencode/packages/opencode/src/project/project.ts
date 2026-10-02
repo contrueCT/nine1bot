@@ -78,7 +78,7 @@ export namespace Project {
     hiddenAt?: number
   }
 
-  function directoryProjectID(directory: string) {
+  export function directoryProjectID(directory: string) {
     const hash = createHash("sha1").update(directory).digest("hex")
     return `dir_${hash}`
   }

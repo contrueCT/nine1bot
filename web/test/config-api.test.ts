@@ -371,7 +371,19 @@ describe('web config APIs', () => {
     await importAuthFromOpencode()
 
     expect(calls).toHaveLength(8)
-    expect(calls.every((call) => call.directory === 'D:/workspace/active project')).toBe(true)
+    expect(calls.every((call) => decodeURIComponent(call.directory!) === 'D:/workspace/active project')).toBe(true)
+  })
+
+  it('encodes Unicode active and pinned config directories as Fetch-safe headers', async () => {
+    const active = '/tmp/另一个项目 🚀'
+    const pinned = '/tmp/项目 工作区'
+    installFetchMock(() => jsonResponse({}))
+    setApiDirectory(active)
+    await configApi.get()
+    await configApi.update({ model: 'local/test' }, pinned)
+    expect(calls.map((call) => call.directory)).toEqual([encodeURIComponent(active), encodeURIComponent(pinned)])
+    expect(new URL(calls[1].url, 'http://localhost').searchParams.get('directory')).toBe(pinned)
+    for (const call of calls) expect(call.directory).not.toMatch(/[^\x00-\x7f]/)
   })
 
   it('keeps preferences operations on preferences endpoints', async () => {

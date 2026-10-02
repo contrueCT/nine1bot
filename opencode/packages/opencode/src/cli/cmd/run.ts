@@ -1,3 +1,4 @@
+import { rememberPermissionDescription, REMEMBER_SESSION_GRANT_NOTICE } from "../../preferences/permission"
 import type { Argv } from "yargs"
 import path from "path"
 import { UI } from "../ui"
@@ -209,11 +210,20 @@ export const RunCommand = cmd({
           if (event.type === "permission.asked") {
             const permission = event.properties
             if (permission.sessionID !== sessionID) continue
+            const rememberDescription = permission.permission === "remember"
+              ? rememberPermissionDescription(permission.metadata ?? {})
+              : undefined
+            if (permission.permission === "remember" && !rememberDescription) {
+              UI.error("Preference content or target is missing; rejecting the request.")
+              await sdk.permission.respond({ sessionID, permissionID: permission.id, response: "reject" })
+              continue
+            }
+            if (rememberDescription) UI.println(rememberDescription, "\n" + REMEMBER_SESSION_GRANT_NOTICE)
             const result = await select({
               message: `Permission required: ${permission.permission} (${permission.patterns.join(", ")})`,
               options: [
                 { value: "once", label: "Allow once" },
-                { value: "always", label: "Always allow: " + permission.always.join(", ") },
+                { value: "always", label: rememberDescription ? "Allow for this conversation (including resumed sessions)" : "Always allow: " + permission.always.join(", ") },
                 { value: "reject", label: "Reject" },
               ],
               initialValue: "once",

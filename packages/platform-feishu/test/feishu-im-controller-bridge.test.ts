@@ -45,6 +45,28 @@ describe('Feishu HTTP controller bridge', () => {
     })
   })
 
+  test.each(['/work/项目 🚀', '/work/proj%20A', '/work/proj%2Fchild', '/work/proj%25A', '/work/proj%broken', '/work/proj A'])(
+    'preserves the exact directory %s in header, query and session body', async (directory) => {
+      const seen: Array<{ url: string; init: RequestInit }> = []
+      globalThis.fetch = mockFetch(async (url, init) => {
+        seen.push({ url, init })
+        return jsonResponse({ sessionId: 'ses_1', session: { id: 'ses_1', directory } })
+      })
+      const bridge = createHttpFeishuControllerBridge({ localUrl: 'http://127.0.0.1:4096' })
+      await bridge.createSession({ directory })
+      await bridge.getSession({ sessionId: 'ses_1', directory })
+      expect(seen).toHaveLength(2)
+      for (const call of seen) {
+        const header = new Headers(call.init.headers).get('x-opencode-directory')!
+        expect(header).toBe(encodeURIComponent(directory))
+        expect(decodeURIComponent(header)).toBe(directory)
+        expect(header).not.toMatch(/[^\x00-\x7f]/)
+        expect(new URL(call.url).searchParams.get('directory')).toBe(directory)
+      }
+      expect(JSON.parse(String(seen[0]!.init.body)).directory).toBe(directory)
+    },
+  )
+
   test('maps controller busy responses instead of throwing on 409', async () => {
     globalThis.fetch = mockFetch(async () => jsonResponse({
       accepted: false,

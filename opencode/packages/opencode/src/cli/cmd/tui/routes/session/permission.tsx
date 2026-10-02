@@ -1,3 +1,4 @@
+import { rememberPermissionDescription, REMEMBER_SESSION_GRANT_NOTICE } from "@/preferences/permission"
 import { createStore } from "solid-js/store"
 import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
@@ -138,6 +139,8 @@ export function PermissionPrompt(props: { request: PermissionRequest }) {
   })
 
   const { theme } = useTheme()
+  const rememberDescription = createMemo(() => rememberPermissionDescription(props.request.metadata ?? {}))
+  const canApprove = createMemo(() => props.request.permission !== "remember" || !!rememberDescription())
 
   return (
     <Switch>
@@ -146,6 +149,11 @@ export function PermissionPrompt(props: { request: PermissionRequest }) {
           title="Always allow"
           body={
             <Switch>
+              <Match when={props.request.permission === "remember"}>
+                <scrollbox height="100%">
+                  <TextBody title={REMEMBER_SESSION_GRANT_NOTICE} description={rememberDescription() ?? "Preference preview is missing. Cancel this request."} />
+                </scrollbox>
+              </Match>
               <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
                 <TextBody title={"This will allow " + props.request.permission + " until OpenCode is restarted."} />
               </Match>
@@ -170,7 +178,7 @@ export function PermissionPrompt(props: { request: PermissionRequest }) {
           escapeKey="cancel"
           onSelect={(option) => {
             setStore("stage", "permission")
-            if (option === "cancel") return
+            if (option === "cancel" || !canApprove()) return
             sdk.client.permission.reply({
               reply: "always",
               requestID: props.request.id,
@@ -199,6 +207,11 @@ export function PermissionPrompt(props: { request: PermissionRequest }) {
               title="Permission required"
               body={
                 <Switch>
+                  <Match when={props.request.permission === "remember"}>
+                    <scrollbox height="100%">
+                      <TextBody icon="⚙" title="Save preference" description={rememberDescription() ?? "Preference content or target is missing. Reject this request and try again."} />
+                    </scrollbox>
+                  </Match>
                   <Match when={props.request.permission === "edit"}>
                     <EditBody request={props.request} />
                   </Match>
@@ -264,10 +277,11 @@ export function PermissionPrompt(props: { request: PermissionRequest }) {
                   </Match>
                 </Switch>
               }
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={canApprove() ? { once: "Allow once", always: "Allow always", reject: "Reject" } : { reject: "Reject" }}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
+                if (option !== "reject" && !canApprove()) return
                 if (option === "always") {
                   setStore("stage", "always")
                   return

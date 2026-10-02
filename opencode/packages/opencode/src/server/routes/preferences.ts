@@ -9,91 +9,27 @@ import { Hono } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import { errors } from "../error"
-import path from "path"
-import os from "os"
+import { Preferences } from "../../preferences"
+import { projectPreferenceContext } from "../../preferences/context"
+import { Instance } from "../../project/instance"
 
-// 偏好数据类型定义
-const PreferenceSchema = z.object({
-  id: z.string(),
-  content: z.string(),
-  source: z.enum(["user", "ai"]),
-  createdAt: z.number(),
-  scope: z.enum(["global", "project"]),
-})
-
-const AddPreferenceSchema = z.object({
-  content: z.string(),
-  source: z.enum(["user", "ai"]).optional(),
-  scope: z.enum(["global", "project"]).optional(),
-})
-
-const UpdatePreferenceSchema = z.object({
-  content: z.string().optional(),
-})
-
-// 偏好类型
-interface Preference {
-  id: string
-  content: string
-  source: "user" | "ai"
-  createdAt: number
-  scope: "global" | "project"
+const PreferenceSchema = Preferences.Info
+const AddPreferenceSchema = Preferences.Add
+const UpdatePreferenceSchema = Preferences.Update
+const conflictResponse = {
+  409: {
+    description: "Ambiguous preference ID; no records changed",
+    content: { "application/json": { schema: resolver(z.object({ error: z.string() })) } },
+  },
 }
 
-interface PreferencesFile {
-  version: number
-  preferences: Preference[]
-}
-
-// 生成唯一 ID
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).substring(2, 8)
-}
-
-// 获取偏好文件路径
-function getPreferencesFilePath(): string {
-  // 优先使用环境变量
-  if (process.env.NINE1BOT_PREFERENCES_PATH) {
-    return process.env.NINE1BOT_PREFERENCES_PATH
-  }
-  // 默认路径
-  const configDir = path.join(os.homedir(), '.nine1bot')
-  return path.join(configDir, 'preferences.json')
-}
-
-// 读取偏好文件
-async function readPreferencesFile(): Promise<PreferencesFile> {
-  const filePath = getPreferencesFilePath()
-  try {
-    const file = Bun.file(filePath)
-    if (!await file.exists()) {
-      return { version: 1, preferences: [] }
-    }
-    const content = await file.text()
-    return JSON.parse(content) as PreferencesFile
-  } catch {
-    return { version: 1, preferences: [] }
-  }
-}
-
-// 写入偏好文件
-async function writePreferencesFile(data: PreferencesFile): Promise<void> {
-  const filePath = getPreferencesFilePath()
-  const dir = path.dirname(filePath)
-
-  // 确保目录存在
-  try {
-    await Bun.write(path.join(dir, '.keep'), '')
-  } catch {
-    // 目录可能已存在
-  }
-
-  await Bun.write(filePath, JSON.stringify(data, null, 2))
+function context(): Preferences.Context {
+  return projectPreferenceContext(Instance.project, Instance.directory)
 }
 
 export function PreferencesRoutes() {
   // 检查是否在 Nine1Bot 环境中
-  if (!process.env.NINE1BOT_PREFERENCES_PATH && !process.env.NINE1BOT_PREFERENCES_MODULE) {
+  if (!Preferences.enabled()) {
     // 返回空路由
     return new Hono()
   }
@@ -112,9 +48,12 @@ export function PreferencesRoutes() {
               "application/json": {
                 schema: resolver(
                   z.object({
-                    preferences: PreferenceSchema.array(),
-                    global: PreferenceSchema.array(),
-                    project: PreferenceSchema.array(),
+                    preferences: Preferences.Listed.array(),
+                    global: Preferences.Listed.array(),
+                    project: Preferences.Listed.array(),
+                    unresolved: Preferences.Listed.array(),
+                    projectID: z.string(),
+                    directory: z.string(),
                   })
                 ),
               },
@@ -125,14 +64,9 @@ export function PreferencesRoutes() {
       }),
       async (c) => {
         try {
-          const data = await readPreferencesFile()
-          const preferences = data.preferences || []
-          return c.json({
-            preferences,
-            global: preferences.filter(p => p.scope === 'global'),
-            project: preferences.filter(p => p.scope === 'project'),
-          })
+          return c.json(await Preferences.list(context()))
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }
@@ -159,21 +93,9 @@ export function PreferencesRoutes() {
       async (c) => {
         try {
           const input = c.req.valid("json")
-          const data = await readPreferencesFile()
-
-          const preference: Preference = {
-            id: generateId(),
-            content: input.content,
-            source: input.source || "user",
-            createdAt: Date.now(),
-            scope: input.scope || "global",
-          }
-
-          data.preferences.push(preference)
-          await writePreferencesFile(data)
-
-          return c.json(preference)
+          return c.json(await Preferences.add(input, context()))
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }
@@ -194,6 +116,7 @@ export function PreferencesRoutes() {
             },
           },
           ...errors(400, 404, 500),
+          ...conflictResponse,
         },
       }),
       validator("param", z.object({ id: z.string() })),
@@ -202,20 +125,11 @@ export function PreferencesRoutes() {
         try {
           const { id } = c.req.valid("param")
           const input = c.req.valid("json")
-          const data = await readPreferencesFile()
-
-          const index = data.preferences.findIndex(p => p.id === id)
-          if (index === -1) {
-            return c.json({ error: "Preference not found" }, 404)
-          }
-
-          if (input.content) {
-            data.preferences[index].content = input.content
-          }
-
-          await writePreferencesFile(data)
-          return c.json(data.preferences[index])
+          const preference = await Preferences.update(id, input, context())
+          if (!preference) return c.json({ error: "Preference not found" }, 404)
+          return c.json(preference)
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }
@@ -236,24 +150,17 @@ export function PreferencesRoutes() {
             },
           },
           ...errors(404, 500),
+          ...conflictResponse,
         },
       }),
       validator("param", z.object({ id: z.string() })),
       async (c) => {
         try {
           const { id } = c.req.valid("param")
-          const data = await readPreferencesFile()
-
-          const index = data.preferences.findIndex(p => p.id === id)
-          if (index === -1) {
-            return c.json({ error: "Preference not found" }, 404)
-          }
-
-          data.preferences.splice(index, 1)
-          await writePreferencesFile(data)
-
+          if (!await Preferences.remove(id, context())) return c.json({ error: "Preference not found" }, 404)
           return c.json(true)
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }
@@ -278,24 +185,9 @@ export function PreferencesRoutes() {
       }),
       async (c) => {
         try {
-          const data = await readPreferencesFile()
-          const preferences = data.preferences || []
-
-          if (preferences.length === 0) {
-            return c.json({ prompt: "" })
-          }
-
-          const items = preferences.map((p, i) => `${i + 1}. ${p.content}`).join('\n')
-          const prompt = `<user-preferences>
-以下是用户设置的偏好，请在回复中遵循这些偏好：
-
-${items}
-
-这些偏好由用户明确设置，优先级高于默认行为。
-</user-preferences>`
-
-          return c.json({ prompt })
+          return c.json({ prompt: await Preferences.prompt(context()) })
         } catch (error: any) {
+          if (error instanceof Preferences.AmbiguousError) return c.json({ error: error.message }, 409)
           return c.json({ error: error.message }, 500)
         }
       }

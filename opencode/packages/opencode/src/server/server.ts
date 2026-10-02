@@ -165,11 +165,11 @@ export namespace Server {
     return _url ?? new URL("http://localhost:4096")
   }
 
-  const app = new Hono()
-  export const App: () => Hono = lazy(
-    () =>
+  export const App: (() => Hono) & { reset(): void } = lazy(
+    () => {
+      const app = new Hono()
       // TODO: Break server.ts into smaller route files to fix type inference
-      app
+      return app
         .onError((err, c) => {
           log.error("failed", {
             error: err,
@@ -296,12 +296,17 @@ export namespace Server {
         )
         .route("/global", GlobalRoutes())
         .use(async (c, next) => {
-          // Nine1Bot: 优先使用 NINE1BOT_PROJECT_DIR 作为默认目录
-          let directory = c.req.query("directory") || c.req.header("x-opencode-directory") || process.env.NINE1BOT_PROJECT_DIR || process.cwd()
-          try {
-            directory = decodeURIComponent(directory)
-          } catch {
-            // fallback to original value
+          // Hono already decodes query values. Only the transport header is URI-encoded;
+          // decoding query/default paths again would change literal percent escapes.
+          const queryDirectory = c.req.query("directory")
+          const headerDirectory = c.req.header("x-opencode-directory")
+          let directory = queryDirectory || process.env.NINE1BOT_PROJECT_DIR || process.cwd()
+          if (!queryDirectory && headerDirectory) {
+            try {
+              directory = decodeURIComponent(headerDirectory)
+            } catch {
+              directory = headerDirectory
+            }
           }
           if (c.req.method === "POST" && ["/session", "/nine1bot/agent/sessions"].includes(c.req.path)) {
             const body = await c.req.raw.clone().json().catch(() => undefined)
@@ -859,7 +864,8 @@ export namespace Server {
             "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' data:",
           )
           return response
-        }) as unknown as Hono,
+        }) as unknown as Hono
+    },
   )
 
   export async function openapi() {

@@ -1526,3 +1526,51 @@ class FailingSendCardReplyClient extends MemoryFeishuIMReplyClient {
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+// Remember must not offer approval without a complete, plain-text preview.
+test('remember permission cards show exact content and target or withhold allow actions', async () => {
+  const { renderFeishuPermissionCard } = await import('../src/im/cards')
+  const base = {
+    accountId: 'test-account',
+    routeKey: routeKeyForFeishuMessage(message(), { accountId: 'test-account' }),
+    requestId: 'permission-test',
+  }
+  const content = '<b>literal preference</b>\n' + 'x'.repeat(3900) + 'VISIBLE_END'
+  const card = renderFeishuPermissionCard({ ...base, data: {
+    permission: 'remember', patterns: ['project:opaque'], metadata: { content, scope: 'project', directory: '/readable/project' },
+  } })
+  const serialized = JSON.stringify(card)
+  expect(serialized).toContain('plain_text')
+  expect(serialized).toContain('仅当前项目')
+  expect(serialized).toContain('/readable/project')
+  expect(serialized).toContain(JSON.stringify(content).slice(1, -1))
+  expect(serialized).toContain('permission.allowOnce')
+  const incomplete = JSON.stringify(renderFeishuPermissionCard({ ...base, data: { permission: 'remember', metadata: {} } }))
+  expect(incomplete).not.toContain('permission.allowOnce')
+  expect(incomplete).not.toContain('permission.allowSession')
+  expect(incomplete).toContain('permission.deny')
+})
+
+test('remember card actual plain-text value escapes bidi and controls without mutating source metadata', async () => {
+  const { renderFeishuPermissionCard } = await import('../src/im/cards')
+  const content = 'plain \u202ehidden-order\u202c \x1b[8mhidden\x1b[0m\r\b\u009b31m\nnext line'
+  const directory = '/projects/\u2066target\u2069\u0007\x1b[2J'
+  const metadata = { content, scope: 'project', directory }
+  const card = renderFeishuPermissionCard({
+    accountId: 'test-account', routeKey: routeKeyForFeishuMessage(message(), { accountId: 'test-account' }), requestId: 'preview-controls',
+    data: { permission: 'remember', patterns: ['project:test'], metadata },
+  })
+  const values: string[] = []
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== 'object') return
+    const object = value as Record<string, unknown>
+    if (object.tag === 'plain_text' && typeof object.content === 'string') values.push(object.content)
+    for (const child of Object.values(object)) visit(child)
+  }
+  visit(card)
+  const preview = values.find((value) => value.includes('偏好全文'))!
+  expect(preview).toContain('plain \\u202ehidden-order\\u202c \\u001b[8mhidden\\u001b[0m\\u000d\\u0008\\u009b31m\nnext line')
+  expect(preview).toContain('/projects/\\u2066target\\u2069\\u0007\\u001b[2J')
+  expect(preview).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/)
+  expect(metadata).toEqual({ content, scope: 'project', directory })
+})
