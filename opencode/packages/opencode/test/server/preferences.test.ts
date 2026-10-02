@@ -21,7 +21,7 @@ let env: NodeJS.ProcessEnv
 let restoreGitDiscovery: (() => void) | undefined
 beforeEach(async () => {
   env = { ...process.env }
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "preferences-routes-"))
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "preferences-routes-")))
   a = path.join(root, "a")
   b = path.join(root, "b")
   await Promise.all([a, b].map((directory) => fs.mkdir(path.join(directory, ".git"), { recursive: true })))

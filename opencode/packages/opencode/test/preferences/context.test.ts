@@ -10,7 +10,7 @@ let root: string
 let env: NodeJS.ProcessEnv
 beforeEach(async () => {
   env = { ...process.env }
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "preferences-context-"))
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "preferences-context-")))
   await fs.mkdir(path.join(root, ".git"))
   process.env.NINE1BOT_PREFERENCES_PATH = path.join(root, "preferences.json")
 })

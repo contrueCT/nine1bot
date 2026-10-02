@@ -26,7 +26,7 @@ let root: string
 let env: NodeJS.ProcessEnv
 beforeEach(async () => {
   env = { ...process.env }
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "remember-tool-"))
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "remember-tool-")))
   await fs.mkdir(path.join(root, ".git"))
   process.env.NINE1BOT_PREFERENCES_PATH = path.join(root, "preferences.json")
   process.env.OPENCODE_SERVER_PASSWORD = "test-only-not-a-real-credential"
