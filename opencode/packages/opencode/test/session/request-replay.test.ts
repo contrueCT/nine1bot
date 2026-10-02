@@ -266,15 +266,15 @@ test("a failed reservation can be retried after a later turn without reusing an 
   const { Storage } = await import("../../src/storage/storage")
   await fixture(async session => {
     const input = { sessionID: session.id, requestID: "req_failed_reservation", noReply: true, parts: [{ type: "text" as const, text: "original" }] }
-    const originalWrite = Storage.write
+    const originalWrite = Storage.writeAtomic
     let failed = false
-    Storage.write = async (key, value) => {
+    Storage.writeAtomic = async (key, value) => {
       // Fail the second reservation write, after the request mapping is already durable.
       if (!failed && key[0] === "message_request_origin") { failed = true; throw new Error("reservation disk failure") }
       return originalWrite(key, value)
     }
     try { await expect(SessionPrompt.promptAsync(input)).rejects.toThrow("reservation disk failure") }
-    finally { Storage.write = originalWrite }
+    finally { Storage.writeAtomic = originalWrite }
     expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
     const assistantID = await completeTurn(session, "req_after_reservation_failure")
     await SessionPrompt.promptAsync(input)
@@ -288,13 +288,13 @@ test("an accepted-receipt write failure keeps the mapping and blocks duplicate c
   const { Storage } = await import("../../src/storage/storage")
   await fixture(async session => {
     const input = { sessionID: session.id, requestID: "req_receipt_failure", noReply: true, parts: [{ type: "text" as const, text: "once" }] }
-    const originalWrite = Storage.write
-    Storage.write = async (key, value: any) => {
+    const originalWrite = Storage.writeAtomic
+    Storage.writeAtomic = async (key, value: any) => {
       if (key[0] === "client_message_request" && value.state === "accepted") throw new Error("receipt disk failure")
       return originalWrite(key, value)
     }
     try { await expect(SessionPrompt.promptAsync(input)).rejects.toThrow("receipt disk failure") }
-    finally { Storage.write = originalWrite }
+    finally { Storage.writeAtomic = originalWrite }
     const history = await Session.messages({ sessionID: session.id })
     expect(history).toHaveLength(1)
     expect(history[0].parts).toHaveLength(1)
@@ -359,5 +359,159 @@ test("controller validates request identities and keeps accepted requestID repla
     const history = await Session.messages({ sessionID: session.id })
     expect(history).toHaveLength(1)
     expect(history[0].info.role === "user" && history[0].info.requestID).toBe(body.requestID)
+  })
+})
+
+test("truncated temporary receipt writes preserve the reservation through repeated retries and reload", async () => {
+  const fs = await import("node:fs/promises")
+  const path = await import("node:path")
+  const { Global } = await import("../../src/global")
+  const { createHash } = await import("node:crypto")
+  for (const mode of ["throw", "short-write"] as const) {
+    await fixture(async session => {
+      const requestID = `req_torn_${mode}`
+      const input = { sessionID: session.id, requestID, noReply: true, parts: [{ type: "text" as const, text: "only once" }] }
+      const originalWrite = Bun.write
+      Bun.write = (async (target: any, content: any, options?: any) => {
+        const value = Buffer.isBuffer(content) ? content.toString() : String(content)
+        if (String(target).includes("client_message_request") && value.includes('"accepted"')) {
+          // A real partial write lands on disk, rather than throwing before persistence.
+          await originalWrite(target, "{")
+          if (mode === "throw") throw new Error("interrupted receipt replacement")
+          return 1
+        }
+        return originalWrite(target, content, options)
+      }) as typeof Bun.write
+      try { await expect(SessionPrompt.promptAsync(input)).rejects.toThrow() }
+      finally { Bun.write = originalWrite }
+      const before = await Session.messages({ sessionID: session.id })
+      expect(before).toHaveLength(1)
+      const target = path.join(Global.Path.data, "storage", "client_message_request", createHash("sha256").update(requestID).digest("hex") + ".json")
+      expect((await Bun.file(target).json()).state).toBe("reserved")
+      expect((await fs.readdir(path.dirname(target))).some(name => name.endsWith(".tmp"))).toBe(false)
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await Instance.dispose()
+        await Instance.provide({ directory: session.directory, fn: async () => {
+          await expect(SessionPrompt.promptAsync(input)).rejects.toMatchObject({ status: 409 })
+          const history = await Session.messages({ sessionID: session.id })
+          expect(history).toHaveLength(1)
+          expect(history[0].info.id).toBe(before[0].info.id)
+          expect(history[0].parts).toHaveLength(1)
+        } })
+      }
+    })
+  }
+})
+
+test("already-corrupted or invalid receipt JSON is retained and can never become a new request on retry", async () => {
+  const fs = await import("node:fs/promises")
+  const path = await import("node:path")
+  const { Global } = await import("../../src/global")
+  const { createHash } = await import("node:crypto")
+  for (const [index, corrupted] of ["{", "null", "{}"].entries()) {
+    await fixture(async session => {
+      const requestID = `req_corrupted_${index}`
+      const input = { sessionID: session.id, requestID, noReply: true, parts: [{ type: "text" as const, text: "once" }] }
+      await SessionPrompt.promptAsync(input)
+      const target = path.join(Global.Path.data, "storage", "client_message_request", createHash("sha256").update(requestID).digest("hex") + ".json")
+      await fs.writeFile(target, corrupted)
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await Instance.dispose()
+        await Instance.provide({ directory: session.directory, fn: async () => {
+          await expect(SessionPrompt.promptAsync(input)).rejects.toThrow()
+          expect(await Bun.file(target).text()).toBe(corrupted)
+          expect(await Session.messages({ sessionID: session.id })).toHaveLength(1)
+        } })
+      }
+    })
+  }
+})
+
+test("controller replays the immutable wire request before changed server prompt or enrichment can reinterpret it", async () => {
+  const fs = await import("node:fs/promises")
+  await fixture(async session => {
+    process.env.NINE1BOT_CONFIG_PATH = session.directory + "/nine1bot.config.json"
+    const send = (body: unknown) => Server.App().request(`/nine1bot/agent/sessions/${session.id}/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json", "x-opencode-directory": session.directory }, body: JSON.stringify(body),
+    })
+    const body = { requestID: "req_server_prompt_drift", noReply: true, model: { providerID: "test", modelID: "model" }, entry: { source: "browser-extension", mode: "browser-sidepanel" }, parts: [{ type: "text", text: "once" }] }
+    await fs.writeFile(process.env.NINE1BOT_CONFIG_PATH, JSON.stringify({ browser: { sidepanel: { prompt: "original prompt" } } }))
+    const original = await send(body)
+    expect(original.status).toBe(202)
+    const originalResponse = await original.json()
+    await fs.writeFile(process.env.NINE1BOT_CONFIG_PATH, JSON.stringify({ browser: { sidepanel: { prompt: "changed prompt" } } }))
+    const replay = await send(body)
+    expect(replay.status).toBe(202)
+    expect((await replay.json()).turnSnapshotId).toBe(originalResponse.turnSnapshotId)
+    const changedBody = await send({ ...body, parts: [{ type: "text", text: "different client content" }] })
+    expect(changedBody.status).toBe(409)
+    expect((await changedBody.json()).error.code).toBe("REQUEST_CONFLICT")
+    const history = await Session.messages({ sessionID: session.id })
+    expect(history).toHaveLength(1)
+    expect(history[0].info.role === "user" && history[0].info.system).not.toContain("changed prompt")
+  })
+})
+
+test("directory MIME normalization cannot change the requestID fingerprint for identical controller or direct retries", async () => {
+  const { pathToFileURL } = await import("node:url")
+  await fixture(async session => {
+    const body = { requestID: "req_directory_normalization", noReply: true, parts: [{ type: "file" as const, mime: "text/plain", filename: "folder", url: pathToFileURL(session.directory).href }] }
+    const send = () => Server.App().request(`/nine1bot/agent/sessions/${session.id}/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json", "x-opencode-directory": session.directory }, body: JSON.stringify(body),
+    })
+    expect((await send()).status).toBe(202)
+    expect((await send()).status).toBe(202)
+    const direct = { ...body, sessionID: session.id, requestID: "req_direct_directory" }
+    await SessionPrompt.promptAsync(direct)
+    expect((await SessionPrompt.promptAsync(direct))?.replayed).toBe(true)
+    expect(await Session.messages({ sessionID: session.id })).toHaveLength(2)
+  })
+})
+
+test("deleting accepted history preserves an idempotency tombstone instead of authorizing replay execution", async () => {
+  const { SessionRequest } = await import("../../src/session/request")
+  for (const mode of ["last-part", "message"] as const) {
+    await fixture(async session => {
+      const input = { sessionID: session.id, requestID: `req_deleted_${mode}`, noReply: true, parts: [{ type: "text" as const, text: "already accepted" }] }
+      await SessionPrompt.promptAsync(input)
+      const original = (await Session.messages({ sessionID: session.id }))[0]
+      if (mode === "last-part") await Session.removePart({ sessionID: session.id, messageID: original.info.id, partID: original.parts[0].id })
+      if (mode === "message") await Session.removeMessage({ sessionID: session.id, messageID: original.info.id })
+      expect(await SessionRequest.isAccepted(session.id, undefined, input.requestID)).toBe(true)
+      expect((await SessionPrompt.promptAsync(input))?.replayed).toBe(true)
+      expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+      expect(RunLease.current(session.id)).toBeUndefined()
+      await Instance.dispose()
+      await Instance.provide({ directory: session.directory, fn: async () => {
+        expect((await SessionPrompt.promptAsync(input))?.replayed).toBe(true)
+        expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+        const other = await Session.create({})
+        await expect(SessionPrompt.promptAsync({ ...input, sessionID: other.id })).rejects.toMatchObject({ status: 409 })
+      } })
+    })
+  }
+})
+
+test("whole-session deletion clears indexed receipts including tombstones, and old-target retries are 404 without persistence", async () => {
+  const { SessionRequest } = await import("../../src/session/request")
+  const { Storage } = await import("../../src/storage/storage")
+  await fixture(async session => {
+    const bodies = ["req_session_deleted_visible", "req_session_deleted_tombstone"].map(requestID => ({ requestID, noReply: true, parts: [{ type: "text", text: "once" }] }))
+    const send = (body: unknown) => Server.App().request(`/nine1bot/agent/sessions/${session.id}/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json", "x-opencode-directory": session.directory }, body: JSON.stringify(body),
+    })
+    for (const body of bodies) expect((await send(body)).status).toBe(202)
+    const history = await Session.messages({ sessionID: session.id })
+    await Session.removeMessage({ sessionID: session.id, messageID: history[1].info.id })
+    expect(await Storage.list(["session_message_request", session.id])).toHaveLength(2)
+    await Session.remove(session.id)
+    expect(await Storage.list(["session_message_request", session.id])).toHaveLength(0)
+    for (const body of bodies) {
+      expect(await SessionRequest.isAccepted(session.id, undefined, body.requestID)).toBe(false)
+      expect((await send(body)).status).toBe(404)
+    }
+    expect(await Storage.list(["session_message_request", session.id])).toHaveLength(0)
+    expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+    expect(RunLease.current(session.id)).toBeUndefined()
   })
 })

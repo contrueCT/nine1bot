@@ -244,3 +244,10 @@ it('reports incomplete persisted requests distinctly from a busy session', async
   globalThis.fetch = (async () => jsonResponse({ error: { code: 'REQUEST_INCOMPLETE', message: '上次请求未完整保存，请检查并清理未完成消息后重试' } }, 409)) as typeof fetch
   await expect(api.sendMessage('ses_1', createMessageSubmission('hello'))).rejects.toThrow('未完整保存')
 })
+
+it('distinguishes request conflicts from explicit busy responses', async () => {
+  globalThis.fetch = (async () => jsonResponse({ error: { code: 'REQUEST_CONFLICT', message: 'Request ID already belongs to another request' } }, 409)) as typeof fetch
+  await expect(api.sendMessage('ses_1', createMessageSubmission('hello'))).rejects.toThrow('already belongs')
+  globalThis.fetch = (async () => jsonResponse({ busy: true, sessionId: 'ses_1' }, 409)) as typeof fetch
+  await expect(api.sendMessage('ses_1', createMessageSubmission('hello'))).rejects.toMatchObject({ name: 'SessionBusyError' })
+})

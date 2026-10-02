@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { Log } from "../util/log"
 import path from "path"
 import fs from "fs/promises"
@@ -174,7 +175,7 @@ export namespace Storage {
     })
   }
 
-  export async function read<T>(key: string[]) {
+  export async function read<T>(key: string[], options: { preserveCorrupted?: boolean } = {}) {
     const dir = await state().then((x) => x.dir)
     const target = path.join(dir, ...key) + ".json"
     return withErrorHandling(async () => {
@@ -184,8 +185,8 @@ export namespace Storage {
         return result as T
       } catch (e) {
         if (e instanceof SyntaxError) {
-          log.warn("corrupted JSON file, removing", { path: target })
-          await fs.unlink(target).catch(() => {})
+          log.warn("corrupted JSON file", { path: target, retained: Boolean(options.preserveCorrupted) })
+          if (!options.preserveCorrupted) await fs.unlink(target).catch(() => {})
           throw new CorruptedError({ message: `Corrupted JSON file: ${target}` })
         }
         throw e
@@ -221,6 +222,27 @@ export namespace Storage {
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
       await Bun.write(target, JSON.stringify(content, null, 2))
+    })
+  }
+
+  /** Preserve the previous complete record if writing or syncing the replacement fails. */
+  export async function writeAtomic<T>(key: string[], content: T) {
+    const dir = await state().then((x) => x.dir)
+    const target = path.join(dir, ...key) + ".json"
+    return withErrorHandling(async () => {
+      using _ = await Lock.write(target)
+      await fs.mkdir(path.dirname(target), { recursive: true })
+      const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
+      const bytes = Buffer.from(JSON.stringify(content, null, 2))
+      try {
+        const written = await Bun.write(temporary, bytes)
+        if (written !== bytes.length) throw new Error("Incomplete atomic storage write")
+        const file = await fs.open(temporary, "r+")
+        try { await file.sync() } finally { await file.close() }
+        await fs.rename(temporary, target)
+      } finally {
+        await fs.unlink(temporary).catch(() => {})
+      }
     })
   }
 

@@ -440,6 +440,7 @@ export namespace Session {
         await Storage.remove(msg)
         await SessionRequest.remove(msg.at(-1)!)
       }
+      await SessionRequest.removeSession(sessionID)
       await Storage.remove(["session", project.id, sessionID])
       try {
         await SessionRuntimeProfile.remove(session)

@@ -1193,8 +1193,8 @@ export const api = {
     if (!res.ok) {
       if (res.status === 409) {
         const error = await res.json().catch(() => ({}))
-        if (error.error?.code === 'REQUEST_INCOMPLETE') throw new Error(error.error.message)
-        throw new SessionBusyError(error.sessionId || error.data?.sessionID || sessionId)
+        if (error.busy === true) throw new SessionBusyError(error.sessionId || error.data?.sessionID || sessionId)
+        throw new Error(error.error?.message || error.message || '请求冲突，请检查会话记录后重试')
       }
       throw new Error(`HTTP error! status: ${res.status}`)
     }

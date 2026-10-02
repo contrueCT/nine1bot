@@ -369,6 +369,16 @@ async function compileControllerPrompt(input: {
 
 export async function sendControllerMessage(sessionID: string, body: RuntimeControllerProtocol.MessageSendRequest) {
   SessionRequest.assertIdentity(body)
+  const runtimeRequestFingerprint = body.requestID ? SessionRequest.fingerprint(body) : undefined
+  if (body.requestID) {
+    const replay = await SessionRequest.replayClient(sessionID, body.requestID, runtimeRequestFingerprint!)
+    if (replay) {
+      return {
+        response: { version: RuntimeControllerProtocol.VERSION, accepted: true, sessionId: sessionID, turnSnapshotId: replay.turnSnapshotId },
+        status: 202,
+      }
+    }
+  }
   let turnSnapshotId = ulid()
   let prompt: SessionPrompt.PromptInput
   let preparedBody = body
@@ -381,7 +391,7 @@ export async function sendControllerMessage(sessionID: string, body: RuntimeCont
     })
     preparedBody = prepared.body
     contextEnrichment = prepared.contextEnrichment
-    prompt = { ...await compileControllerPrompt({ sessionID, body: preparedBody, turnSnapshotId }), requestID: body.requestID }
+    prompt = { ...await compileControllerPrompt({ sessionID, body: preparedBody, turnSnapshotId }), requestID: body.requestID, runtimeRequestFingerprint }
   } catch (error) {
     if (error instanceof Session.BusyError) {
       return {

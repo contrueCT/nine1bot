@@ -101,6 +101,7 @@ export type FileDiff = {
 export type UserMessage = {
   id: string
   sessionID: string
+  requestID?: string
   role: "user"
   time: {
     created: number

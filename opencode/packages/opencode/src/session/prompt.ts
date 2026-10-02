@@ -213,6 +213,7 @@ export namespace SessionPrompt {
         modelID: z.string(),
       })
       .optional(),
+    runtimeRequestFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     runtimeModelSource: z.enum(["profile-snapshot", "session-choice"]).optional(),
     runtimeProfileSnapshot: z.custom<SessionProfileSnapshot>().optional(),
     runtimeTurnSnapshotId: z.string().optional(),
@@ -400,6 +401,7 @@ export namespace SessionPrompt {
 
   async function acceptPrompt(input: PromptInput, timing?: RuntimeTiming.Trace, signal?: AbortSignal) {
     SessionRequest.assertIdentity(input)
+    input = SessionRequest.freeze(input)
     using requestLock = await SessionRequest.lock(input.messageID, input.requestID)
     signal?.throwIfAborted()
     const replay = await SessionRequest.replay(input)
@@ -407,6 +409,7 @@ export namespace SessionPrompt {
     await SessionRequest.assertNew(input)
     const lease = RunLease.reserve(input.sessionID, signal)
     try {
+      let session = await Session.get(input.sessionID)
       if (input.requestID) input = { ...input, messageID: await SessionRequest.prepare(input) }
       timing?.mark("busy.reserved")
       if (input.runtimeTurnSnapshotId) {
@@ -426,7 +429,6 @@ export namespace SessionPrompt {
         })
       }
 
-      let session = await Session.get(input.sessionID)
       lease.controller.signal.throwIfAborted()
       timing?.mark("session.loaded", { directory: session.directory })
       session = await ensureRuntimeProfile(input, session, timing)
