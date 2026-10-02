@@ -399,17 +399,26 @@ export namespace SessionPrompt {
     resolveTools,
   }
 
-  async function acceptPrompt(input: PromptInput, timing?: RuntimeTiming.Trace, signal?: AbortSignal) {
+  async function acceptPrompt(input: PromptInput, timing?: RuntimeTiming.Trace, signal?: AbortSignal, admission?: RunLease.Info) {
     SessionRequest.assertIdentity(input)
     input = SessionRequest.freeze(input)
     using requestLock = await SessionRequest.lock(input.messageID, input.requestID)
     signal?.throwIfAborted()
+    admission?.controller.signal.throwIfAborted()
+    if (admission && (admission.sessionID !== input.sessionID || RunLease.current(input.sessionID) !== admission)) {
+      throw new Error("Controller admission no longer owns this session")
+    }
     const replay = await SessionRequest.replay(input)
-    if (replay) return { kind: "replayed" as const, receipt: replay }
+    if (replay) {
+      if (admission) releaseLease(admission)
+      return { kind: "replayed" as const, receipt: replay }
+    }
     await SessionRequest.assertNew(input)
-    const lease = RunLease.reserve(input.sessionID, signal)
+    admission?.controller.signal.throwIfAborted()
+    const lease = admission ?? RunLease.reserve(input.sessionID, signal)
     try {
       let session = await Session.get(input.sessionID)
+      lease.controller.signal.throwIfAborted()
       if (input.requestID) input = { ...input, messageID: await SessionRequest.prepare(input) }
       timing?.mark("busy.reserved")
       if (input.runtimeTurnSnapshotId) {
@@ -432,11 +441,13 @@ export namespace SessionPrompt {
       lease.controller.signal.throwIfAborted()
       timing?.mark("session.loaded", { directory: session.directory })
       session = await ensureRuntimeProfile(input, session, timing)
+      lease.controller.signal.throwIfAborted()
       const preparedContextEvent = await RuntimeContextEvents.preparePageEvent({
         sessionID: session.id,
         projectID: session.projectID,
         page: input.context?.page,
       })
+      lease.controller.signal.throwIfAborted()
       const promptInput = await prepareRuntimeContextInput(input, timing)
       lease.controller.signal.throwIfAborted()
       await RuntimeTiming.measure(timing, "revert.cleanup", () => SessionRevert.cleanup(session))
@@ -625,13 +636,19 @@ export namespace SessionPrompt {
     )
   }
 
-  export const promptAsync = fn(PromptInput, async (input) => {
+  // Admission is an in-process handoff, never an HTTP signal or a JSON field.
+  export const promptAsync = Object.assign(
+    (input: PromptInput, admission?: RunLease.Info) => runPromptAsync(PromptInput.parse(input), admission),
+    { schema: PromptInput, force: runPromptAsync },
+  )
+
+  async function runPromptAsync(input: PromptInput, admission?: RunLease.Info) {
     const timing = RuntimeTiming.start({
       sessionID: input.sessionID,
       operation: "prompt_async",
       source: "session.prompt_async",
     })
-    const accepted = await acceptPrompt(input, timing)
+    const accepted = await acceptPrompt(input, timing, undefined, admission)
     if (accepted.kind === "replayed") return { replayed: true as const, turnSnapshotId: accepted.receipt.turnSnapshotId }
     if (input.noReply === true) {
       await publishTurnTerminalSafely({
@@ -652,7 +669,7 @@ export namespace SessionPrompt {
       input.runtimeTurnSnapshotId,
       input.runtimeTimeoutMs,
     ).catch((error) => log.error("prompt_async failed", { sessionID: input.sessionID, error }))
-  })
+  }
 
   export async function resolvePromptParts(template: string): Promise<PromptInput["parts"]> {
     const parts: PromptInput["parts"] = [

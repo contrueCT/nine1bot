@@ -12,6 +12,8 @@ Controller/Web 使用 `requestID` 作为客户端幂等标识，由服务端生�
 
 新请求的指纹取自经过协议校验、尚未富化或编译的原始内容。已接受的相同请求会在重新读取页面元数据、应用服务端提示词或编译之前返回原轮次结果。相同标识对应的原始内容变化，或跨会话复用，返回明确的请求冲突 409，不作为会话忙碌处理。
 
+Controller 在页面上下文富化和编译之前取得可取消的会话运行锁，准备完成后将同一个锁交给消息接纳及执行流程。Stop 会取消准备中的请求，并在异步准备返回后阻止消息保存；并发发送的相同标识和内容共享结果，不会在 Stop 后排队自动重启。准备失败会释放运行锁，用户可以显式重试；HTTP 连接断开不等同于 Stop。完整消息保存后即使收到取消，也会先保留 accepted 回执，后续重试仅核对原接纳结果。
+
 接纳过程在同一请求锁内先持久化服务端消息 ID 的 `reserved` 映射，再保存消息和 parts，最后写入 `accepted` 回执。回执、反向映射和会话索引采用同目录临时文件、完整写入检查、文件同步和原子替换；损坏的回执保留并阻止后续重试，不能把损坏当成记录不存在。这里不承诺多个独立服务进程的互斥或跨文件断电事务。
 
 如果保存失败时尚未产生消息或 parts，原请求可安全重试。已有部分内容落盘但未完成接纳时，返回 `REQUEST_INCOMPLETE`，保留原请求供检查，不能仅凭历史中出现 user 消息认定发送成功。用户明确清理未完成消息后，可以重试原请求。删除已接受消息或最后一个 part 会保留无正文的幂等回执，原标识只能重放接纳结果，不能重新执行；删除整会话则通过会话索引清理全部相关回执，旧会话目标的重试返回 404，不创建新消息。新会话的新操作应使用新 `requestID`。
@@ -22,7 +24,7 @@ Controller/Web 使用 `requestID` 作为客户端幂等标识，由服务端生�
 bun test test/server/config-regressions.test.ts test/server/config-transaction.test.ts
 bun test test/server/mcp-config-regressions.test.ts
 bun test test/server/session-lifecycle-regressions.test.ts test/session/run-lease.test.ts test/session/busy.test.ts
-bun test test/session/request-replay.test.ts
+bun test test/session/request-replay.test.ts test/server/controller-admission.test.ts
 bun test test/server/nine1bot-agent.test.ts
 ```
 
