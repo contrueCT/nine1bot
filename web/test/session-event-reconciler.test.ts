@@ -93,4 +93,19 @@ describe('loadSessionRecoverySnapshot', () => {
 
     expect(snapshot.status).toEqual({ type: 'idle' })
   })
+
+  it('keeps successful status and interactions available when the history endpoint fails', async () => {
+    const snapshot = await loadSessionRecoverySnapshot('session-a', {
+      async getMessages() { throw new Error('history endpoint offline') },
+      async getStatuses() { return {} },
+      async getQuestions() { return [{ id: 'question-a', sessionID: 'session-a' }] },
+      async getPermissions() { return [{ id: 'permission-a', sessionID: 'session-a' }] },
+    })
+    expect(snapshot.messages).toBeNull()
+    expect(snapshot.messagesError).toBe('history endpoint offline')
+    expect(snapshot.status).toEqual({ type: 'idle' })
+    expect(snapshot.questions).toHaveLength(1)
+    expect(snapshot.permissions).toHaveLength(1)
+    expect(snapshot.failures).toEqual(['历史消息'])
+  })
 })

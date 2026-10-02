@@ -1,12 +1,14 @@
 import { markRaw, reactive } from 'vue'
+import { createRequestID, type MessageAttempt } from '../api/client'
 import { useFileUpload, type FileAttachment } from './useFileUpload'
 
-export interface SendAttempt {
+export interface SendAttempt extends MessageAttempt {
   id: string
   text: string
   planMode: boolean
   attachments: FileAttachment[]
   status: 'sending' | 'failed'
+  generation: number
 }
 
 export interface ComposerDraft {
@@ -40,11 +42,12 @@ export function moveComposerDraft(from: string, to: string) {
 
 export function beginSend(draft: ComposerDraft): SendAttempt {
   const attempt: SendAttempt = reactive({
-    id: `send-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    id: createRequestID(),
     text: draft.text.trim(),
     planMode: draft.planMode,
     attachments: [...draft.uploads.attachments.value],
     status: 'sending',
+    generation: 0,
   })
   draft.text = ''
   draft.planMode = false
@@ -53,7 +56,8 @@ export function beginSend(draft: ComposerDraft): SendAttempt {
   return attempt
 }
 
-export function finishSend(draft: ComposerDraft, attempt: SendAttempt, success: boolean) {
+export function finishSend(draft: ComposerDraft, attempt: SendAttempt, success: boolean, generation = attempt.generation) {
+  if (attempt.generation !== generation || !draft.attempts.includes(attempt)) return
   if (!success) {
     attempt.status = 'failed'
     return
@@ -63,7 +67,9 @@ export function finishSend(draft: ComposerDraft, attempt: SendAttempt, success: 
 }
 
 export function restoreAttempt(draft: ComposerDraft, attempt: SendAttempt) {
-  if (draft.text || draft.uploads.attachments.value.length) return false
+  // An uncertain POST may already be accepted. Only replay its original ID/payload.
+  if (attempt.submitted || draft.text || draft.uploads.attachments.value.length) return false
+  attempt.generation++
   draft.text = attempt.text
   draft.planMode = attempt.planMode
   draft.uploads.attachments.value = attempt.attachments

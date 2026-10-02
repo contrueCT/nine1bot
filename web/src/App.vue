@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { MessageAttempt } from './api/client'
 import { ref, computed, onMounted, onUnmounted, watch, defineAsyncComponent } from 'vue'
 import { useSession } from './composables/useSession'
 import { useSidebarLayout } from './composables/useSidebarLayout'
@@ -56,6 +57,7 @@ const {
   currentDirectory,
   pendingQuestions,
   pendingPermissions,
+  interactionStates,
   sessionError,
   retryInfo,
   loadSessions,
@@ -681,7 +683,7 @@ watch(currentDirectory, (newDir) => {
   void loadProviders().then(loadConfig)
 })
 
-async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean, onResult?: (success: boolean) => void) {
+async function handleSend(content: string, files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>, planMode?: boolean, onResult?: (success: boolean) => void, attempt?: MessageAttempt) {
   // If viewing projects page, close it
   if (showProjectsPage.value) {
     showProjectsPage.value = false
@@ -705,7 +707,7 @@ async function handleSend(content: string, files?: Array<{ type: 'file'; mime: s
   }
 
   try {
-    onResult?.(await sendMessage(finalContent, model, files))
+    onResult?.(await sendMessage(finalContent, model, files, attempt))
   } catch (error) {
     console.error('Failed to send message:', error)
     onResult?.(false)
@@ -1031,6 +1033,7 @@ function handlePromptSelect(prompt: string) {
         :sessionId="currentSession?.id"
         :pendingQuestions="pendingQuestions"
         :pendingPermissions="pendingPermissions"
+        :interactionStates="interactionStates"
         :sessionError="sessionError"
         :currentDirectory="currentDirectory"
         :canChangeDirectory="false"
@@ -1215,6 +1218,7 @@ function handlePromptSelect(prompt: string) {
               :sessionId="currentSession?.id"
               :pendingQuestions="pendingQuestions"
               :pendingPermissions="pendingPermissions"
+              :interactionStates="interactionStates"
               :sessionError="sessionError"
               :currentDirectory="currentDirectory"
               :canChangeDirectory="canChangeDirectory()"

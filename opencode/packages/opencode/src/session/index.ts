@@ -440,6 +440,7 @@ export namespace Session {
         await Storage.remove(msg)
         await SessionRequest.remove(msg.at(-1)!)
       }
+      await SessionRequest.removeSession(sessionID)
       await Storage.remove(["session", project.id, sessionID])
       try {
         await SessionRuntimeProfile.remove(session)
@@ -503,6 +504,7 @@ export namespace Session {
 
         // 移除无 parts 的幽灵消息 info
         await Storage.remove(["message", input.sessionID, input.messageID])
+        await SessionRequest.remove(input.messageID)
         Bus.publish(MessageV2.Event.Removed, {
           sessionID: input.sessionID,
           messageID: input.messageID,

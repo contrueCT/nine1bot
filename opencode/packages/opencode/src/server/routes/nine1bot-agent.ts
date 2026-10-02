@@ -13,6 +13,7 @@ import { Question } from "@/question"
 import { Session } from "@/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionStatus } from "@/session/status"
+import { RunLease } from "@/session/run-lease"
 import { ControllerAgentRunCompiler } from "@/runtime/controller/agent-run-compiler"
 import { RuntimeControllerEvents } from "@/runtime/controller/events"
 import { RuntimeControllerProtocol } from "@/runtime/controller/protocol"
@@ -367,45 +368,93 @@ async function compileControllerPrompt(input: {
   })
 }
 
-export async function sendControllerMessage(sessionID: string, body: RuntimeControllerProtocol.MessageSendRequest) {
-  let turnSnapshotId = ulid()
-  let prompt: SessionPrompt.PromptInput
-  let preparedBody = body
-  let contextEnrichment: RuntimeControllerProtocol.ContextEnrichmentSummary | undefined
-  try {
-    if (!(await SessionRequest.isAccepted(sessionID, body.messageID))) SessionPrompt.assertNotBusy(sessionID)
-    const configuredBody = await applyBrowserExtensionPrompt(sessionID, body)
-    const prepared = await prepareFeishuControllerMessageContext(configuredBody, {
-      cacheScope: sessionID,
-    })
-    preparedBody = prepared.body
-    contextEnrichment = prepared.contextEnrichment
-    prompt = await compileControllerPrompt({ sessionID, body: preparedBody, turnSnapshotId })
-  } catch (error) {
-    if (error instanceof Session.BusyError) {
-      return {
-        response: {
-          version: RuntimeControllerProtocol.VERSION,
-          accepted: false,
-          sessionId: sessionID,
-          turnSnapshotId,
-          busy: true,
-          fallbackAction:
-            preparedBody.clientCapabilities?.continueInWeb === false
-              ? undefined
-              : {
-                  type: "continue-in-web" as const,
-                  label: "Continue in web",
-                },
-        },
-        status: 409,
-      }
+// Concurrent retransmissions share one admission, including its cancellation. Queuing
+// them behind a lock would let a waiting duplicate restart immediately after Stop.
+const preparingMessages = new Map<string, {
+  sessionID: string
+  fingerprint: string
+  pending: ReturnType<typeof prepareControllerMessage>
+}>()
+
+export async function sendControllerMessage(
+  sessionID: string,
+  body: RuntimeControllerProtocol.MessageSendRequest,
+  admission?: RunLease.PendingAdmission,
+) {
+  SessionRequest.assertIdentity(body)
+  const fingerprint = SessionRequest.fingerprint(body)
+  const key = body.requestID ? `request:${body.requestID}` : body.messageID ? `message:${body.messageID}` : undefined
+  const current = key ? preparingMessages.get(key) : undefined
+  if (current) {
+    if (current.sessionID !== sessionID || current.fingerprint !== fingerprint) {
+      throw new HTTPException(409, {
+        res: Response.json({ error: { code: "REQUEST_CONFLICT", message: "Request ID already belongs to another request; reload the conversation before retrying" } }, { status: 409 }),
+      })
     }
+    return awaitPreparedMessage(current.pending)
+  }
+  const pending = prepareControllerMessage(sessionID, body, body.requestID ? fingerprint : undefined, admission)
+  if (key) preparingMessages.set(key, { sessionID, fingerprint, pending })
+  try {
+    return await awaitPreparedMessage(pending)
+  } finally {
+    if (key && preparingMessages.get(key)?.pending === pending) preparingMessages.delete(key)
+  }
+}
+
+async function awaitPreparedMessage(pending: ReturnType<typeof prepareControllerMessage>) {
+  try {
+    return await pending
+  } catch (error) {
+    // Hono consumes an HTTPException response body. Each retransmission needs its
+    // own body even when every request observes the same cancelled admission.
+    if (error instanceof HTTPException) throw new HTTPException(error.status, { res: error.res?.clone() ?? error.getResponse() })
     throw error
   }
+}
 
+async function prepareControllerMessage(
+  sessionID: string,
+  body: RuntimeControllerProtocol.MessageSendRequest,
+  runtimeRequestFingerprint?: string,
+  admissionOwner?: RunLease.PendingAdmission,
+) {
+  using pending = admissionOwner ?? RunLease.trackAdmission(sessionID)
+  if (pending.sessionID !== sessionID) throw new Error("Controller admission belongs to another session")
+  pending.bindOwner()
+  let turnSnapshotId = ulid()
+  let preparedBody = body
+  let admission: RunLease.Info | undefined
+  let handedOff = false
+  let contextEnrichment: RuntimeControllerProtocol.ContextEnrichmentSummary | undefined
   try {
-    const accepted = await SessionPrompt.promptAsync(prompt)
+    if (body.requestID) {
+      const replay = await SessionRequest.replayClient(sessionID, body.requestID, runtimeRequestFingerprint!)
+      if (replay) {
+        return {
+          response: { version: RuntimeControllerProtocol.VERSION, accepted: true, sessionId: sessionID, turnSnapshotId: replay.turnSnapshotId },
+          status: 202,
+        }
+      }
+    }
+    // Legacy accepted IDs still need their compiled payload checked, but a replay
+    // must not reserve or replace the lease of an unrelated active turn.
+    const acceptedLegacy = body.messageID && await SessionRequest.isAccepted(sessionID, body.messageID)
+    if (!acceptedLegacy) admission = RunLease.reserve(sessionID, pending.controller.signal)
+    const configuredBody = await applyBrowserExtensionPrompt(sessionID, body)
+    admission?.controller.signal.throwIfAborted()
+    const prepared = await prepareFeishuControllerMessageContext(configuredBody, { cacheScope: sessionID })
+    admission?.controller.signal.throwIfAborted()
+    preparedBody = prepared.body
+    contextEnrichment = prepared.contextEnrichment
+    const prompt = {
+      ...await compileControllerPrompt({ sessionID, body: preparedBody, turnSnapshotId }),
+      requestID: body.requestID,
+      runtimeRequestFingerprint,
+    }
+    admission?.controller.signal.throwIfAborted()
+    const accepted = await SessionPrompt.promptAsync(prompt, admission)
+    handedOff = true
     if (accepted?.replayed && accepted.turnSnapshotId) turnSnapshotId = accepted.turnSnapshotId
   } catch (error) {
     RuntimeControllerEvents.clearTurn(sessionID, turnSnapshotId)
@@ -417,18 +466,23 @@ export async function sendControllerMessage(sessionID: string, body: RuntimeCont
           sessionId: sessionID,
           turnSnapshotId,
           busy: true,
-          fallbackAction:
-            preparedBody.clientCapabilities?.continueInWeb === false
-              ? undefined
-              : {
-                  type: "continue-in-web" as const,
-                  label: "Continue in web",
-                },
+          fallbackAction: preparedBody.clientCapabilities?.continueInWeb === false
+            ? undefined
+            : { type: "continue-in-web" as const, label: "Continue in web" },
         },
         status: 409,
       }
     }
+    if (pending.controller.signal.aborted || admission?.controller.signal.aborted) {
+      throw new HTTPException(409, {
+        res: Response.json({ error: { code: "REQUEST_CANCELLED", message: "请求已停止，请检查会话记录；重试将核对原请求状态。" } }, { status: 409 }),
+      })
+    }
     throw error
+  } finally {
+    // promptAsync owns a successfully handed-off lease until its loop settles.
+    // Failed preparation, rejected admission, replay and noReply cannot leak it.
+    if (admission && !handedOff) RunLease.release(sessionID, admission.id)
   }
 
   return {
@@ -599,7 +653,7 @@ function writeEnvelope(
 }
 
 export const Nine1BotAgentRoutes = lazy(() =>
-  new Hono()
+  new Hono<{ Variables: { controllerAdmission?: RunLease.PendingAdmission } }>()
     .get(
       "/runtime/capabilities",
       describeRoute({
@@ -710,7 +764,7 @@ export const Nine1BotAgentRoutes = lazy(() =>
           entry: body.entry,
           protocolVersion: RuntimeControllerProtocol.VERSION,
           run: async () => {
-            const response = await sendControllerMessage(c.req.valid("param").sessionID, body)
+            const response = await sendControllerMessage(c.req.valid("param").sessionID, body, c.get("controllerAdmission"))
             return {
               status: response.status,
               accepted: response.response.accepted,

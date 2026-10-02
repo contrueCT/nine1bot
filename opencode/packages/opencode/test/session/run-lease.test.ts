@@ -53,3 +53,35 @@ test("parent cancellation is scoped to its admitted lease", async () => {
     expect(RunLease.current("session_child")).toBeUndefined()
   } })
 })
+
+
+test("pending admission cancellation is independent of execution ownership and stale cleanup", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({ directory: tmp.path, fn: async () => {
+    const first = RunLease.trackAdmission("session_pending")
+    first.bindOwner()
+    expect(RunLease.current("session_pending")).toBeUndefined()
+    expect(RunLease.cancel("session_pending")).toBe(true)
+    expect(first.controller.signal.aborted).toBe(true)
+    expect(() => RunLease.reserve("session_pending", first.controller.signal)).toThrow()
+    first[Symbol.dispose]()
+    const next = RunLease.trackAdmission("session_pending")
+    next.bindOwner()
+    first[Symbol.dispose]()
+    expect(RunLease.cancel("session_pending")).toBe(true)
+    expect(next.controller.signal.aborted).toBe(true)
+    next[Symbol.dispose]()
+    expect(RunLease.cancel("session_pending")).toBe(false)
+  } })
+})
+
+test("instance disposal cancels and detaches pending admissions", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({ directory: tmp.path, fn: async () => {
+    using admission = RunLease.trackAdmission("session_disposed_pending")
+    admission.bindOwner()
+    await Instance.dispose()
+    expect(admission.controller.signal.aborted).toBe(true)
+    expect(RunLease.cancel("session_disposed_pending")).toBe(false)
+  } })
+})

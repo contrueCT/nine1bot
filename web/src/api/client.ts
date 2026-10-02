@@ -360,6 +360,48 @@ export interface ContextEnrichmentSummary {
   tone?: 'neutral' | 'success' | 'warning' | 'danger'
 }
 
+export interface MessageSubmission {
+  requestID: string
+  // Serialize once. A replay must include exactly the original model, files and page context.
+  body: string
+}
+
+export interface MessageAttempt {
+  id: string
+  // Local composer completion, captured per operation; never serialized on the wire.
+  onCancel?: () => void
+  modelCaptured?: boolean
+  model?: { providerID: string; modelID: string }
+  submission?: { sessionID: string; request: MessageSubmission }
+  submitted?: boolean
+  notificationId?: string
+}
+
+export function createRequestID(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return `req_${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
+export function createMessageSubmission(
+  content: string,
+  files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
+  pageContext?: RequestPagePayload,
+  model?: { providerID: string; modelID: string },
+  requestID = createRequestID(),
+): MessageSubmission {
+  return Object.freeze({
+    requestID,
+    body: JSON.stringify({
+      requestID,
+      ...(model ? { model } : {}),
+      parts: [...(content.trim() ? [{ type: 'text', text: content }] : []), ...(files || [])],
+      entry: controllerEntry(pageContext),
+      ...(pageContext ? { context: { page: pageContext } } : {}),
+      clientCapabilities: webClientCapabilities(pageContext),
+    }),
+  })
+}
+
 export interface MessageSendResult {
   accepted: boolean
   sessionId: string
@@ -885,6 +927,7 @@ export interface MessageInfo {
     completed?: number
   }
   // user message fields
+  requestID?: string
   agent?: string
   model?: { providerID: string; modelID: string }
   // assistant message fields
@@ -1138,35 +1181,22 @@ export const api = {
   // 发送消息。消息流通过 per-session runtime event stream 返回。
   async sendMessage(
     sessionId: string,
-    content: string,
+    content: string | MessageSubmission,
     files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
     pageContext?: RequestPagePayload
   ): Promise<MessageSendResult> {
-    const parts: any[] = []
-
-    if (content.trim()) {
-      parts.push({ type: 'text', text: content })
-    }
-
-    if (files && files.length > 0) {
-      parts.push(...files)
-    }
-
+    const request = typeof content === 'string' ? createMessageSubmission(content, files, pageContext) : content
     const res = await fetchWithTimeout(`${BASE_URL}/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        parts,
-        entry: controllerEntry(pageContext),
-        ...(pageContext ? { context: { page: pageContext } } : {}),
-        clientCapabilities: webClientCapabilities(pageContext),
-      })
+      body: request.body,
     })
 
     if (!res.ok) {
       if (res.status === 409) {
         const error = await res.json().catch(() => ({}))
-        throw new SessionBusyError(error.sessionId || error.data?.sessionID || sessionId)
+        if (error.busy === true) throw new SessionBusyError(error.sessionId || error.data?.sessionID || sessionId)
+        throw new Error(error.error?.message || error.message || '请求冲突，请检查会话记录后重试')
       }
       throw new Error(`HTTP error! status: ${res.status}`)
     }

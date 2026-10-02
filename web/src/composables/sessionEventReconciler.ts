@@ -88,6 +88,7 @@ export async function loadSessionRecoverySnapshot<
   dependencies: SessionRecoveryDependencies<Message, Status, Question, Permission>,
 ) {
   const failures: string[] = []
+  let messagesError: string | undefined
   const optional = async <T>(label: string, load: () => Promise<T>): Promise<T | null> => {
     try { return await load() } catch { failures.push(label); return null }
   }
@@ -95,6 +96,10 @@ export async function loadSessionRecoverySnapshot<
     dependencies.getMessages(sessionID).then(messages => {
       dependencies.onMessages?.(messages)
       return messages
+    }).catch((error: unknown) => {
+      failures.push('历史消息')
+      messagesError = error instanceof Error ? error.message : '历史消息加载失败，请重试'
+      return null
     }),
     optional('运行状态', dependencies.getStatuses),
     optional('待回答问题', dependencies.getQuestions),
@@ -103,6 +108,7 @@ export async function loadSessionRecoverySnapshot<
 
   return {
     messages,
+    ...(messagesError ? { messagesError } : {}),
     status: statuses ? statuses[sessionID] ?? { type: 'idle' as const } : null,
     questions: questions?.filter((question) => question.sessionID === sessionID) ?? null,
     permissions: permissions?.filter((permission) => permission.sessionID === sessionID) ?? null,

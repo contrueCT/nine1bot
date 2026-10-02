@@ -6044,6 +6044,9 @@
           "sessionID": {
             "type": "string"
           },
+          "requestID": {
+            "type": "string"
+          },
           "role": {
             "type": "string",
             "const": "user"

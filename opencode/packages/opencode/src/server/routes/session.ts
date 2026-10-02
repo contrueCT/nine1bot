@@ -1030,6 +1030,8 @@ export const SessionRoutes = lazy(() =>
       validator(
         "json",
         SessionPrompt.PromptInput.omit({
+          requestID: true,
+          runtimeRequestFingerprint: true,
           sessionID: true,
           runtimeModelSource: true,
           runtimeProfileSnapshot: true,
@@ -1072,6 +1074,8 @@ export const SessionRoutes = lazy(() =>
       validator(
         "json",
         SessionPrompt.PromptInput.omit({
+          requestID: true,
+          runtimeRequestFingerprint: true,
           sessionID: true,
           runtimeModelSource: true,
           runtimeProfileSnapshot: true,
