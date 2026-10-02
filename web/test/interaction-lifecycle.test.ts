@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import * as Vue from 'vue'
+import { visiblePreferenceText } from '../../opencode/packages/opencode/src/preferences/permission'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { createInteractionResponder } from '../src/composables/interaction-state'
 import { api, permissionApi, questionApi } from '../src/api/client'
@@ -12,8 +13,9 @@ async function component(name: string) {
   const { content } = compileScript(descriptor, { id: name, inlineTemplate: true, templateOptions: { compilerOptions: { hoistStatic: false } } })
   const compiled = new Bun.Transpiler({ loader: 'ts' }).transformSync(content)
     .replace(/import\s*\{([^}]+)\}\s*from\s*["']vue["'];?/g, (_, imports: string) => `const { ${imports.replace(/\bas\b/g, ':')} } = Vue;`)
+    .replace(/import\s*\{\s*visiblePreferenceText\s*\}\s*from\s*["'][^"']+preferences\/permission["'];?/g, '')
     .replace('export default', 'return')
-  return new Function('Vue', compiled)(Vue)
+  return new Function('Vue', 'visiblePreferenceText', compiled)(Vue, visiblePreferenceText)
 }
 type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent?: Node }
 const node = (type: string, text = ''): Node => ({ type, text, props: {}, children: [] })
@@ -119,6 +121,41 @@ describe('parent-owned interaction cards', () => {
     state.value = { status: 'success', action: 'once' }
     await Vue.nextTick()
     expect(text(root)).toContain('已允许一次')
+  })
+  it('keeps the escaped preference preview and blocks incomplete approvals through parent-owned retries', async () => {
+    const request = Vue.ref<any>({ id: 'remember1', sessionID: 'A', permission: 'remember', metadata: {} })
+    const responder = createInteractionResponder()
+    const pending = deferred()
+    let calls = 0
+    let completion: Promise<boolean> | undefined
+    const root = await mount('PermissionRequest', () => ({
+      request: request.value, state: responder.states.value.remember1,
+      onResponded(reply: string) {
+        completion = responder.respond('remember1', reply, () => { calls++; return pending.promise }, () => {})
+      },
+    }))
+    expect(button(root, '允许一次').props.disabled).toBe(true)
+    expect(button(root, '本会话内允许').props.disabled).toBe(true)
+    button(root, '允许一次').props.onClick()
+    button(root, '本会话内允许').props.onClick()
+    expect(calls).toBe(0)
+    request.value = { ...request.value, metadata: { content: 'Keep \u202evisible', scope: 'project', directory: '/project/\u2066name' } }
+    await Vue.nextTick()
+    expect(text(root)).toContain('Keep \\u202evisible')
+    expect(text(root)).toContain('/project/\\u2066name')
+    expect(button(root, '允许一次').props.disabled).toBe(false)
+    button(root, '允许一次').props.onClick()
+    button(root, '允许一次').props.onClick()
+    await Vue.nextTick()
+    expect(calls).toBe(1)
+    expect(button(root, '本会话内允许').props.disabled).toBe(true)
+    pending.reject(new Error('permission reply unavailable'))
+    await completion
+    await Vue.nextTick()
+    expect(text(root)).toContain('permission reply unavailable')
+    expect(text(root)).toContain('Keep \\u202evisible')
+    expect(text(root)).not.toContain('已允许一次')
+    expect(button(root, '允许一次').props.disabled).toBe(false)
   })
   it('resets question input when a component is reused for a different request', async () => {
     const request = Vue.ref({ id: 'q1', sessionID: 'A', questions: [{ question: 'Choose', options: [{ label: 'yes' }], custom: false }] })
