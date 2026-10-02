@@ -516,9 +516,10 @@ async function executeTrackedCommand<T>(options: {
 
   // Relay input is untrusted: invalid values must never disable the deadline,
   // and large values must not overflow the browser's timer delay.
-  const deadlineMs = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.min(MAX_COMMAND_TIMEOUT_MS, Math.max(1, Math.ceil(timeoutMs)))
+  let deadlineMs = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.max(1, Math.ceil(timeoutMs))
     : DEFAULT_COMMAND_TIMEOUT_MS
+  if (deadlineMs > MAX_COMMAND_TIMEOUT_MS) deadlineMs = MAX_COMMAND_TIMEOUT_MS
   const timeoutHandle = setTimeout(() => {
     command.cancelReason = 'timeout'
     controller.abort('timeout')
