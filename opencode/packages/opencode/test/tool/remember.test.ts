@@ -261,7 +261,7 @@ async function productionRemember(session: Session.Info, controller: AbortContro
 }
 
 test("remember, routes, wrapper and prompts keep the session owner after its first Git commit", async () => {
-  await Instance.provide({ directory: root, fn: async () => {
+  const { owner, rememberedID } = await Instance.provide({ directory: root, fn: async () => {
     const session = await Session.createNext({ directory: root, runtimeProfile: emptyProfile() })
     const owner = Instance.project.id
     expect(session.projectID).toBe(owner)
@@ -283,6 +283,7 @@ test("remember, routes, wrapper and prompts keep the session owner after its fir
     expect(wrapper.projectID).toBe(owner)
     const response = await new Hono().route("/preferences", PreferencesRoutes()).request("/preferences")
     const state = await response.json()
+    const rememberedID = state.project.find((entry: { source: string }) => entry.source === "ai").id
     expect(state.projectID).toBe(owner)
     expect(state.project.map((entry: { projectID: string }) => entry.projectID)).toEqual([owner, owner])
     expect((await loadPreferences(root)).project.map((entry) => entry.id)).toEqual(state.project.map((entry: { id: string }) => entry.id))
@@ -290,6 +291,26 @@ test("remember, routes, wrapper and prompts keep the session owner after its fir
     expect(prompt).toContain("same session remembered sentinel")
     expect(prompt).toContain("same session wrapper sentinel")
     expect((await Session.get(session.id)).projectID).toBe(owner)
+    return { owner, rememberedID }
+  } })
+  await Instance.disposeAll()
+  await Instance.provide({ directory: root, fn: async () => {
+    expect(Instance.project.id).not.toBe(owner)
+    const app = new Hono().route("/preferences", PreferencesRoutes())
+    const state = await app.request("/preferences").then((response) => response.json())
+    expect(state.project).toEqual([])
+    expect(state.unresolved).toHaveLength(2)
+    expect(state.unresolved.every((entry: { projectID: string }) => entry.projectID === owner)).toBe(true)
+    expect((await loadPreferences(root)).unresolved.map((entry) => entry.id)).toEqual(state.unresolved.map((entry: { id: string }) => entry.id))
+    expect((await InstructionPrompt.system()).join("\n")).not.toContain("same session remembered sentinel")
+    const response = await app.request(`/preferences/${rememberedID}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assignToCurrentProject: true }),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ source: "ai", projectID: Instance.project.id })
+    const prompt = (await InstructionPrompt.system()).join("\n")
+    expect(prompt).toContain("same session remembered sentinel")
+    expect(prompt).not.toContain("same session wrapper sentinel")
   } })
 })
 

@@ -28,6 +28,19 @@ export const Instance = {
     const current = context.use()
     return () => context.provide(current, fn)
   },
+  /** Read a matching context without creating an instance or skipping its bootstrap. */
+  async existing(directory: string) {
+    const normalized = await Instance.normalizeDirectory(directory)
+    try {
+      const current = context.use()
+      // During init the cache promise is still pending. Use the active context
+      // directly so a compatibility preference read cannot wait on its own init.
+      if (current.directory === normalized) return current
+    } catch (error) {
+      if (!(error instanceof Context.NotFound)) throw error
+    }
+    return cache.get(normalized)
+  },
   async provide<R>(input: { directory: string; init?: () => Promise<any>; fn: () => R }): Promise<R> {
     const directory = await Instance.normalizeDirectory(input.directory)
     let existing = cache.get(directory)

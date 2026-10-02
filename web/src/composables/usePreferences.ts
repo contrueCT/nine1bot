@@ -57,7 +57,7 @@ export function usePreferences() {
     for (const key of ['global', 'project', 'unresolved'] as const) {
       current[key] = current[key].filter((item) => item.id !== preference.id)
     }
-    const key = preference.scope === 'global' ? 'global' : preference.projectID ? 'project' : 'unresolved'
+    const key = preference.scope === 'global' ? 'global' : preference.projectID === current.projectID ? 'project' : 'unresolved'
     current[key].push(preference)
     current.preferences = [...current.project, ...current.global]
   }

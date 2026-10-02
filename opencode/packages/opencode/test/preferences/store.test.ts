@@ -62,6 +62,44 @@ test("preserves unowned legacy records and unrelated fields until explicitly ass
   expect(await Preferences.update("legacy", { assignToCurrentProject: true }, b, file)).toBeUndefined()
 })
 
+test("known historical IDs remain unresolved through reads and edits until explicitly assigned", async () => {
+  const historical = { ...legacy, projectID: "dir_previous", note: "preserve" }
+  const original = JSON.stringify({ version: 1, keep: true, preferences: [historical] })
+  await fs.writeFile(file, original)
+  const context = { ...a, recoverableProjectIDs: [historical.projectID] }
+  expect((await Preferences.list(context, file)).unresolved).toMatchObject([historical])
+  expect(await Preferences.prompt(context, file)).toBe("")
+  expect(await fs.readFile(file, "utf8")).toBe(original)
+  expect((await Preferences.list(b, file)).unresolved).toEqual([])
+  expect(await Preferences.update(historical.id, { content: "unrelated edit" }, b, file)).toBeUndefined()
+  expect(await Preferences.remove(historical.id, b, file)).toBe(false)
+  expect(await Preferences.update(historical.id, { content: "recovered draft" }, context, file)).toMatchObject({
+    content: "recovered draft", projectID: historical.projectID, note: "preserve",
+  })
+  expect((await Preferences.list(context, file)).unresolved).toHaveLength(1)
+  expect(await Preferences.prompt(context, file)).toBe("")
+  await Preferences.update(historical.id, { assignToCurrentProject: true }, context, file)
+  expect((await Preferences.list(context, file)).unresolved).toEqual([])
+  expect(await Preferences.prompt(context, file)).toContain("recovered draft")
+  expect(await Preferences.prompt(b, file)).toBe("")
+  expect(JSON.parse(await fs.readFile(file, "utf8"))).toMatchObject({ keep: true, preferences: [{ projectID: a.projectID, note: "preserve" }] })
+})
+
+test("a recovered historical ID participates in duplicate detection before any mutation", async () => {
+  const context = { ...a, recoverableProjectIDs: ["dir_previous"] }
+  const original = JSON.stringify({ version: 1, preferences: [
+    { ...legacy, projectID: "dir_previous" },
+    { ...legacy, projectID: a.projectID, content: "current owner" },
+  ] })
+  await fs.writeFile(file, original)
+  const state = await Preferences.list(context, file)
+  expect(state.project[0].ambiguous).toBe(true)
+  expect(state.unresolved[0].ambiguous).toBe(true)
+  await expect(Preferences.update(legacy.id, { assignToCurrentProject: true }, context, file)).rejects.toBeInstanceOf(Preferences.AmbiguousError)
+  await expect(Preferences.remove(legacy.id, context, file)).rejects.toBeInstanceOf(Preferences.AmbiguousError)
+  expect(await fs.readFile(file, "utf8")).toBe(original)
+})
+
 test("edits historical alternate project file in place without migrating or replacing it", async () => {
   const local = path.join(a.directory, "nine1bot.preferences.json")
   await fs.writeFile(local, JSON.stringify({ version: 1, keep: 42, preferences: [legacy] }))

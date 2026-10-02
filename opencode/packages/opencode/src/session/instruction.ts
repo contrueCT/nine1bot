@@ -10,6 +10,7 @@ import { ProjectSharedFiles } from "../project/shared-files"
 import { Flag } from "@/flag/flag"
 import { Log } from "../util/log"
 import { Preferences } from "../preferences"
+import { projectPreferenceContext } from "../preferences/context"
 import type { MessageV2 } from "./message-v2"
 
 const log = Log.create({ service: "instruction" })
@@ -17,7 +18,7 @@ const log = Log.create({ service: "instruction" })
 async function loadNine1BotPreferences(): Promise<string> {
   if (!Preferences.enabled()) return process.env.NINE1BOT_PREFERENCES_PROMPT || ""
   try {
-    return await Preferences.prompt({ projectID: Instance.project.id, directory: Instance.project.rootDirectory, workingDirectory: Instance.directory })
+    return await Preferences.prompt(projectPreferenceContext(Instance.project, Instance.directory))
   } catch (error) {
     log.warn("Failed to load Nine1Bot preferences", { error })
     // Never reuse another project's prompt or silently replace a damaged preferences file.

@@ -76,6 +76,7 @@ describe('CI workflow contract', () => {
       'test/tool/gitlab-ci-inspect.test.ts',
       'test/tool/gitlab-repository-inspect.test.ts',
       'test/tool/task-gitlab-review.test.ts',
+      'test/preferences/context.test.ts',
     ]) expect(scripts['ci:test:opencode-runtime']).toContain(path)
   })
 })

@@ -10,6 +10,7 @@ import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import { errors } from "../error"
 import { Preferences } from "../../preferences"
+import { projectPreferenceContext } from "../../preferences/context"
 import { Instance } from "../../project/instance"
 
 const PreferenceSchema = Preferences.Info
@@ -23,7 +24,7 @@ const conflictResponse = {
 }
 
 function context(): Preferences.Context {
-  return { projectID: Instance.project.id, directory: Instance.project.rootDirectory, workingDirectory: Instance.directory }
+  return projectPreferenceContext(Instance.project, Instance.directory)
 }
 
 export function PreferencesRoutes() {

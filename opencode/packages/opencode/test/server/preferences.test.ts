@@ -43,6 +43,17 @@ function prompt(directory: string) {
   return Instance.provide({ directory, fn: async () => (await InstructionPrompt.system()).join("\n") })
 }
 
+async function git(directory: string, ...args: string[]) {
+  const child = Bun.spawn(["git", ...args], { cwd: directory, stdout: "pipe", stderr: "pipe" })
+  expect(await child.exited).toBe(0)
+}
+
+async function firstCommit(directory: string) {
+  await git(directory, "init", "--quiet")
+  await git(directory, "-c", "user.name=Preference Test", "-c", "user.email=preference-test@example.invalid",
+    "commit", "--quiet", "--allow-empty", "-m", `First commit ${directory}`)
+}
+
 test("server app reset creates isolated routes without changing the startup preference gate", () => {
   const first = Server.App()
   expect(Server.App()).toBe(first)
@@ -110,6 +121,73 @@ test("legacy launcher API uses the shared store and resolves A/B independently",
     persisted: records([project, ...acknowledged]),
     loaded: records(acknowledged),
   })
+})
+
+test.each(["directory", "empty-git"])("%s preferences can be explicitly recovered after the first commit and instance restart", async (initial) => {
+  if (initial === "directory") await fs.rm(path.join(a, ".git"), { recursive: true })
+  else await git(a, "init", "--quiet")
+  const saved = await addPreference({ content: "before first commit sentinel", scope: "project" }, a)
+  const disposable = await request(a, "/", "POST", { content: "recoverable deletion", scope: "project" }).then((res) => res.json())
+  const oldID = saved.projectID
+  expect(oldID).toStartWith("dir_")
+  expect(await prompt(a)).toContain(saved.content)
+  const original = await fs.readFile(process.env.NINE1BOT_PREFERENCES_PATH!, "utf8")
+  await firstCommit(a)
+  expect((await loadPreferences(a)).projectID).toBe(oldID)
+  await Instance.disposeAll()
+
+  const restarted = await request(a).then((res) => res.json())
+  expect(restarted.projectID).not.toBe(oldID)
+  expect(restarted.project).toEqual([])
+  expect(restarted.unresolved.map((entry: { id: string }) => entry.id)).toEqual([saved.id, disposable.id])
+  expect(restarted.unresolved.every((entry: { projectID: string }) => entry.projectID === oldID)).toBe(true)
+  expect((await loadPreferences(a)).unresolved.map((entry) => entry.id)).toEqual([saved.id, disposable.id])
+  expect(await prompt(a)).not.toContain(saved.content)
+  expect((await request(a, "/prompt").then((res) => res.json())).prompt).toBe("")
+  expect(await fs.readFile(process.env.NINE1BOT_PREFERENCES_PATH!, "utf8")).toBe(original)
+  expect((await request(b).then((res) => res.json())).unresolved).toEqual([])
+  expect((await request(b, `/${saved.id}`, "PATCH", { assignToCurrentProject: true })).status).toBe(404)
+  expect((await request(b, `/${disposable.id}`, "DELETE")).status).toBe(404)
+
+  const edited = await request(a, `/${saved.id}`, "PATCH", { content: "reviewed after restart sentinel" })
+  expect(edited.status).toBe(200)
+  expect(await edited.json()).toMatchObject({ projectID: oldID, content: "reviewed after restart sentinel" })
+  expect((await loadPreferences(a)).unresolved).toHaveLength(2)
+  expect(await prompt(a)).not.toContain("reviewed after restart sentinel")
+  expect((await request(a, `/${disposable.id}`, "DELETE")).status).toBe(200)
+  const assigned = await request(a, `/${saved.id}`, "PATCH", { assignToCurrentProject: true })
+  expect(assigned.status).toBe(200)
+  expect(await assigned.json()).toMatchObject({ projectID: restarted.projectID, content: "reviewed after restart sentinel" })
+  expect((await loadPreferences(a)).unresolved).toEqual([])
+  expect(await prompt(a)).toContain("reviewed after restart sentinel")
+  expect(await prompt(b)).not.toContain("reviewed after restart sentinel")
+})
+
+test("first-commit recovery recognizes only the exact root and cwd without activating a former subdirectory project", async () => {
+  await fs.rm(path.join(a, ".git"), { recursive: true })
+  const app = path.join(a, "apps", "one")
+  const sibling = path.join(a, "apps", "two")
+  await Promise.all([app, sibling].map((directory) => fs.mkdir(directory, { recursive: true })))
+  const nested = await addPreference({ content: "formerly standalone app sentinel", scope: "project" }, app)
+  const rootPreference = await addPreference({ content: "formerly standalone root sentinel", scope: "project" }, a)
+  await firstCommit(a)
+  await Instance.disposeAll()
+  const ids = (state: { unresolved: { id: string }[] }) => state.unresolved.map((entry) => entry.id).sort()
+  expect(ids(await request(app).then((res) => res.json()))).toEqual([nested.id, rootPreference.id].sort())
+  expect(ids(await request(sibling).then((res) => res.json()))).toEqual([rootPreference.id])
+  expect(ids(await request(a).then((res) => res.json()))).toEqual([rootPreference.id])
+  expect((await loadPreferences(app)).unresolved.map((entry) => entry.id).sort()).toEqual([nested.id, rootPreference.id].sort())
+  for (const directory of [a, app, sibling]) {
+    expect(await prompt(directory)).not.toContain(nested.content)
+    expect(await prompt(directory)).not.toContain(rootPreference.content)
+  }
+  expect((await request(sibling, `/${nested.id}`, "PATCH", { assignToCurrentProject: true })).status).toBe(404)
+  expect((await request(a, `/${nested.id}`, "DELETE")).status).toBe(404)
+  expect((await request(app, `/${nested.id}`, "PATCH", { assignToCurrentProject: true })).status).toBe(200)
+  // Only explicit assignment gives the former subdirectory entry the new Git project's scope.
+  expect(await prompt(sibling)).toContain(nested.content)
+  expect(await prompt(sibling)).not.toContain(rootPreference.content)
+  expect(await prompt(b)).not.toContain(nested.content)
 })
 
 test("route rejects invalid content and preserves damaged files on mutation", async () => {

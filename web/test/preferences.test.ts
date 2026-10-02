@@ -6,8 +6,8 @@ const original = { ...preferencesApi }
 const originalFetch = globalThis.fetch
 afterEach(() => { Object.assign(preferencesApi, original); globalThis.fetch = originalFetch; setApiDirectory('') })
 
-function record(id: string, scope: 'global' | 'project' = 'global'): Preference {
-  return { id, content: id, scope, source: 'user', createdAt: 1, ...(scope === 'project' ? { projectID: 'a' } : {}) }
+function record(id: string, scope: 'global' | 'project' = 'global', projectID = '/a'): Preference {
+  return { id, content: id, scope, source: 'user', createdAt: 1, ...(scope === 'project' ? { projectID } : {}) }
 }
 function state(directory: string, project: Preference[] = []): PreferencesState {
   return { directory, projectID: directory, preferences: project, global: [], project, unresolved: [] }
@@ -62,7 +62,7 @@ test('separate panels and out-of-order loads cannot reuse another project state'
   const panel = usePreferences()
   const a = panel.loadPreferences('/a')
   const b = panel.loadPreferences('/b')
-  second.resolve(state('/b', [record('B', 'project')]))
+  second.resolve(state('/b', [record('B', 'project', '/b')]))
   await b
   first.resolve(state('/a', [record('A', 'project')]))
   await a
@@ -128,6 +128,29 @@ test('legacy records are shown separately and assigning moves only the selected 
   expect(panel.projectPreferences.value).toHaveLength(1)
 })
 
+test('editing a historical directory identity keeps it unresolved until explicit assignment', async () => {
+  const historical = record('before first commit', 'project', 'dir_previous')
+  preferencesApi.list = async () => ({ ...state('/a'), unresolved: [historical] })
+  preferencesApi.update = async (_id, content) => ({ ...historical, content })
+  preferencesApi.assign = async (_id, directory) => {
+    expect(directory).toBe('/a')
+    return { ...historical, content: 'reviewed content', projectID: '/a' }
+  }
+  const panel = usePreferences()
+  await panel.loadPreferences('/a')
+  panel.startEdit(historical)
+  panel.editingContent.value = 'reviewed content'
+  expect(await panel.saveEdit()).toBe(true)
+  expect(panel.unresolvedPreferences.value.map(({ projectID, content }) => ({ projectID, content })))
+    .toEqual([{ projectID: 'dir_previous', content: 'reviewed content' }])
+  expect(panel.projectPreferences.value).toEqual([])
+  expect(panel.preferences.value).toEqual([])
+  expect(await panel.assignPreference(historical.id)).toBe(true)
+  expect(panel.unresolvedPreferences.value).toEqual([])
+  expect(panel.projectPreferences.value.map(({ projectID, content }) => ({ projectID, content })))
+    .toEqual([{ projectID: '/a', content: 'reviewed content' }])
+})
+
 test('component retains drafts and delete confirmation until mutations succeed', async () => {
   const source = await Bun.file(new URL('../src/components/PreferencesPanel.vue', import.meta.url)).text()
   expect(source).toContain("if (saved && newContent.value === content) newContent.value = ''")
@@ -139,7 +162,7 @@ test('component retains drafts and delete confirmation until mutations succeed',
 
 test('duplicate cross-scope IDs cannot be edited or deleted and neither record disappears', async () => {
   const global = { ...record('copied'), content: 'global original', origin: '/global.json', ambiguous: true }
-  const project = { ...record('copied', 'project'), content: 'project original', origin: '/project/preferences.json', ambiguous: true }
+  const project = { ...record('copied', 'project', '/project'), content: 'project original', origin: '/project/preferences.json', ambiguous: true }
   preferencesApi.list = async () => ({ ...state('/project', [project]), global: [global], preferences: [project, global] })
   let writes = 0
   preferencesApi.update = async () => { writes++; return global }

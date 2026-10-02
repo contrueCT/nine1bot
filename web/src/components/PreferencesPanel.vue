@@ -29,7 +29,7 @@ const scope = ref<'global' | 'project'>('global')
 const sections = computed(() => [
   { id: 'global', label: '全局偏好', items: globalPreferences.value },
   { id: 'project', label: '当前项目偏好', items: projectPreferences.value },
-  { id: 'unresolved', label: '未分配的历史项目偏好', items: unresolvedPreferences.value },
+  { id: 'unresolved', label: '待确认的历史项目偏好', items: unresolvedPreferences.value },
 ])
 const total = computed(() => sections.value.reduce((sum, section) => sum + section.items.length, 0))
 
@@ -129,7 +129,7 @@ onMounted(() => {
           <span class="count">{{ section.items.length }}</span>
         </h3>
         <p v-if="section.id === 'unresolved'" class="description">
-          这些历史记录缺少项目归属，已保留但不会应用于任何项目。请确认内容属于上方项目后再分配。
+          这些历史记录缺少项目归属，或保存时的目录身份已改变（例如创建了 Git 首次提交）。记录已保留，但不会应用于当前项目。请确认内容适用于上方项目后再分配。
         </p>
         <div class="preference-items">
           <div

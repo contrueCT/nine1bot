@@ -35,7 +35,12 @@ export namespace Preferences {
     content: Content.optional(),
     assignToCurrentProject: z.literal(true).optional(),
   }).refine((input) => input.content !== undefined || input.assignToCurrentProject, "No update provided")
-  export type Context = { projectID: string; directory: string; workingDirectory?: string }
+  export type Context = {
+    projectID: string
+    directory: string
+    workingDirectory?: string
+    recoverableProjectIDs?: string[]
+  }
   export type State = {
     preferences: Listed[]
     global: Listed[]
@@ -62,8 +67,10 @@ export namespace Preferences {
     return preference.scope === "global" || preference.projectID === context.projectID
   }
 
-  function unresolved(preference: Info) {
-    return preference.scope === "project" && !preference.projectID
+  function unresolved(preference: Info, context: Context) {
+    return preference.scope === "project" && (!preference.projectID || (
+      preference.projectID !== context.projectID && context.recoverableProjectIDs?.includes(preference.projectID) === true
+    ))
   }
 
   /** Legacy project-local files already have an owner by location. Never move or discard them. */
@@ -102,7 +109,7 @@ export namespace Preferences {
     const documents = await Promise.all((await files(context, globalPath)).map(JsonFile.read))
     const records = documents.flatMap((document, index) => {
       const preferences = index === 0
-        ? entries(document.data).filter((preference) => active(preference, context) || unresolved(preference))
+        ? entries(document.data).filter((preference) => active(preference, context) || unresolved(preference, context))
         : localEntries(document.data, context)
       return preferences.map((preference) => ({ ...preference, origin: path.resolve(document.path) }))
     })
@@ -110,12 +117,12 @@ export namespace Preferences {
     for (const preference of records) counts.set(preference.id, (counts.get(preference.id) ?? 0) + 1)
     const listed = records.map((preference) => ({ ...preference, ambiguous: counts.get(preference.id)! > 1 }))
     const global = listed.filter((preference) => preference.scope === "global")
-    const project = listed.filter((preference) => preference.scope === "project" && !unresolved(preference))
+    const project = listed.filter((preference) => preference.scope === "project" && !unresolved(preference, context))
     return {
       preferences: [...project, ...global],
       global,
       project,
-      unresolved: listed.filter(unresolved),
+      unresolved: listed.filter((preference) => unresolved(preference, context)),
       projectID: context.projectID,
       directory: context.workingDirectory ?? context.directory,
     }
@@ -151,7 +158,7 @@ export namespace Preferences {
     await JsonFile.transaction(await files(context, globalPath), (documents) => {
       const matches = documents.flatMap((document, sourceIndex) =>
         entries(document.data).flatMap((preference, recordIndex) =>
-          preference.id === id && (sourceIndex > 0 || active(preference, context) || unresolved(preference))
+          preference.id === id && (sourceIndex > 0 || active(preference, context) || unresolved(preference, context))
             ? [{ document, sourceIndex, recordIndex }]
             : []))
       // Check every visible source under the same locks, including duplicate IDs
@@ -162,7 +169,7 @@ export namespace Preferences {
       const { document, sourceIndex, recordIndex } = match
       const preferences = entries(document.data)
       const preference = sourceIndex === 0 ? preferences[recordIndex] : localEntries(document.data, context)[recordIndex]
-      const updated = edit(preference, sourceIndex === 0 && unresolved(preference))
+      const updated = edit(preference, sourceIndex === 0 && unresolved(preference, context))
       if (updated) preferences[recordIndex] = updated
       else preferences.splice(recordIndex, 1)
       document.data.preferences = preferences
@@ -174,7 +181,7 @@ export namespace Preferences {
   export async function update(id: string, input: z.infer<typeof Update>, context: Context, globalPath = filename()) {
     const parsed = Update.parse(input)
     return mutate(id, context, globalPath, (preference, isUnresolved) => {
-      if (parsed.assignToCurrentProject && !isUnresolved) throw new Error("Only unassigned legacy preferences can be assigned")
+      if (parsed.assignToCurrentProject && !isUnresolved) throw new Error("Only unresolved historical preferences can be assigned")
       return {
         ...preference,
         ...(parsed.content !== undefined ? { content: parsed.content } : {}),
