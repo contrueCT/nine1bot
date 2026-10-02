@@ -305,7 +305,7 @@ function formatSize(bytes: number): string {
     <!-- Plan Mode 指示器 -->
     <div v-if="isPlanMode" class="plan-mode-indicator">
       <ClipboardList :size="14" />
-      <span>先规划：Nine1Bot 会先列出计划，等你确认后再动手</span>
+      <span>已请求先列计划。当前为提示词引导，并非只读执行模式</span>
       <button class="plan-mode-close" @click="isPlanMode = false" title="关闭规划模式">
         <X :size="14" />
       </button>
@@ -382,7 +382,7 @@ function formatSize(bytes: number): string {
             :class="{ active: isPlanMode }"
             :aria-pressed="isPlanMode"
             :disabled="disabled && !isStreaming"
-            title="先列计划，确认后再执行"
+            title="请求先列计划（提示词引导，不是只读执行模式）"
             @click="togglePlanMode"
           >
             <ClipboardList :size="15" />

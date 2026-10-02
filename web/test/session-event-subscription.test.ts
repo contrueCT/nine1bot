@@ -78,7 +78,11 @@ describe('session runtime event subscription', () => {
 
   it('notifies reconnect only after a later successful open', async () => {
     const reconnects: number[] = []
+    const opens: number[] = []
     const subscription = api.subscribeSessionRuntimeEvents('ses_1', () => {}, {
+      onOpen(generation) {
+        opens.push(generation)
+      },
       onReconnect(generation) {
         reconnects.push(generation)
       },
@@ -87,10 +91,12 @@ describe('session runtime event subscription', () => {
     FakeEventSource.latest.open()
     await subscription.ready
     expect(reconnects).toEqual([])
+    expect(opens).toEqual([1])
 
     FakeEventSource.latest.open()
     expect(subscription.connectionGeneration()).toBe(2)
     expect(reconnects).toEqual([2])
+    expect(opens).toEqual([1, 2])
     subscription.close()
   })
 
@@ -104,5 +110,22 @@ describe('session runtime event subscription', () => {
     const globalUrl = new URL(FakeEventSource.latest.url, 'http://localhost')
     expect(globalUrl.searchParams.get('content')).toBe('false')
     globalSubscription.close()
+  })
+
+  it('notifies global native-stream interruption before its automatic reconnect', async () => {
+    let connected = false
+    const subscription = api.subscribeGlobalEvents(() => {}, {
+      onOpen: () => { connected = true },
+      onDisconnect: () => { connected = false },
+    })
+    FakeEventSource.latest.open()
+    await subscription.ready
+    expect(connected).toBe(true)
+    FakeEventSource.latest.readyState = FakeEventSource.CONNECTING
+    FakeEventSource.latest.onerror?.(new Event('error'))
+    expect(connected).toBe(false)
+    FakeEventSource.latest.open()
+    expect(connected).toBe(true)
+    subscription.close()
   })
 })

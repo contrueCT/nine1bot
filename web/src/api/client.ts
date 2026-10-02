@@ -103,8 +103,8 @@ function createEventStreamConnection(options: EventStreamOptions = {}) {
         readySettled = true
         clearTimeout(readyTimer)
         resolveReady()
-        return
       }
+      options.onOpen?.(generation)
       if (generation > 1) options.onReconnect?.(generation)
     },
     close() {
@@ -310,6 +310,14 @@ export class SessionBusyError extends Error {
     super(`Session ${sessionID} is busy`)
     this.name = 'SessionBusyError'
   }
+}
+
+export interface SessionFileChange {
+  file: string
+  before: string
+  after: string
+  additions: number
+  deletions: number
 }
 
 export interface Session {
@@ -1168,6 +1176,21 @@ export const api = {
     return normalizeSession(session)
   },
 
+  // Read-only review of the session snapshot, pinned to its owning directory.
+  async getSessionChanges(sessionId: string, directory: string): Promise<SessionFileChange[]> {
+    const url = applyDirectoryToUrl(`${BASE_URL}/session/${encodeURIComponent(sessionId)}/diff`, directory)
+    const response = await requireOk(await fetchWithTimeout(url, {
+      headers: { 'x-opencode-directory': encodeURIComponent(directory) },
+    }, DEFAULT_TIMEOUT, false))
+    const data: unknown = await response.json()
+    if (!Array.isArray(data) || data.some(item => !item || typeof item.file !== 'string'
+      || typeof item.before !== 'string' || typeof item.after !== 'string'
+      || !Number.isFinite(item.additions) || !Number.isFinite(item.deletions))) {
+      throw new Error('文件变更响应格式无效')
+    }
+    return data as SessionFileChange[]
+  },
+
   // 获取消息历史
   // 后端返回 { info: MessageInfo, parts: Part[] }[]
   async getMessages(sessionId: string): Promise<Message[]> {
@@ -1717,6 +1740,7 @@ export const api = {
 
       eventSource.onerror = () => {
         if (closed) return
+        options.onDisconnect?.()
         if (eventSource?.readyState === EventSource.CLOSED && reconnectAttempts < maxReconnectAttempts) {
           reconnectAttempts++
           const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts - 1)
@@ -1726,6 +1750,8 @@ export const api = {
               connect()
             }
           }, delay)
+        } else if (eventSource?.readyState === EventSource.CLOSED) {
+          options.onGiveUp?.()
         }
       }
 
@@ -1761,6 +1787,8 @@ export interface EventStreamSubscription {
 }
 
 export interface EventStreamOptions {
+  // Fires for every successful open, including a first open after ready times out.
+  onOpen?(generation: number): void
   onDisconnect?(): void
   onReconnect?(generation: number): void
   // 重连次数耗尽、彻底放弃时触发

@@ -49,13 +49,14 @@ function formatPlanContent(content: string): string {
     <div class="plan-header">
       <div class="plan-title">
         <ClipboardList :size="16" />
-        <span>Plan</span>
+        <span>计划参考</span>
       </div>
       <button class="plan-close" @click="$emit('close')">
         <X :size="16" />
       </button>
     </div>
     <div class="plan-content custom-scrollbar">
+      <p class="plan-empty-hint">以下内容从回复中按关键词提取，仅供参考；不代表计划已获批准或执行权限已改变。</p>
       <template v-if="plans.length > 0">
         <div
           v-for="(plan, index) in plans"
@@ -68,7 +69,7 @@ function formatPlanContent(content: string): string {
       <div v-else class="plan-empty">
         <ClipboardList :size="24" />
         <p>暂无计划</p>
-        <p class="plan-empty-hint">在 + 菜单中启用 Plan 模式，AI 会先制定执行计划再行动。</p>
+        <p class="plan-empty-hint">在输入框启用「先规划」可请求 AI 先给出计划。这是提示词引导，不是只读执行模式。</p>
       </div>
     </div>
   </div>
