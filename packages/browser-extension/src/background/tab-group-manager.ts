@@ -5,6 +5,17 @@ const NINE1_TAB_GROUP_COLOR: chrome.tabGroups.ColorEnum = 'blue'
 
 let cleanupInstalled = false
 let activeNine1GroupId: number | null = null
+let activeGroupRevision = 0
+
+/** Synchronous invalidation boundary for commands that outlive group changes. */
+export function getNine1GroupRevision(): number { return activeGroupRevision }
+
+function rememberActiveGroup(groupId: number | null): void {
+  if (activeNine1GroupId !== groupId) {
+    activeNine1GroupId = groupId
+    activeGroupRevision += 1
+  }
+}
 
 function formatGroupTitle(taskLabel?: string): string {
   if (!taskLabel) return NINE1_TAB_GROUP_TITLE
@@ -51,7 +62,8 @@ async function groupExists(groupId: number): Promise<boolean> {
 async function updateGroup(groupId: number, options: {
   collapsed?: boolean
   taskLabel?: string
-}): Promise<void> {
+}, shouldUpdate: () => boolean = () => true): Promise<void> {
+  if (!shouldUpdate()) return
   await chrome.tabGroups.update(groupId, {
     title: formatGroupTitle(options.taskLabel),
     color: NINE1_TAB_GROUP_COLOR,
@@ -60,7 +72,7 @@ async function updateGroup(groupId: number, options: {
 }
 
 async function persistActiveGroup(groupId: number | null): Promise<void> {
-  activeNine1GroupId = groupId
+  rememberActiveGroup(groupId)
   try {
     if (groupId === null) {
       await chrome.storage.local.remove(ACTIVE_NINE1_TAB_GROUP_STORAGE_KEY)
@@ -73,23 +85,39 @@ async function persistActiveGroup(groupId: number | null): Promise<void> {
 }
 
 export async function getActiveNine1GroupId(): Promise<number | null> {
-  if (activeNine1GroupId !== null && await groupExists(activeNine1GroupId)) {
-    return activeNine1GroupId
+  const revision = activeGroupRevision
+  const candidate = activeNine1GroupId
+  if (candidate !== null && await groupExists(candidate)) {
+    if (revision !== activeGroupRevision) return getActiveNine1GroupId()
+    return candidate
   }
+  if (revision !== activeGroupRevision) return getActiveNine1GroupId()
 
   try {
     const stored = await chrome.storage.local.get({ [ACTIVE_NINE1_TAB_GROUP_STORAGE_KEY]: -1 })
+    if (revision !== activeGroupRevision) return getActiveNine1GroupId()
     const groupId = stored[ACTIVE_NINE1_TAB_GROUP_STORAGE_KEY]
-    if (typeof groupId === 'number' && groupId >= 0 && await groupExists(groupId)) {
-      activeNine1GroupId = groupId
+    const exists = typeof groupId === 'number' && groupId >= 0 && await groupExists(groupId)
+    if (revision !== activeGroupRevision) return getActiveNine1GroupId()
+    if (exists) {
+      rememberActiveGroup(groupId)
       return groupId
     }
   } catch {
+    if (revision !== activeGroupRevision) return getActiveNine1GroupId()
     // ignore storage failures
   }
 
   await persistActiveGroup(null)
   return null
+}
+
+/** Return the ID and its revision together, including across promise continuations. */
+export async function getActiveNine1GroupSnapshot(): Promise<{ groupId: number | null; revision: number }> {
+  while (true) {
+    const groupId = await getActiveNine1GroupId()
+    if (groupId === activeNine1GroupId) return { groupId, revision: activeGroupRevision }
+  }
 }
 
 export async function createDedicatedNine1Group(tabId: number, taskLabel?: string): Promise<number | null> {
@@ -171,23 +199,23 @@ export async function getDefaultNine1Tab(windowId?: number): Promise<chrome.tabs
   return active ?? tabs[0] ?? null
 }
 
-export async function setNine1GroupActive(tabId: number, taskLabel?: string): Promise<void> {
+export async function setNine1GroupActive(tabId: number, taskLabel?: string, shouldUpdate: () => boolean = () => true): Promise<void> {
   try {
     if (!await isTabInActiveNine1Group(tabId)) return
     const groupId = await getActiveNine1GroupId()
     if (groupId === null) return
-    await updateGroup(groupId, { collapsed: false, taskLabel })
+    await updateGroup(groupId, { collapsed: false, taskLabel }, shouldUpdate)
   } catch {
     // ignore tab/group lifecycle races
   }
 }
 
-export async function setNine1GroupIdle(tabId: number): Promise<void> {
+export async function setNine1GroupIdle(tabId: number, shouldUpdate: () => boolean = () => true): Promise<void> {
   try {
     if (!await isTabInActiveNine1Group(tabId)) return
     const groupId = await getActiveNine1GroupId()
     if (groupId === null) return
-    await updateGroup(groupId, { collapsed: true })
+    await updateGroup(groupId, { collapsed: true }, shouldUpdate)
   } catch {
     // ignore tab/group lifecycle races
   }

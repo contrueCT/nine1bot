@@ -16,6 +16,7 @@ export interface ResolvedElement {
   centerY: number
   tagName: string
   visible: boolean
+  inViewport: boolean
 }
 
 /**
@@ -25,22 +26,28 @@ export interface ResolvedElement {
  */
 export function buildResolveRefExpression(ref: string): string {
   return `(function(refId) {
-    var element = document.querySelector('[data-mcp-ref="' + refId + '"]');
+    var element = document.querySelector('[data-mcp-ref="' + CSS.escape(refId) + '"]');
     if (!element) return JSON.stringify(null);
 
     var rect = element.getBoundingClientRect();
     var style = window.getComputedStyle(element);
-    var visible = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    var visible = style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.opacity !== '0' && rect.width > 0 && rect.height > 0;
+    var left = Math.max(0, rect.x);
+    var top = Math.max(0, rect.y);
+    var right = Math.min(window.innerWidth, rect.x + rect.width);
+    var bottom = Math.min(window.innerHeight, rect.y + rect.height);
+    var inViewport = visible && right > left && bottom > top;
 
     return JSON.stringify({
       x: Math.round(rect.x),
       y: Math.round(rect.y),
       width: Math.round(rect.width),
       height: Math.round(rect.height),
-      centerX: Math.round(rect.x + rect.width / 2),
-      centerY: Math.round(rect.y + rect.height / 2),
+      centerX: inViewport ? (left + right) / 2 : rect.x + rect.width / 2,
+      centerY: inViewport ? (top + bottom) / 2 : rect.y + rect.height / 2,
       tagName: element.tagName.toLowerCase(),
-      visible: visible
+      visible: visible,
+      inViewport: inViewport
     });
   })(${JSON.stringify(ref)})`
 }
@@ -51,9 +58,9 @@ export function buildResolveRefExpression(ref: string): string {
  */
 export function buildScrollIntoViewExpression(ref: string): string {
   return `(function(refId) {
-    var element = document.querySelector('[data-mcp-ref="' + refId + '"]');
+    var element = document.querySelector('[data-mcp-ref="' + CSS.escape(refId) + '"]');
     if (!element) return JSON.stringify({ success: false, error: 'Element not found' });
-    element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    element.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
     return JSON.stringify({ success: true });
   })(${JSON.stringify(ref)})`
 }

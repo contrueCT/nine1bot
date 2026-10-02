@@ -131,7 +131,7 @@ download_from_release() {
     cd "$INSTALL_DIR"
 
     # 下载最新 release
-    local release_url="https://github.com/your-username/nine1bot/releases/latest/download/nine1bot-$OS-$ARCH.tar.gz"
+    local release_url="https://github.com/contrueCT/nine1bot/releases/latest/download/nine1bot-$OS-$ARCH.tar.gz"
 
     if command_exists curl; then
         curl -fsSL "$release_url" | tar -xz

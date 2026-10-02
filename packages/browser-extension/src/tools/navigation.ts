@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolResult } from './index'
+import { assertExecutionActive, executionDelay, type ToolExecutionContext } from './execution-context'
 
 interface NavigateArgs {
   tabId?: number
@@ -31,7 +32,7 @@ export const navigateTool = {
     },
   } satisfies ToolDefinition,
 
-  async execute(args: unknown): Promise<ToolResult> {
+  async execute(args: unknown, context?: ToolExecutionContext): Promise<ToolResult> {
     const { tabId, url, action = url ? 'goto' : undefined } = (args as NavigateArgs) || {}
 
     try {
@@ -51,6 +52,7 @@ export const navigateTool = {
         targetTabId = activeTab.id
       }
 
+      await assertExecutionActive(context)
       switch (action) {
         case 'goto':
           if (!url) {
@@ -61,28 +63,28 @@ export const navigateTool = {
           }
           await chrome.tabs.update(targetTabId, { url })
           // Wait for navigation to start
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          await executionDelay(500, context)
           return {
             content: [{ type: 'text', text: `Navigated to ${url}` }],
           }
 
         case 'back':
           await chrome.tabs.goBack(targetTabId)
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          await executionDelay(500, context)
           return {
             content: [{ type: 'text', text: 'Navigated back in history' }],
           }
 
         case 'forward':
           await chrome.tabs.goForward(targetTabId)
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          await executionDelay(500, context)
           return {
             content: [{ type: 'text', text: 'Navigated forward in history' }],
           }
 
         case 'reload':
           await chrome.tabs.reload(targetTabId)
-          await new Promise((resolve) => setTimeout(resolve, 500))
+          await executionDelay(500, context)
           return {
             content: [{ type: 'text', text: 'Page reloaded' }],
           }

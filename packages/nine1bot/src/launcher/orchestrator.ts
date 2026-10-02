@@ -1,6 +1,4 @@
-import open from 'open'
-import { execFile } from 'child_process'
-import { promisify } from 'util'
+import { openBrowserSafely } from './open-browser'
 import type { Nine1BotConfig } from '../config/schema'
 import { resolveConfigContext } from '../config/loader'
 import { startServer, type ServerInstance } from './server'
@@ -12,8 +10,6 @@ import {
 } from '../platform/builtin'
 import type { PlatformControllerBridge } from '@nine1bot/platform-protocol'
 import { createAccessAuthRuntime } from '../access-auth/service'
-
-const execFileAsync = promisify(execFile)
 
 export interface LaunchOptions {
   port?: number
@@ -108,13 +104,7 @@ export async function launch(options: LaunchOptions = {}): Promise<LaunchResult>
 
   // 3. 打开浏览器（如果启用）
   if (!options.noBrowser && config.server.openBrowser) {
-    try {
-      await execFileAsync('which', ['xdg-open'])
-      open(localUrl, { wait: false }).catch(() => {})
-    } catch {
-      console.log(`\nℹ️  Server running at ${localUrl}`)
-      console.log('   (Browser auto-open skipped: xdg-open not found)\n')
-    }
+    await openBrowserSafely(localUrl)
   }
 
   return {
