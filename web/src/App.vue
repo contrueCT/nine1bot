@@ -27,7 +27,7 @@ import { Globe2, LogOut, Plus, RefreshCw, Settings, Terminal } from 'lucide-vue-
 import { getTrustedExtensionParentContext, isTrustedExtensionParentEvent } from './utils/extension-parent'
 import { useAccessAuth } from './composables/useAccessAuth'
 import { parseSettingsDeepLink } from './utils/settings-deeplink'
-import { isCurrentSessionDiff } from './utils/session-diff-event'
+import { createSessionChangesLiveUpdates } from './composables/session-changes-live'
 
 import { MAX_PARALLEL_AGENTS } from './composables/useParallelSessions'
 
@@ -215,6 +215,11 @@ const showTodoList = ref(false)
 const showPlanPanel = ref(false)
 const showChangesPanel = ref(false)
 const changesRevision = ref(0)
+const changesLiveUpdates = createSessionChangesLiveUpdates({
+  sessionId: () => currentSession.value?.id,
+  refresh: () => { changesRevision.value += 1 },
+})
+const changesLiveConnected = changesLiveUpdates.connected
 
 // MCP project panel state
 const showMcpPanel = ref(false)
@@ -407,12 +412,10 @@ function subscribeGlobalEvents() {
     globalEventSource = null
   }
 
-  globalEventSource = api.subscribeGlobalEvents((event: GlobalSSEEventEnvelope) => {
+  const changesConnection = changesLiveUpdates.begin()
+  const subscription = api.subscribeGlobalEvents((event: GlobalSSEEventEnvelope) => {
     const payload = event.payload
-    if (isCurrentSessionDiff(payload, currentSession.value?.id)) {
-      changesRevision.value += 1
-      return
-    }
+    changesConnection.received(payload)
     if (payload?.type === 'session.updated') {
       applySessionTitle(payload.properties?.info)
       applyRecentSessionTitle(payload.properties?.info)
@@ -429,7 +432,13 @@ function subscribeGlobalEvents() {
     if (payload?.type === 'project.updated') {
       scheduleProjectsRefresh()
     }
+  }, {
+    onDisconnect: changesConnection.disconnected,
+    onGiveUp: changesConnection.disconnected,
+    onReconnect: changesConnection.ready,
   })
+  globalEventSource = subscription
+  void subscription.ready.then(changesConnection.ready, changesConnection.disconnected)
 }
 
 async function refreshExtensionPageContext() {
@@ -523,6 +532,7 @@ function stopAuthenticatedRuntime() {
     globalEventSource.close()
     globalEventSource = null
   }
+  changesLiveUpdates.stop()
   if (projectsRefreshTimer) {
     clearTimeout(projectsRefreshTimer)
     projectsRefreshTimer = null
@@ -667,11 +677,18 @@ onUnmounted(() => {
   stopAuthenticatedRuntime()
 })
 
+function openSearch() {
+  // Close the lower modal before search installs its own focus owner.
+  showChangesPanel.value = false
+  showSearch.value = true
+}
+
 function handleGlobalKeydown(e: KeyboardEvent) {
   if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
     if (isBrowserExtension.value) return
     e.preventDefault()
-    showSearch.value = !showSearch.value
+    if (showSearch.value) showSearch.value = false
+    else openSearch()
     return
   }
   // Escape 统一关闭浮层（搜索/文件查看器/目录选择器各自处理自己的 Escape）
@@ -1148,7 +1165,7 @@ function handlePromptSelect(prompt: string) {
       @file-click="handleFileClick"
       @abort-session="abortSession"
       @open-settings="openSettings"
-      @open-search="showSearch = true"
+      @open-search="openSearch"
       @change-directory="changeDirectory"
       @select-project="handleSelectProject"
       @open-projects="handleOpenProjects"
@@ -1273,7 +1290,7 @@ function handlePromptSelect(prompt: string) {
 
         <Teleport to="body">
           <div v-if="showChangesPanel && currentSession" class="changes-overlay" @click.self="showChangesPanel = false">
-            <SessionChangesPanel :sessionId="currentSession.id" :directory="currentSession.directory" :sessionTitle="currentSession.title" :isStreaming="isStreaming" :revision="changesRevision" @close="showChangesPanel = false" />
+            <SessionChangesPanel :sessionId="currentSession.id" :directory="currentSession.directory" :sessionTitle="currentSession.title" :isStreaming="isStreaming" :revision="changesRevision" :liveConnected="changesLiveConnected" @close="showChangesPanel = false" />
           </div>
         </Teleport>
 

@@ -157,3 +157,20 @@ test('the dialog host uses a viewport overlay outside clipped application column
   expect(source).toMatch(/\.changes-overlay\s*\{\s*position:\s*fixed;\s*inset:\s*0;/)
   expect(source).toContain(':revision="changesRevision"')
 })
+
+test('interrupted live updates are visible while manual refresh stays available', async () => {
+  api.getSessionChanges = async () => []
+  const live = Vue.ref(false)
+  const root = await mount(() => ({ sessionId: 'A', directory: '/A', isStreaming: false, liveConnected: live.value }))
+  expect(text(root)).toContain('实时快照更新尚未连接')
+  expect(button(root, '刷新文件变更').props.disabled).toBe(false)
+  live.value = true; await settle()
+  expect(text(root)).not.toContain('实时快照更新尚未连接')
+})
+
+test('search entry closes the lower changes modal before taking focus', async () => {
+  const source = await Bun.file(new URL('../src/App.vue', import.meta.url)).text()
+  expect(source).toMatch(/function openSearch\(\) \{[\s\S]*?showChangesPanel\.value = false\s*showSearch\.value = true\s*\}/)
+  expect(source).toContain('@open-search="openSearch"')
+  expect(source).toContain('else openSearch()')
+})
