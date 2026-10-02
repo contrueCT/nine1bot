@@ -17,11 +17,12 @@ import {
   serverOriginToRelayUrl,
   normalizeServerOrigin,
 } from '../shared/server-config'
-import { isAbortError } from '../tools/execution-context'
+import type { ToolExecutionContext } from '../tools/execution-context'
 import { setupDiagnosticsListeners } from './diagnostics-buffer'
 import {
   addTabToNine1Group,
   getDefaultNine1Tab,
+  getActiveNine1GroupId,
   getTabsInActiveNine1Group,
   getTabsInGroupByTab,
   isTabInActiveNine1Group,
@@ -70,6 +71,7 @@ async function getConfiguredRelayUrl(generation: number): Promise<string | null>
 
 interface RunningCommand {
   generation: number
+  stopVersion: number
   id: number
   tabId?: number
   method: string
@@ -79,6 +81,7 @@ interface RunningCommand {
   controller: AbortController
   cancelReason?: string
   taskLabel?: string
+  activeCounted?: boolean
 }
 
 // WebSocket 连接状态
@@ -99,6 +102,9 @@ const attachedTabs = new Set<number>()
 const runningCommands = new Map<number, RunningCommand>()
 const tabActiveCommandCount = new Map<number, number>()
 const tabStopRequestedAt = new Map<number, number>()
+const tabStopVersions = new Map<number, number>()
+const tabCommandOwners = new Map<number, RunningCommand>()
+let stopRequestVersion = 0
 
 /**
  * 生成唯一的 session ID
@@ -150,17 +156,21 @@ function targetInfoForTab(tab: chrome.tabs.Tab) {
 
 function detachManagedTarget(tabId: number, reason = 'target_detached'): void {
   const sessionId = activeSessions.get(tabId)
-  if (!sessionId) return
+  const hasCommand = Array.from(runningCommands.values()).some(command => command.tabId === tabId)
+  if (!sessionId && !hasCommand && !tabCommandOwners.has(tabId)) return
 
-  forwardCdpEvent('Target.detachedFromTarget', {
-    sessionId,
-    targetId: String(tabId),
-  })
-  activeSessions.delete(tabId)
+  if (sessionId) {
+    forwardCdpEvent('Target.detachedFromTarget', {
+      sessionId,
+      targetId: String(tabId),
+    })
+    activeSessions.delete(tabId)
+  }
   attachedTabs.delete(tabId)
   cancelRunningCommands({ tabId, reason })
   tabActiveCommandCount.delete(tabId)
   tabStopRequestedAt.delete(tabId)
+  tabCommandOwners.delete(tabId)
 }
 
 function detachAllActiveSessions(): void {
@@ -282,6 +292,7 @@ async function markCommandStart(command: RunningCommand): Promise<void> {
   if (command.generation !== connectionGeneration || command.controller.signal.aborted) return
   if (command.tabId === undefined) return
   tabStopRequestedAt.delete(command.tabId)
+  command.activeCounted = true
   bumpTabActiveCount(command.tabId, 1)
   await setNine1GroupActive(command.tabId, command.taskLabel)
   if (command.generation !== connectionGeneration) return
@@ -291,6 +302,8 @@ async function markCommandStart(command: RunningCommand): Promise<void> {
 async function markCommandFinish(command: RunningCommand): Promise<void> {
   if (command.generation !== connectionGeneration) return
   if (command.tabId === undefined) return
+  if (!command.activeCounted) return
+  command.activeCounted = false
   const remaining = bumpTabActiveCount(command.tabId, -1)
   if (remaining === 0) {
     await setNine1GroupIdle(command.tabId)
@@ -337,6 +350,7 @@ function cancelRunningCommands(options: {
   reason: string
 }): number {
   const { commandId, tabId, reason } = options
+  if (commandId === undefined && tabId !== undefined) tabStopVersions.set(tabId, ++stopRequestVersion)
   let cancelled = 0
 
   for (const [id, command] of runningCommands) {
@@ -360,8 +374,8 @@ async function executeExtensionToolCommand(options: {
   args: Record<string, unknown>
   timeoutMs?: number
   taskLabel?: string
-}): Promise<unknown> {
-  const { commandId, tabId, sessionId, toolName, args, timeoutMs, taskLabel } = options
+}, context: ToolExecutionContext): Promise<unknown> {
+  const { tabId, toolName, args } = options
 
   const ALLOWED_TOOLS: ReadonlySet<string> = new Set(Object.keys(toolExecutors))
   if (!ALLOWED_TOOLS.has(toolName)) {
@@ -374,11 +388,29 @@ async function executeExtensionToolCommand(options: {
     toolArgs.tabId = tabId
   }
 
+  const result = await executor(toolArgs, context)
+  if (result.isError && result.content[0]?.text === 'Cancelled') throw new Error('Command cancelled (tool cooperative stop)')
+  return result
+}
+
+async function executeTrackedCommand<T>(options: {
+  commandId: number
+  tabId?: number
+  sessionId?: string
+  method: string
+  toolName?: string
+  timeoutMs?: number
+  taskLabel?: string
+  requirePage: boolean
+}, executor: (context: ToolExecutionContext, command: RunningCommand) => Promise<T>): Promise<T> {
+  const { commandId, tabId, sessionId, method, toolName, timeoutMs, taskLabel, requirePage } = options
+  if (runningCommands.has(commandId)) throw new Error(`Browser command is already running: ${commandId}`)
   const controller = new AbortController()
   const command: RunningCommand = {
     generation: connectionGeneration,
+    stopVersion: stopRequestVersion,
     id: commandId,
-    method: 'Extension.callTool',
+    method,
     toolName,
     tabId,
     sessionId,
@@ -388,6 +420,56 @@ async function executeExtensionToolCommand(options: {
   }
 
   runningCommands.set(commandId, command)
+
+  const assertOwned = () => {
+    controller.signal.throwIfAborted()
+    if (command.generation !== connectionGeneration || runningCommands.get(commandId) !== command) {
+      throw new Error('Browser command no longer owns this relay connection')
+    }
+  }
+  const assertActive = async () => {
+    assertOwned()
+    if (command.tabId !== undefined) {
+      if ((tabStopVersions.get(command.tabId) ?? 0) > command.stopVersion) {
+        command.cancelReason = 'tab_stop_requested'
+        controller.abort(command.cancelReason)
+        controller.signal.throwIfAborted()
+      }
+      const groupId = await getActiveNine1GroupId()
+      assertOwned()
+      const tab = await chrome.tabs.get(command.tabId)
+      assertOwned()
+      if (groupId === null || tab.groupId !== groupId || (requirePage && !isAutomatableTabUrl(tab.url))) {
+        command.cancelReason = 'target_no_longer_managed_or_automatable'
+        controller.abort(command.cancelReason)
+        controller.signal.throwIfAborted()
+      }
+    }
+  }
+
+  const releaseOwnedInput = async (method: string, params: Record<string, unknown>) => {
+    if (!((method === 'Input.dispatchMouseEvent' && params.type === 'mouseReleased') ||
+          (method === 'Input.dispatchKeyEvent' && params.type === 'keyUp'))) {
+      throw new Error('Input cleanup only permits release events')
+    }
+    const assertLease = () => {
+      if (command.generation !== connectionGeneration || command.tabId === undefined ||
+          tabCommandOwners.get(command.tabId) !== command) {
+        throw new Error('Input cleanup no longer owns its target')
+      }
+    }
+    assertLease()
+    const groupId = await getActiveNine1GroupId()
+    assertLease()
+    const tab = await chrome.tabs.get(command.tabId!)
+    assertLease()
+    if (groupId === null || tab.groupId !== groupId || !isAutomatableTabUrl(tab.url)) {
+      throw new Error('Input cleanup target is no longer managed or automatable')
+    }
+    // No await between the final lease check and dispatch.
+    assertLease()
+    await chrome.debugger.sendCommand({ tabId: command.tabId! }, method, params)
+  }
 
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null
   if ((timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS) > 0) {
@@ -406,9 +488,8 @@ async function executeExtensionToolCommand(options: {
     })
     const result = await Promise.race([
       (async () => {
-        await markCommandStart(command)
-        if (controller.signal.aborted) throw new Error('Command cancelled before execution')
-        return executor(toolArgs, { signal: controller.signal, commandId, tabId })
+        assertOwned()
+        return executor({ signal: controller.signal, commandId, tabId, assertActive, releaseOwnedInput }, command)
       })(),
       aborted,
     ])
@@ -418,13 +499,9 @@ async function executeExtensionToolCommand(options: {
       throw new Error(reason === 'timeout' ? 'Command timeout' : `Command cancelled (${reason})`)
     }
 
-    if (result.isError && result.content[0]?.text === 'Cancelled') {
-      throw new Error('Command cancelled (tool cooperative stop)')
-    }
-
     return result
   } catch (error) {
-    if (isAbortError(error) || controller.signal.aborted) {
+    if (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
       const reason = command.cancelReason ?? 'cancelled'
       throw new Error(reason === 'timeout' ? 'Command timeout' : `Command cancelled (${reason})`)
     }
@@ -525,81 +602,93 @@ async function handleRelayMessage(data: string, socket: WebSocket, generation: n
  * 处理 CDP 命令
  */
 async function handleCdpCommand(commandId: number, method: string, params: any, sessionId?: string, targetId?: string, generation = connectionGeneration): Promise<unknown> {
-  console.log('[Relay Client] Handling CDP command:', method, 'sessionId:', sessionId)
-
-  // The bridge uses an empty tab ID for untargeted creation/navigation.
-  if (targetId === '') targetId = undefined
+  if (method === 'cancelCDPCommand') {
+    return { cancelled: cancelRunningCommands({
+      commandId: typeof params?.commandId === 'number' ? params.commandId : undefined,
+      tabId: typeof params?.tabId === 'number' ? params.tabId : undefined,
+      reason: params?.reason || 'cancelCDPCommand',
+    }) }
+  }
   const toolName = method === 'Extension.callTool' ? params?.toolName : undefined
-  const tabManagement = toolName === 'tabs_context_mcp' || toolName === 'tabs_create_mcp'
-  const navigation = method === 'Page.navigate' || toolName === 'navigate'
-  const toolTabId = method === 'Extension.callTool' ? params?.args?.tabId : undefined
-  if (toolTabId !== undefined) {
-    if (!Number.isSafeInteger(toolTabId) || toolTabId < 0) throw new Error('Invalid tool tabId')
-    if (targetId !== undefined && targetId !== String(toolTabId)) throw new Error('Browser target and tool tabId disagree')
-    targetId = String(toolTabId)
-  }
-  if (method === 'Target.getTargets') {
-    const tabs = await getTabsInActiveNine1Group()
-    return { targetInfos: tabs.map(targetInfoForTab) }
-  }
-  if (method === 'Target.setAutoAttach' || method === 'Target.setDiscoverTargets') return {}
-  const needsTab = !tabManagement || sessionId !== undefined || targetId !== undefined
-  const tabId = needsTab ? await resolveManagedCommandTab(sessionId, targetId, !tabManagement && !navigation && method !== 'Target.getTargetInfo') : undefined
-  if (generation !== connectionGeneration) throw new Error('Relay connection changed before command execution')
-  if (method === 'Target.getTargetInfo') return { targetInfo: targetInfoForTab(await chrome.tabs.get(tabId!)) }
-  // Chrome's debugger cannot attach to a chrome:// page. Bootstrap navigation
-  // through the tabs API, retaining the managed-tab boundary checked above.
-  if (method === 'Page.navigate') {
-    if (tabId === undefined) throw new Error('A valid managed browser tab is required')
-    const tab = await chrome.tabs.get(tabId)
-    if (generation !== connectionGeneration) throw new Error('Relay connection changed before navigation')
-    if (!isAutomatableTabUrl(tab.url)) {
-      if (!isAutomatableTabUrl(params?.url) && params?.url !== 'about:blank') throw new Error('Navigation requires an http/https/file URL or about:blank')
-      await chrome.tabs.update(tabId, { url: params.url })
-      return { frameId: 'main' }
+  const requestedTab = params?.args?.tabId
+  const knownTabId = sessionId
+    ? Array.from(activeSessions).find(([, sid]) => sid === sessionId)?.[0]
+    : typeof targetId === 'string' && /^\d+$/.test(targetId)
+      ? Number(targetId)
+      : typeof requestedTab === 'number' && Number.isSafeInteger(requestedTab) ? requestedTab : undefined
+  return executeTrackedCommand({
+    commandId, tabId: knownTabId, sessionId, method, toolName,
+    timeoutMs: typeof params?.timeoutMs === 'number' ? params.timeoutMs : undefined,
+    taskLabel: typeof params?.taskLabel === 'string' ? params.taskLabel : undefined,
+    requirePage: method !== 'Page.navigate' && toolName !== 'navigate',
+  }, async (context, command) => {
+    console.log('[Relay Client] Handling CDP command:', method, 'sessionId:', sessionId)
+
+    // The bridge uses an empty tab ID for untargeted creation/navigation.
+    if (targetId === '') targetId = undefined
+    const tabManagement = toolName === 'tabs_context_mcp' || toolName === 'tabs_create_mcp'
+    const navigation = method === 'Page.navigate' || toolName === 'navigate'
+    const toolTabId = method === 'Extension.callTool' ? params?.args?.tabId : undefined
+    if (toolTabId !== undefined) {
+      if (!Number.isSafeInteger(toolTabId) || toolTabId < 0) throw new Error('Invalid tool tabId')
+      if (targetId !== undefined && targetId !== String(toolTabId)) throw new Error('Browser target and tool tabId disagree')
+      targetId = String(toolTabId)
     }
-  }
-
-  if (generation !== connectionGeneration) throw new Error('Relay connection changed before command execution')
-
-  // 根据 CDP method 调用相应的工具
-  switch (method) {
-    case 'cancelCDPCommand': {
-      const cancelled = cancelRunningCommands({
-        commandId: typeof params?.commandId === 'number' ? params.commandId : undefined,
-        tabId: typeof params?.tabId === 'number' ? params.tabId : tabId,
-        reason: params?.reason || 'cancelCDPCommand',
-      })
-      return { cancelled }
+    if (method === 'Target.getTargets') {
+      const tabs = await getTabsInActiveNine1Group()
+      return { targetInfos: tabs.map(targetInfoForTab) }
     }
+    if (method === 'Target.setAutoAttach' || method === 'Target.setDiscoverTargets') return {}
+    const needsTab = !tabManagement || sessionId !== undefined || targetId !== undefined
+    const tabId = needsTab ? await resolveManagedCommandTab(sessionId, targetId, !tabManagement && !navigation && method !== 'Target.getTargetInfo') : undefined
+    if (generation !== connectionGeneration) throw new Error('Relay connection changed before command execution')
+    if (method === 'Target.getTargetInfo') return { targetInfo: targetInfoForTab(await chrome.tabs.get(tabId!)) }
+    command.tabId = tabManagement ? undefined : tabId
+    context.tabId = command.tabId
+    await context.assertActive!()
+    if (command.tabId !== undefined) tabCommandOwners.set(command.tabId, command)
+    await markCommandStart(command)
+    await context.assertActive!()
 
-    // 扩展工具直接转发（不受 CSP 限制）
-    case 'Extension.callTool': {
-      const { toolName, args, timeoutMs, taskLabel } = params || {}
+    // 根据 CDP method 调用相应的工具
+    switch (method) {
+      // 扩展工具直接转发（不受 CSP 限制）
+      case 'Extension.callTool': {
+        const { toolName, args, timeoutMs, taskLabel } = params || {}
 
-      if (typeof toolName !== 'string') {
-        throw new Error('toolName is required for Extension.callTool')
+        if (typeof toolName !== 'string') {
+          throw new Error('toolName is required for Extension.callTool')
+        }
+
+        return await executeExtensionToolCommand({
+          commandId,
+          tabId: tabManagement ? undefined : tabId,
+          sessionId,
+          toolName,
+          args: (args ?? {}) as Record<string, unknown>,
+          timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
+          taskLabel: typeof taskLabel === 'string' ? taskLabel : undefined,
+        }, context)
       }
 
-      return await executeExtensionToolCommand({
-        commandId,
-        tabId: tabManagement ? undefined : tabId,
-        sessionId,
-        toolName,
-        args: (args ?? {}) as Record<string, unknown>,
-        timeoutMs: typeof timeoutMs === 'number' ? timeoutMs : undefined,
-        taskLabel: typeof taskLabel === 'string' ? taskLabel : undefined,
-      })
-    }
+      default: {
+        if (tabId === undefined) throw new Error('A valid managed browser tab is required')
 
-    default: {
-      if (tabId === undefined) throw new Error('A valid managed browser tab is required')
-      const assertCurrentConnection = () => {
-        if (generation !== connectionGeneration) throw new Error('Relay connection changed before command execution')
+        // Debugger attachment is unavailable on chrome:// pages. Bootstrap
+        // navigation via tabs.update, under the same cancellation/target owner.
+        if (method === 'Page.navigate') {
+          const tab = await chrome.tabs.get(tabId)
+          await context.assertActive!()
+          if (!isAutomatableTabUrl(tab.url)) {
+            if (!isAutomatableTabUrl(params?.url) && params?.url !== 'about:blank') throw new Error('Navigation requires an http/https/file URL or about:blank')
+            await chrome.tabs.update(tabId, { url: params.url })
+            return { frameId: 'main' }
+          }
+        }
+        return executePageCdpCommand(tabId, method, params, ensureDebuggerAttached, context.assertActive, context.releaseOwnedInput)
       }
-      return executePageCdpCommand(tabId, method, params, ensureDebuggerAttached, assertCurrentConnection)
     }
-  }
+  })
 }
 
 async function ensureDebuggerAttached(tabId: number): Promise<void> {
@@ -740,6 +829,10 @@ function setupServerConfigListener(): void {
  */
 export function connectToRelay(url?: string): void {
   if (isConnecting || ws) return
+  // A manual/config-driven attempt supersedes any older backoff. Clear its
+  // timer before taking a new generation so an early failure can schedule one.
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimer = null
   isConnecting = true
   const generation = ++connectionGeneration
   const open = (resolvedUrl: string | null) => {
@@ -811,6 +904,9 @@ function cleanup(): void {
   runningCommands.clear()
   tabActiveCommandCount.clear()
   tabStopRequestedAt.clear()
+  tabStopVersions.clear()
+  tabCommandOwners.clear()
+  stopRequestVersion = 0
 }
 
 function scheduleReconnect(url: string | undefined, generation: number): void {

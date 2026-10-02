@@ -20,7 +20,8 @@ export async function executePageCdpCommand(
   method: string,
   params: Record<string, unknown> | undefined,
   ensureDebuggerAttached: (tabId: number) => Promise<void>,
-  assertActive: () => void = () => {},
+  assertActive: () => void | Promise<void> = () => {},
+  releaseOwnedInput?: (method: string, params: Record<string, unknown>) => Promise<void>,
 ): Promise<unknown> {
   if (method === 'DOM.setFileInputFiles') {
     // Server paths are not paths on the extension host. Never transfer files or
@@ -35,9 +36,9 @@ export async function executePageCdpCommand(
   }
 
   const target = { tabId }
-  assertActive()
+  await assertActive()
   await ensureDebuggerAttached(tabId)
-  assertActive()
+  await assertActive()
   let commandParams = { ...params }
 
   if (method === 'Runtime.evaluate') {
@@ -70,11 +71,32 @@ export async function executePageCdpCommand(
 
   // Preserve the original CDP payload, including wheel deltas, modifiers and
   // optional protocol fields. Chrome validates method-specific parameters.
-  assertActive()
+  await assertActive()
   const result = await chrome.debugger.sendCommand(target, method, commandParams) as {
     errorText?: string
     data?: string
   } | undefined
+  try {
+    await assertActive()
+  } catch (error) {
+    // A press accepted just before cancellation may otherwise remain held. Only
+    // release that specific input if this command still owns the managed target.
+    let release: Record<string, unknown> | undefined
+    if (method === 'Input.dispatchMouseEvent' && commandParams.type === 'mousePressed') {
+      release = { type: 'mouseReleased', x: commandParams.x, y: commandParams.y, button: commandParams.button ?? 'left', clickCount: 0 }
+    } else if (method === 'Input.dispatchKeyEvent' && commandParams.type === 'keyDown') {
+      const { text: _text, ...keyParams } = commandParams
+      release = { ...keyParams, type: 'keyUp' }
+    }
+    if (release && releaseOwnedInput) {
+      try {
+        await releaseOwnedInput(method, release)
+      } catch {
+        // Never expand cleanup to a different connection, group or target owner.
+      }
+    }
+    throw error
+  }
   if (method === 'Page.navigate' && result?.errorText) {
     throw new Error(`Navigation failed: ${result.errorText}`)
   }

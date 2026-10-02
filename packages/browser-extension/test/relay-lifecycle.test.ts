@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-for (const scenario of ['blank', 'scope', 'stale', 'bootstrap', 'pending', 'reconnect', 'protocol', 'pending_page', 'bridge']) {
+for (const scenario of ['blank', 'scope', 'stale', 'bootstrap', 'pending', 'reconnect', 'protocol', 'pending_page', 'bridge', 'reconnect_superseded', 'real_tool_cancel', 'native_target_cancel', 'native_explicit_cancel', 'target_revalidation', 'cancel_during_resolution', 'cancel_between_inputs', 'native_timeout', 'user_stop_during_resolution', 'owned_input_cleanup', 'cleanup_target_boundary', 'native_owned_cleanup']) {
   test(`real relay module: ${scenario}`, async () => {
     const home = await mkdtemp(join(tmpdir(), 'nine1-relay-test-'))
     try {

@@ -1,4 +1,5 @@
 import type { ToolDefinition, ToolResult } from './index'
+import { assertExecutionActive, type ToolExecutionContext } from './execution-context'
 
 interface ScreenshotArgs {
   tabId?: number
@@ -47,7 +48,7 @@ export const screenshotTool = {
     },
   } satisfies ToolDefinition,
 
-  async execute(args: unknown): Promise<ToolResult> {
+  async execute(args: unknown, context?: ToolExecutionContext): Promise<ToolResult> {
     const { tabId } = (args as ScreenshotArgs) || {}
 
     try {
@@ -69,7 +70,9 @@ export const screenshotTool = {
       }
 
       // Use debugger API to capture screenshot (doesn't require activeTab permission)
+      await assertExecutionActive(context)
       await ensureDebuggerAttached(targetTabId)
+      await assertExecutionActive(context)
 
       const result = await chrome.debugger.sendCommand(
         { tabId: targetTabId },
