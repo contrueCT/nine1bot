@@ -2916,69 +2916,62 @@ export interface Preference {
   source: 'user' | 'ai'
   createdAt: number
   scope: 'global' | 'project'
+  projectID?: string
 }
 
 export interface PreferencesState {
   preferences: Preference[]
   global: Preference[]
   project: Preference[]
+  unresolved: Preference[]
+  projectID: string
+  directory: string
+}
+
+async function preferenceRequest(path: string, options: RequestInit = {}, directory = getApiDirectory()) {
+  const query = directory ? `?${new URLSearchParams({ directory })}` : ''
+  const headers = new Headers(options.headers)
+  if (directory) headers.set('x-opencode-directory', directory)
+  return requireOk(await fetchWithTimeout(`${BASE_URL}/preferences${path}${query}`, { ...options, headers }, DEFAULT_TIMEOUT, false))
 }
 
 export const preferencesApi = {
-  // 获取所有偏好
-  async list(): Promise<PreferencesState> {
-    const res = await fetchWithTimeout(`${BASE_URL}/preferences`)
-    if (!res.ok) {
-      throw new Error('Failed to fetch preferences')
-    }
-    return res.json()
+  async list(directory?: string): Promise<PreferencesState> {
+    return (await preferenceRequest('', {}, directory)).json()
   },
 
-  // 添加偏好
-  async add(content: string, scope: 'global' | 'project' = 'global', source: 'user' | 'ai' = 'user'): Promise<Preference> {
-    const res = await fetchWithTimeout(`${BASE_URL}/preferences`, {
+  async add(content: string, scope: 'global' | 'project' = 'global', source: 'user' | 'ai' = 'user', directory?: string): Promise<Preference> {
+    return (await preferenceRequest('', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content, scope, source })
-    })
-    if (!res.ok) {
-      throw new Error('Failed to add preference')
-    }
-    return res.json()
+    }, directory)).json()
   },
 
-  // 更新偏好
-  async update(id: string, content: string): Promise<Preference> {
-    const res = await fetchWithTimeout(`${BASE_URL}/preferences/${encodeURIComponent(id)}`, {
+  async update(id: string, content: string, directory?: string): Promise<Preference> {
+    return (await preferenceRequest(`/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content })
-    })
-    if (!res.ok) {
-      throw new Error('Failed to update preference')
-    }
-    return res.json()
+    }, directory)).json()
   },
 
-  // 删除偏好
-  async delete(id: string): Promise<boolean> {
-    const res = await fetchWithTimeout(`${BASE_URL}/preferences/${encodeURIComponent(id)}`, {
-      method: 'DELETE'
-    })
-    if (!res.ok) {
-      throw new Error('Failed to delete preference')
-    }
+  async assign(id: string, directory: string): Promise<Preference> {
+    return (await preferenceRequest(`/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assignToCurrentProject: true })
+    }, directory)).json()
+  },
+
+  async delete(id: string, directory?: string): Promise<boolean> {
+    await preferenceRequest(`/${encodeURIComponent(id)}`, { method: 'DELETE' }, directory)
     return true
   },
 
-  // 获取偏好提示词
-  async getPrompt(): Promise<string> {
-    const res = await fetchWithTimeout(`${BASE_URL}/preferences/prompt`)
-    if (!res.ok) {
-      throw new Error('Failed to fetch preferences prompt')
-    }
-    const data = await res.json()
-    return data.prompt || ''
+  async getPrompt(directory?: string): Promise<string> {
+    const data = await (await preferenceRequest('/prompt', {}, directory)).json()
+    return data.prompt
   }
 }
 

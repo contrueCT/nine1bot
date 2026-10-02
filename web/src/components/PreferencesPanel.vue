@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Plus, Trash2, Edit2, Check, X, Globe } from 'lucide-vue-next'
 import { usePreferences } from '../composables/usePreferences'
 
 const {
   globalPreferences,
+  projectPreferences,
+  unresolvedPreferences,
+  directory,
+  assignPreference,
   loading,
   error,
   editingId,
@@ -20,25 +24,32 @@ const {
 
 // 新增偏好的输入
 const newContent = ref('')
+const scope = ref<'global' | 'project'>('global')
+const sections = computed(() => [
+  { id: 'global', label: '全局偏好', items: globalPreferences.value },
+  { id: 'project', label: '当前项目偏好', items: projectPreferences.value },
+  { id: 'unresolved', label: '未分配的历史项目偏好', items: unresolvedPreferences.value },
+])
+const total = computed(() => sections.value.reduce((sum, section) => sum + section.items.length, 0))
 
 // 添加偏好
 async function handleAdd() {
-  if (!newContent.value.trim()) return
-  await addPreference(newContent.value, 'global')
-  newContent.value = ''
+  if (loading.value || !newContent.value.trim()) return
+  const content = newContent.value
+  const saved = await addPreference(content, scope.value)
+  if (saved && newContent.value === content) newContent.value = ''
 }
 
 // 删除确认
 const deletingId = ref<string | null>(null)
 
 function handleDelete(id: string) {
-  deletingId.value = id
+  if (!loading.value) deletingId.value = id
 }
 
 async function confirmDelete() {
-  if (!deletingId.value) return
-  await deletePreference(deletingId.value)
-  deletingId.value = null
+  if (loading.value || !deletingId.value) return
+  if (await deletePreference(deletingId.value)) deletingId.value = null
 }
 
 // 初始加载
@@ -52,8 +63,10 @@ onMounted(() => {
     <!-- 头部说明 -->
     <div class="panel-header">
       <p class="description">
-        设置您的全局偏好，AI 会在每次对话中自动遵循这些偏好。
+        全局偏好适用于所有项目，项目偏好只适用于下面显示的项目。修改在后续对话轮次生效。
       </p>
+      <p v-if="directory" class="description">当前项目：{{ directory }}</p>
+      <button class="btn btn-ghost btn-sm" :disabled="loading || !!newContent.trim() || !!editingId || !!deletingId" @click="loadPreferences()">重新加载当前项目</button>
     </div>
 
     <!-- 添加新偏好 -->
@@ -64,17 +77,22 @@ onMounted(() => {
           placeholder="输入新的偏好，例如：使用简洁的代码风格..."
           class="add-input"
           rows="2"
+          maxlength="4096"
+          :disabled="loading || !directory"
           @keydown.enter.ctrl="handleAdd"
         />
       </div>
       <div class="add-actions">
         <div class="scope-label">
           <Globe :size="14" />
-          <span>全局偏好</span>
+          <select v-model="scope" aria-label="偏好作用域" :disabled="loading || !directory">
+            <option value="global">全局偏好</option>
+            <option value="project">当前项目偏好</option>
+          </select>
         </div>
         <button
           class="add-btn"
-          :disabled="!newContent.trim() || loading"
+          :disabled="!newContent.trim() || loading || !directory"
           @click="handleAdd"
         >
           <Plus :size="16" />
@@ -91,27 +109,30 @@ onMounted(() => {
     <!-- 偏好列表 -->
     <div class="preferences-list">
       <!-- 空状态 -->
-      <div v-if="!loading && globalPreferences.length === 0" class="empty-state">
+      <div v-if="!loading && total === 0" class="empty-state">
         <p>还没有设置任何偏好</p>
         <p class="hint">添加偏好后，AI 会在对话中自动遵循</p>
       </div>
 
       <!-- 加载状态 -->
-      <div v-else-if="loading && globalPreferences.length === 0" class="loading-state">
+      <div v-else-if="loading && total === 0" class="loading-state">
         <div class="spinner"></div>
         <span>加载中...</span>
       </div>
 
       <!-- 全局偏好 -->
-      <div v-if="globalPreferences.length > 0" class="preferences-section">
+      <div v-for="section in sections.filter(item => item.items.length)" :key="section.id" class="preferences-section">
         <h3 class="section-title">
           <Globe :size="14" />
-          <span>全局偏好</span>
-          <span class="count">{{ globalPreferences.length }}</span>
+          <span>{{ section.label }}</span>
+          <span class="count">{{ section.items.length }}</span>
         </h3>
+        <p v-if="section.id === 'unresolved'" class="description">
+          这些历史记录缺少项目归属，已保留但不会应用于任何项目。请确认内容属于上方项目后再分配。
+        </p>
         <div class="preference-items">
           <div
-            v-for="pref in globalPreferences"
+            v-for="pref in section.items"
             :key="pref.id"
             class="preference-item"
           >
@@ -121,14 +142,16 @@ onMounted(() => {
                 v-model="editingContent"
                 class="edit-input"
                 rows="2"
+                maxlength="4096"
+                :disabled="loading"
                 @keydown.enter.ctrl="saveEdit"
                 @keydown.escape="cancelEdit"
               />
               <div class="item-actions">
-                <button class="action-btn save" @click="saveEdit" title="保存">
+                <button :disabled="loading || !editingContent.trim()" class="action-btn save" @click="saveEdit" title="保存">
                   <Check :size="14" />
                 </button>
-                <button class="action-btn cancel" @click="cancelEdit" title="取消">
+                <button :disabled="loading" class="action-btn cancel" @click="cancelEdit" title="取消">
                   <X :size="14" />
                 </button>
               </div>
@@ -143,10 +166,11 @@ onMounted(() => {
                 </div>
               </div>
               <div class="item-actions">
-                <button class="action-btn edit" @click="startEdit(pref)" title="编辑">
+                <button class="btn btn-ghost btn-sm" v-if="section.id === 'unresolved'" :disabled="loading" @click="assignPreference(pref.id)">分配到当前项目</button>
+                <button :disabled="loading" class="action-btn edit" @click="startEdit(pref)" title="编辑">
                   <Edit2 :size="14" />
                 </button>
-                <button class="action-btn delete" @click="handleDelete(pref.id)" title="删除">
+                <button :disabled="loading" class="action-btn delete" @click="handleDelete(pref.id)" title="删除">
                   <Trash2 :size="14" />
                 </button>
               </div>
@@ -158,21 +182,22 @@ onMounted(() => {
 
     <!-- 删除确认对话框 -->
     <Teleport to="body">
-      <div v-if="deletingId" class="dialog-overlay" @click="deletingId = null">
+      <div v-if="deletingId" class="dialog-overlay" @click="!loading && (deletingId = null)">
         <div class="dialog" @click.stop>
           <div class="dialog-header">
             <span>删除偏好</span>
-            <button class="action-btn" @click="deletingId = null">
+            <button class="action-btn" @click="!loading && (deletingId = null)">
               <X :size="16" />
             </button>
           </div>
           <div class="dialog-body">
+            <p v-if="error" role="alert" class="error-message">{{ error }}</p>
             <p class="dialog-message">确定要删除这条偏好吗？</p>
             <p class="dialog-warning">此操作不可撤销。</p>
           </div>
           <div class="dialog-footer">
-            <button class="btn btn-ghost btn-sm" @click="deletingId = null">取消</button>
-            <button class="btn btn-danger btn-sm" @click="confirmDelete">
+            <button class="btn btn-ghost btn-sm" @click="!loading && (deletingId = null)">取消</button>
+            <button :disabled="loading" class="btn btn-danger btn-sm" @click="confirmDelete">
               <Trash2 :size="14" />
               删除
             </button>

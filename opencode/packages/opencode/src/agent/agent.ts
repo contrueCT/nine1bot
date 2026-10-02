@@ -116,6 +116,7 @@ export namespace Agent {
     const defaults = PermissionNext.fromConfig({
       "*": "allow",
       doom_loop: "ask",
+      remember: "ask",
       external_directory: {
         "*": "ask",
         [Truncate.DIR]: "allow",
@@ -159,6 +160,7 @@ export namespace Agent {
           PermissionNext.fromConfig({
             question: "allow",
             plan_exit: "allow",
+            remember: "deny",
             external_directory: {
               [path.join(Global.Path.data, "plans", "*")]: "allow",
             },

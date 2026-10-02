@@ -1,3 +1,5 @@
+import { RememberTool } from "./remember"
+import { Preferences } from "../preferences"
 import { QuestionTool } from "./question"
 import { BashTool } from "./bash"
 import { EditTool } from "./edit"
@@ -169,6 +171,7 @@ export namespace ToolRegistry {
       GitLabRepositoryInspectTool,
       TodoWriteTool,
       TodoReadTool,
+      ...(Preferences.enabled() ? [RememberTool] : []),
       WebSearchTool,
       CodeSearchTool,
       SkillTool,

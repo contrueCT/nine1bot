@@ -1,113 +1,111 @@
 import { ref, computed } from 'vue'
-import { preferencesApi, type Preference } from '../api/client'
-
-// 全局状态
-const preferences = ref<Preference[]>([])
-const globalPreferences = ref<Preference[]>([])
-const projectPreferences = ref<Preference[]>([])
-const loading = ref(false)
-const error = ref<string | null>(null)
-
-// 编辑状态
-const editingId = ref<string | null>(null)
-const editingContent = ref('')
+import { preferencesApi, getApiDirectory, type Preference, type PreferencesState } from '../api/client'
 
 export function usePreferences() {
-  // 加载偏好
-  async function loadPreferences() {
-    loading.value = true
-    error.value = null
-    try {
-      const state = await preferencesApi.list()
-      preferences.value = state.preferences
-      globalPreferences.value = state.global
-      projectPreferences.value = state.project
-    } catch (e: any) {
-      error.value = e.message || '加载偏好失败'
-      console.error('Failed to load preferences:', e)
-    } finally {
-      loading.value = false
-    }
-  }
+  // Each panel owns its project context; do not share an unkeyed cache across projects.
+  const state = ref<PreferencesState | null>(null)
+  const fetching = ref(false)
+  const saving = ref(false)
+  const error = ref<string | null>(null)
+  const editingId = ref<string | null>(null)
+  const editingContent = ref('')
+  let generation = 0
 
-  // 添加偏好
-  async function addPreference(content: string, scope: 'global' | 'project' = 'global') {
-    if (!content.trim()) return null
+  const preferences = computed(() => state.value?.preferences ?? [])
+  const globalPreferences = computed(() => state.value?.global ?? [])
+  const projectPreferences = computed(() => state.value?.project ?? [])
+  const unresolvedPreferences = computed(() => state.value?.unresolved ?? [])
+  const directory = computed(() => state.value?.directory ?? '')
+  const loading = computed(() => fetching.value || saving.value)
 
-    loading.value = true
-    error.value = null
-    try {
-      const pref = await preferencesApi.add(content.trim(), scope, 'user')
-      await loadPreferences() // 重新加载以确保同步
-      return pref
-    } catch (e: any) {
-      error.value = e.message || '添加偏好失败'
-      console.error('Failed to add preference:', e)
-      return null
-    } finally {
-      loading.value = false
-    }
-  }
-
-  // 更新偏好
-  async function updatePreference(id: string, content: string) {
-    if (!content.trim()) return false
-
-    loading.value = true
-    error.value = null
-    try {
-      await preferencesApi.update(id, content.trim())
-      await loadPreferences()
-      return true
-    } catch (e: any) {
-      error.value = e.message || '更新偏好失败'
-      console.error('Failed to update preference:', e)
-      return false
-    } finally {
-      loading.value = false
-    }
-  }
-
-  // 删除偏好
-  async function deletePreference(id: string) {
-    loading.value = true
-    error.value = null
-    try {
-      await preferencesApi.delete(id)
-      await loadPreferences()
-      return true
-    } catch (e: any) {
-      error.value = e.message || '删除偏好失败'
-      console.error('Failed to delete preference:', e)
-      return false
-    } finally {
-      loading.value = false
-    }
-  }
-
-  // 开始编辑
-  function startEdit(pref: Preference) {
-    editingId.value = pref.id
-    editingContent.value = pref.content
-  }
-
-  // 取消编辑
   function cancelEdit() {
     editingId.value = null
     editingContent.value = ''
   }
 
-  // 保存编辑
+  async function loadPreferences(projectDirectory = getApiDirectory()) {
+    const request = ++generation
+    state.value = null
+    cancelEdit()
+    fetching.value = true
+    error.value = null
+    try {
+      const result = await preferencesApi.list(projectDirectory)
+      if (request === generation) state.value = result
+    } catch (cause) {
+      if (request === generation) error.value = cause instanceof Error ? cause.message : '加载偏好失败'
+    } finally {
+      if (request === generation) fetching.value = false
+    }
+  }
+
+  function replace(preference: Preference) {
+    if (!state.value) return
+    const current = state.value
+    for (const key of ['global', 'project', 'unresolved'] as const) {
+      current[key] = current[key].filter((item) => item.id !== preference.id)
+    }
+    const key = preference.scope === 'global' ? 'global' : preference.projectID ? 'project' : 'unresolved'
+    current[key].push(preference)
+    current.preferences = [...current.project, ...current.global]
+  }
+
+  async function mutate<T>(action: (directory: string) => Promise<T>, apply: (value: T) => void): Promise<T | null> {
+    if (loading.value || !state.value) return null
+    const request = generation
+    const targetDirectory = state.value.directory
+    saving.value = true
+    error.value = null
+    try {
+      const result = await action(targetDirectory)
+      if (request === generation) apply(result)
+      return result
+    } catch (cause) {
+      if (request === generation) error.value = cause instanceof Error ? cause.message : '保存偏好失败'
+      return null
+    } finally {
+      saving.value = false
+    }
+  }
+
+  async function addPreference(content: string, scope: 'global' | 'project' = 'global') {
+    if (!content.trim()) return null
+    return mutate((dir) => preferencesApi.add(content.trim(), scope, 'user', dir), replace)
+  }
+
+  async function updatePreference(id: string, content: string) {
+    if (!content.trim()) return false
+    return !!await mutate((dir) => preferencesApi.update(id, content.trim(), dir), replace)
+  }
+
+  async function assignPreference(id: string) {
+    return !!await mutate((dir) => preferencesApi.assign(id, dir), replace)
+  }
+
+  async function deletePreference(id: string) {
+    return !!await mutate((dir) => preferencesApi.delete(id, dir), (deleted) => {
+      if (!deleted || !state.value) return
+      for (const key of ['preferences', 'global', 'project', 'unresolved'] as const) {
+        state.value[key] = state.value[key].filter((item) => item.id !== id)
+      }
+    })
+  }
+
+  function startEdit(preference: Preference) {
+    if (loading.value) return
+    editingId.value = preference.id
+    editingContent.value = preference.content
+  }
+
   async function saveEdit() {
     if (!editingId.value) return false
-    const success = await updatePreference(editingId.value, editingContent.value)
-    if (success) {
-      cancelEdit()
-    }
+    const id = editingId.value
+    const content = editingContent.value
+    const success = await updatePreference(id, content)
+    if (success && editingId.value === id && editingContent.value === content) cancelEdit()
     return success
   }
 
-  // 格式化时间
   function formatTime(timestamp: number): string {
     const date = new Date(timestamp)
     const now = new Date()
@@ -125,32 +123,12 @@ export function usePreferences() {
     })
   }
 
-  // 计算属性
-  const hasPreferences = computed(() => preferences.value.length > 0)
-  const isEditing = computed(() => editingId.value !== null)
-
   return {
-    // 状态
-    preferences,
-    globalPreferences,
-    projectPreferences,
-    loading,
-    error,
-    editingId,
-    editingContent,
-
-    // 计算属性
-    hasPreferences,
-    isEditing,
-
-    // 方法
-    loadPreferences,
-    addPreference,
-    updatePreference,
-    deletePreference,
-    startEdit,
-    cancelEdit,
-    saveEdit,
-    formatTime
+    preferences, globalPreferences, projectPreferences, unresolvedPreferences, directory,
+    loading, error, editingId, editingContent,
+    hasPreferences: computed(() => preferences.value.length > 0),
+    isEditing: computed(() => editingId.value !== null),
+    loadPreferences, addPreference, updatePreference, assignPreference, deletePreference,
+    startEdit, cancelEdit, saveEdit, formatTime,
   }
 }
