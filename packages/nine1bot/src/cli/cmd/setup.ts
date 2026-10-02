@@ -9,6 +9,7 @@ import {
   validateAccessPassword,
 } from '../../access-auth/credential-store'
 import { updateConfigValue } from '../../config/editor'
+import { loadSetupModelChoices } from './setup-models'
 
 async function promptNewAccessPassword(): Promise<string> {
   const password = await prompts.password({
@@ -253,19 +254,24 @@ export async function runSetup(): Promise<void> {
           },
         } as NonNullable<Nine1BotConfig['provider']>
 
-        // 设置默认模型
-        const defaultModels: Record<string, string> = {
-          anthropic: 'anthropic/claude-3-5-sonnet-20241022',
-          openai: 'openai/gpt-4o',
-          openrouter: 'openrouter/anthropic/claude-3.5-sonnet',
-          google: 'google/gemini-pro',
+        const choices = await loadSetupModelChoices(provider, async () => {
+          const { ModelsDev } = await import('../../../../../opencode/packages/opencode/src/provider/models')
+          return ModelsDev.get()
+        })
+        if (choices.length) {
+          const model = await prompts.select({
+            message: 'Default model (availability depends on your provider account)',
+            options: [
+              { value: '', label: 'Choose in Web settings', hint: 'keep any existing default' },
+              ...choices,
+            ],
+          })
+          if (prompts.isCancel(model)) throw new UI.CancelledError()
+          if (model) config.model = model
+        } else {
+          prompts.log.info('Model catalog unavailable. Choose an available model in Web Settings → Models.')
         }
-
-        if (defaultModels[provider]) {
-          config.model = defaultModels[provider]
-        }
-
-        prompts.log.success(`${provider} configured successfully`)
+        prompts.log.info(`${provider} API key will be saved. No model request or credential verification has been performed.`)
       }
     }
   }

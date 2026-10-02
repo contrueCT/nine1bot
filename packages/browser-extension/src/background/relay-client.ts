@@ -9,6 +9,7 @@
  */
 
 import { toolExecutors } from '../tools'
+import { executePageCdpCommand } from './page-cdp'
 import {
   DEFAULT_SERVER_ORIGIN,
   SERVER_ORIGIN_STORAGE_KEY,
@@ -537,142 +538,8 @@ async function handleCdpCommand(commandId: number, method: string, params: any, 
       })
     }
 
-    case 'Page.captureScreenshot': {
-      const result = await toolExecutors.screenshot({ tabId }, { commandId, signal: undefined, tabId })
-      if (result.content[0]?.type === 'image' && result.content[0].data) {
-        return { data: result.content[0].data }
-      }
-      const errorText = result.content[0]?.text || 'Screenshot failed'
-      throw new Error(errorText)
-    }
-
-    case 'Page.navigate': {
-      await toolExecutors.navigate({ tabId, url: params?.url }, { commandId, signal: undefined, tabId })
-      return { frameId: 'main' }
-    }
-
-    case 'Runtime.evaluate': {
-      if (!tabId) throw new Error('No active tab')
-
-      await ensureDebuggerAttached(tabId)
-      const expression = typeof params?.expression === 'string' ? params.expression : ''
-      const returnByValue = params?.returnByValue !== false
-
-      const result = await chrome.debugger.sendCommand(
-        { tabId },
-        'Runtime.evaluate',
-        {
-          expression,
-          returnByValue,
-          awaitPromise: true,
-        },
-      ) as {
-        exceptionDetails?: { text?: string }
-        result?: { value?: unknown }
-      }
-
-      return result || {}
-    }
-
-    case 'Input.dispatchMouseEvent': {
-      if (!tabId) throw new Error('No active tab')
-
-      const { type, x, y, button, clickCount } = params || {}
-
-      await ensureDebuggerAttached(tabId)
-      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
-        type,
-        x,
-        y,
-        button: button || 'left',
-        clickCount: clickCount || 1,
-      })
-
-      return {}
-    }
-
-    case 'Input.dispatchKeyEvent': {
-      if (!tabId) throw new Error('No active tab')
-
-      await ensureDebuggerAttached(tabId)
-      await chrome.debugger.sendCommand({ tabId }, 'Input.dispatchKeyEvent', params)
-
-      return {}
-    }
-
-    case 'Input.insertText': {
-      if (!tabId) throw new Error('No active tab')
-
-      await ensureDebuggerAttached(tabId)
-      await chrome.debugger.sendCommand({ tabId }, 'Input.insertText', params)
-
-      return {}
-    }
-
-    case 'DOM.getDocument': {
-      if (!tabId) throw new Error('No active tab')
-
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => ({
-          root: {
-            nodeId: 1,
-            backendNodeId: 1,
-            nodeType: 9,
-            nodeName: '#document',
-            localName: '',
-            nodeValue: '',
-            childNodeCount: 1,
-          },
-        }),
-      })
-
-      return results[0]?.result || {}
-    }
-
-    case 'Page.getLayoutMetrics': {
-      if (!tabId) throw new Error('No active tab')
-
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => ({
-          layoutViewport: {
-            pageX: window.scrollX,
-            pageY: window.scrollY,
-            clientWidth: document.documentElement.clientWidth,
-            clientHeight: document.documentElement.clientHeight,
-          },
-          visualViewport: {
-            offsetX: 0,
-            offsetY: 0,
-            pageX: window.scrollX,
-            pageY: window.scrollY,
-            clientWidth: window.innerWidth,
-            clientHeight: window.innerHeight,
-            scale: 1,
-            zoom: 1,
-          },
-          contentSize: {
-            x: 0,
-            y: 0,
-            width: document.documentElement.scrollWidth,
-            height: document.documentElement.scrollHeight,
-          },
-        }),
-      })
-
-      return results[0]?.result || {}
-    }
-
-    case 'Target.getTargets':
-    case 'Target.getTargetInfo':
-    case 'Target.setAutoAttach':
-    case 'Target.setDiscoverTargets':
-      return {}
-
     default:
-      console.warn('[Relay Client] Unhandled CDP method:', method)
-      return {}
+      return executePageCdpCommand(tabId, method, params, ensureDebuggerAttached)
   }
 }
 
