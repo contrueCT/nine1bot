@@ -246,6 +246,14 @@ export function renderFeishuPermissionCard(input: FeishuInteractionCardInput): F
   })
   const permission = stringValue(input.data.permission) ?? 'unknown'
   const patterns = arrayString(input.data.patterns)
+  const metadata = input.data.metadata && typeof input.data.metadata === 'object'
+    ? input.data.metadata as Record<string, unknown>
+    : {}
+  const remember = permission === 'remember'
+  const content = stringValue(metadata.content)
+  const directory = stringValue(metadata.directory)
+  const scope = metadata.scope === 'global' ? '全局（所有项目）' : metadata.scope === 'project' ? '仅当前项目' : undefined
+  const canApprove = !remember || Boolean(content?.trim() && directory?.trim() && scope)
   return card({
     title: '需要权限确认',
     template: 'yellow',
@@ -254,9 +262,20 @@ export function renderFeishuPermissionCard(input: FeishuInteractionCardInput): F
         `**权限**：${permission}`,
         patterns.length ? `**范围**：${patterns.join(', ')}` : undefined,
       ].filter(Boolean).join('\n')),
+      ...(remember ? [{
+        tag: 'div',
+        text: {
+          tag: 'plain_text',
+          content: canApprove
+            ? `保存后将用于后续对话。\n生效范围：${scope}\n项目目录：${directory}\n偏好全文：\n${content}`
+            : '偏好内容或目标范围不完整，请拒绝后重新发起请求。',
+        },
+      }] : []),
       actions([
-        actionButton('允许一次', 'permission.allowOnce', context),
-        actionButton('允许本对话', 'permission.allowSession', context),
+        ...(canApprove ? [
+          actionButton('允许一次', 'permission.allowOnce', context),
+          actionButton('允许本对话', 'permission.allowSession', context),
+        ] : []),
         actionButton('拒绝', 'permission.deny', context, { type: 'danger' }),
         ...(input.continueUrl ? [linkButton('Web 继续', input.continueUrl)] : []),
       ]),

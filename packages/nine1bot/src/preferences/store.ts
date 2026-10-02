@@ -18,7 +18,7 @@ export function getProjectPreferencesPath(projectDir = process.env.NINE1BOT_PROJ
 async function context(projectDir = process.env.NINE1BOT_PROJECT_DIR || process.cwd()): Promise<Preferences.Context> {
   const directory = await Instance.normalizeDirectory(projectDir)
   const { project } = await Project.fromDirectory(directory)
-  return { projectID: project.id, directory: project.rootDirectory }
+  return { projectID: project.id, directory: project.rootDirectory, workingDirectory: directory }
 }
 
 export async function loadPreferences(projectDir?: string, _forceReload = false): Promise<PreferencesState> {

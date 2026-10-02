@@ -35,6 +35,9 @@ test("remember is permission-gated, scoped to execution directory and independen
       messages: [], metadata() {}, async ask(input) { asks.push(input) },
     })
     expect(asks).toHaveLength(1)
+    expect(asks[0].metadata.description).toContain("use strict TypeScript")
+    expect(asks[0].metadata.description).toContain(root)
+    expect(asks[0].metadata.description).toContain("Scope: current project only")
     expect(asks[0]).toMatchObject({ permission: "remember", patterns: [`project:${Instance.project.id}`] })
     const record = JSON.parse(result.output)
     expect(record).toMatchObject({ scope: "project", projectID: Instance.project.id, source: "ai" })
@@ -73,4 +76,17 @@ test("tool catalog enables remember only in Nine1Bot and uses executor context o
     delete process.env.NINE1BOT_PREFERENCES_MODULE
     expect(await ToolRegistry.ids()).not.toContain("remember")
   } })
+})
+
+test("approval preview shared by CLI and TUI includes exact content, scope and readable project", async () => {
+  const { rememberPermissionDescription } = await import("../../src/preferences/permission")
+  const content = "first line\n" + "x".repeat(3900) + "VISIBLE_END"
+  const metadata = { content, scope: "project", directory: "/projects/readable" }
+  const description = rememberPermissionDescription(metadata)!
+  expect(description).toContain(content)
+  expect(description).toContain("Scope: current project only")
+  expect(description).toContain("Project directory: /projects/readable")
+  expect(rememberPermissionDescription({ ...metadata, scope: "global" })).toContain("Scope: global (all projects)")
+  expect(rememberPermissionDescription({ content, scope: "project" })).toBeUndefined()
+  expect(rememberPermissionDescription({})).toBeUndefined()
 })

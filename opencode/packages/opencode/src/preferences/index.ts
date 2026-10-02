@@ -26,7 +26,7 @@ export namespace Preferences {
     content: Content.optional(),
     assignToCurrentProject: z.literal(true).optional(),
   }).refine((input) => input.content !== undefined || input.assignToCurrentProject, "No update provided")
-  export type Context = { projectID: string; directory: string }
+  export type Context = { projectID: string; directory: string; workingDirectory?: string }
   export type State = {
     preferences: Info[]
     global: Info[]
@@ -58,9 +58,9 @@ export namespace Preferences {
   }
 
   /** Legacy project-local files already have an owner by location. Never move or discard them. */
-  async function localFile(context: Context) {
+  async function localFile(directory: string) {
     for (const name of [".nine1bot/preferences.json", "nine1bot.preferences.json"]) {
-      const file = path.join(context.directory, name)
+      const file = path.join(directory, name)
       const exists = await fs.stat(file).then(() => true).catch((error) => {
         if (error.code === "ENOENT") return false
         throw error
@@ -70,10 +70,19 @@ export namespace Preferences {
   }
 
   async function files(context: Context, globalPath: string) {
-    const local = await localFile(context)
-    // A custom global path may intentionally point at the legacy local file.
-    if (!local || await JsonFile.canonical(local) === await JsonFile.canonical(globalPath)) return [globalPath]
-    return [globalPath, local]
+    const paths = [globalPath]
+    const seen = new Set([await JsonFile.canonical(globalPath)])
+    // Historical callers stored project preferences at their exact cwd, including
+    // monorepo subdirectories. Keep those sources alongside the project root.
+    for (const directory of new Set([context.directory, context.workingDirectory].filter((value): value is string => !!value))) {
+      const local = await localFile(directory)
+      if (!local) continue
+      const canonical = await JsonFile.canonical(local)
+      if (seen.has(canonical)) continue
+      seen.add(canonical)
+      paths.push(local)
+    }
+    return paths
   }
 
   function localEntries(data: JsonFile.Object, context: Context) {
@@ -86,7 +95,7 @@ export namespace Preferences {
     const global = central.filter((preference) => preference.scope === "global")
     const project = [
       ...central.filter((preference) => preference.scope === "project" && active(preference, context)),
-      ...(documents[1] ? localEntries(documents[1].data, context) : []),
+      ...documents.slice(1).flatMap((document) => localEntries(document.data, context)),
     ]
     return {
       preferences: [...project, ...global],
@@ -94,7 +103,7 @@ export namespace Preferences {
       project,
       unresolved: central.filter(unresolved),
       projectID: context.projectID,
-      directory: context.directory,
+      directory: context.workingDirectory ?? context.directory,
     }
   }
 

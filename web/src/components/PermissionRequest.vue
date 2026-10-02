@@ -19,6 +19,7 @@ const errorMessage = ref('')
 const permissionLabel = computed(() => {
   const labels: Record<string, string> = {
     bash: '执行命令',
+    remember: '保存长期偏好',
     edit: '编辑文件',
     read: '读取文件',
     glob: '搜索文件',
@@ -48,8 +49,22 @@ const patterns = computed(() => {
   return props.request.patterns.join(', ')
 })
 
+const rememberPreview = computed(() => {
+  if (props.request.permission !== 'remember') return null
+  const metadata = props.request.metadata || {}
+  if (typeof metadata.content !== 'string' || !metadata.content.trim()) return null
+  if (metadata.scope !== 'global' && metadata.scope !== 'project') return null
+  if (typeof metadata.directory !== 'string' || !metadata.directory.trim()) return null
+  return {
+    content: metadata.content,
+    scope: metadata.scope === 'global' ? '全局（所有项目）' : '仅当前项目',
+    directory: metadata.directory,
+  }
+})
+const canApprove = computed(() => props.request.permission !== 'remember' || rememberPreview.value !== null)
+
 const respond = async (reply: 'once' | 'always' | 'reject') => {
-  if (isSubmitting.value) return
+  if (isSubmitting.value || isResponded.value || (reply !== 'reject' && !canApprove.value)) return
 
   isSubmitting.value = true
   responseType.value = reply
@@ -98,9 +113,19 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
 
     <div class="permission-content">
       <div class="permission-type">{{ permissionLabel }}</div>
-      <div v-if="patterns" class="permission-patterns">
+      <div v-if="patterns && request.permission !== 'remember'" class="permission-patterns">
         <code>{{ patterns }}</code>
       </div>
+      <div v-if="rememberPreview" class="remember-preview">
+        <p>生效范围：{{ rememberPreview.scope }}</p>
+        <p>项目目录：{{ rememberPreview.directory }}</p>
+        <p>将保存的偏好全文：</p>
+        <pre class="remember-content">{{ rememberPreview.content }}</pre>
+        <p>允许后会保存并用于后续对话。始终允许会跳过后续同一范围的逐条确认。</p>
+      </div>
+      <p v-else-if="request.permission === 'remember'" class="permission-error" role="alert">
+        偏好内容或目标范围不完整，无法核对。请拒绝后重新发起请求。
+      </p>
       <div v-if="request.metadata?.command" class="permission-detail">
         <code class="command">{{ request.metadata.command }}</code>
       </div>
@@ -117,7 +142,7 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
       </button>
       <button
         class="btn btn-ghost"
-        :disabled="isSubmitting"
+        :disabled="isSubmitting || !canApprove"
         @click="respond('once')"
       >
         <span v-if="isSubmitting && responseType === 'once'" class="loading-spinner small"></span>
@@ -125,7 +150,7 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
       </button>
       <button
         class="btn btn-primary"
-        :disabled="isSubmitting"
+        :disabled="isSubmitting || !canApprove"
         @click="respond('always')"
       >
         <span v-if="isSubmitting && responseType === 'always'" class="loading-spinner small"></span>
@@ -142,7 +167,7 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
       <span>{{ errorMessage }}</span>
     </div>
 
-    <div v-else class="permission-responded" :class="responseType">
+    <div v-else-if="isResponded" class="permission-responded" :class="responseType">
       <template v-if="responseType === 'always'">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M20 6L9 17l-5-5"/>
@@ -166,6 +191,22 @@ const respond = async (reply: 'once' | 'always' | 'reject') => {
 </template>
 
 <style scoped>
+.remember-preview {
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.remember-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 20rem;
+  overflow-y: auto;
+  padding: var(--space-sm);
+  background: var(--surface-1);
+  border-radius: var(--radius-sm);
+}
+
 .permission-request {
   background: var(--glass-bg);
   border: 1px solid var(--warning);

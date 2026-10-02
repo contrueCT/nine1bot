@@ -1526,3 +1526,27 @@ class FailingSendCardReplyClient extends MemoryFeishuIMReplyClient {
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+// Remember must not offer approval without a complete, plain-text preview.
+test('remember permission cards show exact content and target or withhold allow actions', async () => {
+  const { renderFeishuPermissionCard } = await import('../src/im/cards')
+  const base = {
+    accountId: 'test-account',
+    routeKey: routeKeyForFeishuMessage(message(), { accountId: 'test-account' }),
+    requestId: 'permission-test',
+  }
+  const content = '<b>literal preference</b>\n' + 'x'.repeat(3900) + 'VISIBLE_END'
+  const card = renderFeishuPermissionCard({ ...base, data: {
+    permission: 'remember', patterns: ['project:opaque'], metadata: { content, scope: 'project', directory: '/readable/project' },
+  } })
+  const serialized = JSON.stringify(card)
+  expect(serialized).toContain('plain_text')
+  expect(serialized).toContain('仅当前项目')
+  expect(serialized).toContain('/readable/project')
+  expect(serialized).toContain(JSON.stringify(content).slice(1, -1))
+  expect(serialized).toContain('permission.allowOnce')
+  const incomplete = JSON.stringify(renderFeishuPermissionCard({ ...base, data: { permission: 'remember', metadata: {} } }))
+  expect(incomplete).not.toContain('permission.allowOnce')
+  expect(incomplete).not.toContain('permission.allowSession')
+  expect(incomplete).toContain('permission.deny')
+})

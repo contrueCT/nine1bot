@@ -77,3 +77,25 @@ test("route rejects invalid content and preserves damaged files on mutation", as
   expect(await fs.readFile(process.env.NINE1BOT_PREFERENCES_PATH!, "utf8")).toBe(damaged)
   expect(await prompt(a)).not.toContain("<user-preferences>")
 })
+
+test("legacy monorepo cwd preferences remain visible and editable without moving their file", async () => {
+  const app = path.join(a, "apps", "myapp")
+  const sibling = path.join(a, "apps", "other")
+  const local = path.join(app, ".nine1bot", "preferences.json")
+  await fs.mkdir(path.dirname(local), { recursive: true })
+  await fs.mkdir(sibling, { recursive: true })
+  await fs.writeFile(local, JSON.stringify({ version: 1, keep: "unchanged", preferences: [
+    { id: "legacy-app", content: "legacy nested sentinel", scope: "project", source: "user", createdAt: 1 },
+  ] }))
+  expect((await loadPreferences(app)).project.map((entry) => entry.id)).toEqual(["legacy-app"])
+  expect((await loadPreferences(sibling)).project).toEqual([])
+  expect((await request(app).then((res) => res.json())).directory).toBe(app)
+  expect(await prompt(app)).toContain("legacy nested sentinel")
+  expect(await prompt(sibling)).not.toContain("legacy nested sentinel")
+  const { updatePreference } = await import("../../../../../packages/nine1bot/src/preferences/store")
+  expect(await updatePreference("legacy-app", { content: "edited nested sentinel" }, app)).toMatchObject({ content: "edited nested sentinel" })
+  expect(JSON.parse(await fs.readFile(local, "utf8"))).toMatchObject({ keep: "unchanged", preferences: [{ content: "edited nested sentinel" }] })
+  expect(await prompt(app)).toContain("edited nested sentinel")
+  expect((await request(app, "/legacy-app", "DELETE")).status).toBe(200)
+  expect(JSON.parse(await fs.readFile(local, "utf8")).preferences).toEqual([])
+})

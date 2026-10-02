@@ -17,7 +17,7 @@ const log = Log.create({ service: "instruction" })
 async function loadNine1BotPreferences(): Promise<string> {
   if (!Preferences.enabled()) return process.env.NINE1BOT_PREFERENCES_PROMPT || ""
   try {
-    return await Preferences.prompt({ projectID: Instance.project.id, directory: Instance.project.rootDirectory })
+    return await Preferences.prompt({ projectID: Instance.project.id, directory: Instance.project.rootDirectory, workingDirectory: Instance.directory })
   } catch (error) {
     log.warn("Failed to load Nine1Bot preferences", { error })
     // Never reuse another project's prompt or silently replace a damaged preferences file.

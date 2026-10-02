@@ -17,7 +17,7 @@ const AddPreferenceSchema = Preferences.Add
 const UpdatePreferenceSchema = Preferences.Update
 
 function context(): Preferences.Context {
-  return { projectID: Instance.project.id, directory: Instance.project.rootDirectory }
+  return { projectID: Instance.project.id, directory: Instance.project.rootDirectory, workingDirectory: Instance.directory }
 }
 
 export function PreferencesRoutes() {

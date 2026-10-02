@@ -1,5 +1,6 @@
 import z from "zod"
 import { Tool } from "./tool"
+import { rememberPermissionDescription } from "../preferences/permission"
 import { Preferences } from "../preferences"
 import { Project } from "../project/project"
 import { Instance } from "../project/instance"
@@ -15,14 +16,16 @@ export const RememberTool = Tool.define("remember", {
     // cwd is supplied by the session executor, never by model arguments.
     const directory = await Instance.normalizeDirectory(ctx.cwd)
     const { project } = await Project.fromDirectory(directory)
-    const context = { projectID: project.id, directory: project.rootDirectory }
+    const context = { projectID: project.id, directory: project.rootDirectory, workingDirectory: directory }
+    const content = Preferences.Content.parse(input.content)
+    const metadata = { content, scope: input.scope, directory: context.directory }
     await ctx.ask({
       permission: "remember",
       patterns: [input.scope === "global" ? "global" : `project:${project.id}`],
       always: [input.scope === "global" ? "global" : `project:${project.id}`],
-      metadata: { content: input.content, scope: input.scope, directory: context.directory },
+      metadata: { ...metadata, description: rememberPermissionDescription(metadata) },
     })
-    const preference = await Preferences.add({ ...input, source: "ai" }, context)
+    const preference = await Preferences.add({ ...input, content, source: "ai" }, context)
     return { title: "Preference saved", output: JSON.stringify(preference), metadata: { preference } }
   },
 })
