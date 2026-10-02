@@ -9,46 +9,51 @@ export namespace JsonFile {
   export type Object = Record<string, any>
   export type Document = { path: string; text: string; data: Object; existed: boolean; mode: number }
 
-  async function canonicalDirectory(directory: string) {
-    const resolve = (name: string) => fs.realpath(name).catch((error) => {
-      if (error.code === "ENOENT") return name
+  async function requireDirectory(filename: string, allowMissing = false) {
+    const stat = await fs.stat(filename).catch((error) => {
+      if (allowMissing && error.code === "ENOENT") return undefined
       throw error
     })
-    const root = path.parse(directory).root
-    const parts = directory.slice(root.length).split(path.sep === "\\" ? /[\\/]+/ : /\/+/)
-    if (!parts.includes("..")) return resolve(directory)
-    // realpath normalizes its input first. Resolve each prefix before ".." so
-    // a symlink target such as alias/../file follows the filesystem's order.
-    let resolved = root
-    for (const part of parts) {
-      if (!part || part === ".") continue
-      if (part === "..") resolved = path.dirname(resolved)
-      else resolved = await resolve(path.join(resolved, part))
-    }
-    return resolved
+    if (stat && !stat.isDirectory())
+      throw Object.assign(new Error(`Not a directory: ${filename}`), { code: "ENOTDIR" })
   }
 
   export async function canonical(filename: string) {
-    let absolute = path.resolve(filename)
-    const seen = new Set<string>()
-    for (let depth = 0; depth <= 40; depth++) {
-      // Canonicalize the stable parent, not the file inode replaced by write().
-      // Bun/Linux can resolve that old inode as "filename (deleted)" during a
-      // concurrent rename, which would create a different lock and output file.
-      const parent = await canonicalDirectory(path.dirname(absolute))
-      absolute = path.join(parent, path.basename(absolute))
-      const target = await fs.readlink(absolute).catch((error) => {
+    const absolute = path.resolve(filename)
+    const split = (name: string) => name.split(path.sep === "\\" ? /[\\/]+/ : /\/+/)
+    let current = path.parse(absolute).root
+    const pending = split(absolute.slice(current.length))
+    let links = 0
+    while (pending.length) {
+      const component = pending.shift()!
+      if (!component || component === "." || component === "..") {
+        // Parent traversal and a trailing separator require a real directory.
+        // Missing ordinary parents may be created later, but cannot be erased
+        // by ".." or silently substituted for a file used as a directory.
+        await requireDirectory(current)
+        if (component === "..") current = path.dirname(current)
+        continue
+      }
+      const candidate = path.join(current, component)
+      const target = await fs.readlink(candidate).catch((error) => {
         if (error.code === "EINVAL" || error.code === "ENOENT") return undefined
         throw error
       })
-      if (target === undefined) return absolute
-      if (depth === 40 || seen.has(absolute)) break
-      seen.add(absolute)
-      // Resolve directory symlinks before interpreting a target's "..".
-      // path.resolve/join would collapse those components prematurely.
-      absolute = path.isAbsolute(target) ? target : `${parent}${path.sep}${target}`
+      if (target !== undefined) {
+        if (++links > 40)
+          throw Object.assign(new Error(`Too many symbolic links: ${filename}`), { code: "ELOOP" })
+        if (path.isAbsolute(target)) {
+          current = path.parse(target).root
+          pending.unshift(...split(target.slice(current.length)))
+        } else pending.unshift(...split(target))
+        continue
+      }
+      // Keep the pathname, not the leaf inode replaced by write(). Bun/Linux
+      // realpath can expose the replaced inode as "filename (deleted)".
+      current = candidate
+      if (pending.length) await requireDirectory(current, true)
     }
-    throw Object.assign(new Error(`Too many symbolic links: ${filename}`), { code: "ELOOP" })
+    return current
   }
 
   export async function read(filename: string): Promise<Document> {

@@ -193,3 +193,44 @@ test("missing parents in symlink targets retain resolved directory ownership", a
   expect(await fs.readFile(unrelated, "utf8")).toBe(sentinel)
   expect((await fs.lstat(link)).isSymbolicLink()).toBe(true)
 })
+
+for (const [target, code] of [
+  ["missing/../preferences.json", "ENOENT"],
+  ["blocker.json/../preferences.json", "ENOTDIR"],
+  ["preferences.json/", "ENOTDIR"],
+] as const) {
+  test(`invalid symlink traversal ${target} fails closed with ${code}`, async () => {
+    const root = await directory()
+    const filename = path.join(root, "preferences.json"), link = path.join(root, "link.json")
+    const sentinel = '{"preferences":["unrelated"]}'
+    await fs.writeFile(filename, sentinel)
+    await fs.writeFile(path.join(root, "blocker.json"), "blocker")
+    await fs.symlink(target, link)
+    await expect(fs.realpath(link)).rejects.toMatchObject({ code })
+    await expect(fs.readFile(link, "utf8")).rejects.toMatchObject({ code })
+    await expect(JsonFile.update(link, (data) => { data.preferences = ["must not write"] }))
+      .rejects.toMatchObject({ code })
+    expect(await fs.readFile(filename, "utf8")).toBe(sentinel)
+    expect(await fs.readlink(link)).toBe(target)
+    expect((await fs.readdir(root)).toSorted()).toEqual(["blocker.json", "link.json", "preferences.json"])
+  })
+}
+
+test("directory and leaf symlinks share the native forty-hop limit", async () => {
+  const root = await directory()
+  const real = path.join(root, "real"), alias = path.join(root, "alias")
+  await fs.mkdir(real)
+  await fs.symlink("real", alias, "dir")
+  const filename = path.join(real, "preferences.json")
+  const sentinel = '{"preferences":["unchanged"]}'
+  await fs.writeFile(filename, sentinel)
+  for (let index = 39; index >= 0; index--) {
+    await fs.symlink(index === 39 ? "preferences.json" : `link-${index + 1}`, path.join(real, `link-${index}`))
+  }
+  const fortyOne = path.join(alias, "link-0")
+  await expect(fs.realpath(fortyOne)).rejects.toMatchObject({ code: "ELOOP" })
+  await expect(fs.readFile(fortyOne, "utf8")).rejects.toMatchObject({ code: "ELOOP" })
+  await expect(JsonFile.update(fortyOne, (data) => { data.preferences = ["must not write"] }))
+    .rejects.toMatchObject({ code: "ELOOP" })
+  expect(await fs.readFile(filename, "utf8")).toBe(sentinel)
+})
