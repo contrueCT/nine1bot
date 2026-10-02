@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test"
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
@@ -7,6 +7,10 @@ import { RememberTool } from "../../src/tool/remember"
 import { Instance } from "../../src/project/instance"
 import { Preferences } from "../../src/preferences"
 import { Agent } from "../../src/agent/agent"
+import { JsonFile } from "../../src/util/json-file"
+import { Lock } from "../../src/util/lock"
+import { SessionPrompt } from "../../src/session/prompt"
+import type { Provider } from "../../src/provider/provider"
 import { Config } from "../../src/config/config"
 import { Session } from "../../src/session"
 import { SessionRuntimeProfile } from "../../src/runtime/session/profile"
@@ -232,3 +236,133 @@ test("terminal preview visibly escapes controls in content and directory without
   expect(stored.content).toBe(content)
   expect(JSON.parse(await fs.readFile(process.env.NINE1BOT_PREFERENCES_PATH!, "utf8")).preferences[0].content).toBe(content)
 })
+
+async function productionRemember(session: Session.Info, controller: AbortController, sdkController = new AbortController()) {
+  const resolved = await SessionPrompt._testing.resolveTools({
+    agent: (await Agent.get("build"))!,
+    model: { id: "test", providerID: "test", api: { id: "test" } } as Provider.Model,
+    session,
+    processor: { message: { id: "msg_remember_cancel" }, partFromToolCall: () => undefined } as never,
+    bypassAgentCheck: false,
+    messages: [],
+    tools: { "*": false, remember: true },
+    templateIds: [],
+    abort: controller.signal,
+  })
+  return async (content: string) => resolved.tools.remember.execute!(
+    { content, scope: "project" },
+    { toolCallId: "call_remember", messages: [], abortSignal: sdkController.signal },
+  )
+}
+
+test("production remember cancellation removes its approval and ignores late approval without writing", async () => {
+  await Instance.provide({ directory: root, fn: async () => {
+    const session = await Session.createNext({ directory: root, runtimeProfile: emptyProfile() })
+    const controller = new AbortController()
+    const sdkController = new AbortController()
+    const execute = await productionRemember(session, controller, sdkController)
+    const result = execute("cancel before approval").catch((error) => error)
+    const request = await pendingRemember(session.id)
+    controller.abort(new Error("parent cancelled remember"))
+    expect(await result).toMatchObject({ message: "parent cancelled remember" })
+    expect(await PermissionNext.list()).toEqual([])
+    await PermissionNext.reply({ requestID: request.id, reply: "once" })
+    expect(sdkController.signal.aborted).toBe(false)
+    expect(await fs.stat(process.env.NINE1BOT_PREFERENCES_PATH!).catch(() => null)).toBeNull()
+  } })
+})
+
+test("already-aborted remember never queues approval or writes through either direct or production execution", async () => {
+  await Instance.provide({ directory: root, fn: async () => {
+    const session = await Session.createNext({ directory: root, runtimeProfile: emptyProfile() })
+    const controller = new AbortController()
+    const execute = await productionRemember(session, controller)
+    const context = await realRememberContext(session.id, "build", controller)
+    controller.abort(new Error("already stopped"))
+    await expect(execute("must not write")).rejects.toThrow("already stopped")
+    const tool = await RememberTool.init()
+    await expect(tool.execute({ content: "must not write", scope: "global" }, context)).rejects.toThrow("already stopped")
+    expect(await PermissionNext.list()).toEqual([])
+    expect(await fs.stat(process.env.NINE1BOT_PREFERENCES_PATH!).catch(() => null)).toBeNull()
+  } })
+})
+
+test("production remember cancelled while waiting for storage lock never commits after lock release", async () => {
+  await Instance.provide({ directory: root, fn: async () => {
+    const session = await Session.createNext({ directory: root, runtimeProfile: emptyProfile() })
+    const controller = new AbortController()
+    const execute = await productionRemember(session, controller)
+    const target = await JsonFile.canonical(process.env.NINE1BOT_PREFERENCES_PATH!)
+    const held = await Lock.write(target)
+    const waiting = Promise.withResolvers<void>()
+    const original = Lock.write
+    const lockSpy = spyOn(Lock, "write").mockImplementation(async (key) => {
+      if (key === target) waiting.resolve()
+      return original(key)
+    })
+    let released = false
+    const result = execute("cancel while serialized").catch((error) => error)
+    try {
+      const request = await pendingRemember(session.id)
+      await PermissionNext.reply({ requestID: request.id, reply: "once" })
+      await waiting.promise
+      controller.abort(new Error("cancelled behind storage lock"))
+      held[Symbol.dispose]()
+      released = true
+      expect(await result).toMatchObject({ message: "cancelled behind storage lock" })
+      expect(await fs.stat(target).catch(() => null)).toBeNull()
+      expect((await fs.readdir(root)).filter((name) => name.endsWith(".tmp"))).toEqual([])
+    } finally {
+      if (!released) held[Symbol.dispose]()
+      controller.abort()
+      lockSpy.mockRestore()
+      await result
+    }
+    // Cancellation must release its acquired lock for later legitimate writes.
+    await Preferences.add({ content: "later successful write" }, { projectID: Instance.project.id, directory: root })
+    expect(JSON.parse(await fs.readFile(target, "utf8")).preferences.map((entry: Preferences.Info) => entry.content)).toEqual(["later successful write"])
+  } })
+})
+
+test("cancelled preference temporary-file write is cleaned up before atomic rename", async () => {
+  const target = process.env.NINE1BOT_PREFERENCES_PATH!
+  const controller = new AbortController()
+  const original = fs.writeFile
+  const writeSpy = spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+    await original(...args)
+    if (String(args[0]).startsWith(target + ".") && String(args[0]).endsWith(".tmp")) {
+      controller.abort(new Error("cancelled during temporary write"))
+    }
+  })
+  try {
+    await expect(Preferences.add({ content: "must not commit" }, { projectID: "test", directory: root }, target, controller.signal))
+      .rejects.toThrow("cancelled during temporary write")
+    expect(await fs.stat(target).catch(() => null)).toBeNull()
+    expect((await fs.readdir(root)).filter((name) => name.endsWith(".tmp"))).toEqual([])
+  } finally {
+    writeSpy.mockRestore()
+  }
+})
+
+for (const existing of [false, true]) {
+  test(`cancellation during atomic rename rolls back the preference file (existing=${existing})`, async () => {
+    const target = process.env.NINE1BOT_PREFERENCES_PATH!
+    const before = '{\n  "version": 1, "preferences": [], "unrelated": "preserve"\n}\n'
+    if (existing) await fs.writeFile(target, before)
+    const controller = new AbortController()
+    const original = fs.rename
+    const renameSpy = spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await original(...args)
+      if (String(args[1]) === target) controller.abort(new Error("cancelled during atomic rename"))
+    })
+    try {
+      await expect(Preferences.add({ content: "must roll back" }, { projectID: "test", directory: root }, target, controller.signal))
+        .rejects.toThrow("cancelled during atomic rename")
+      if (existing) expect(await fs.readFile(target, "utf8")).toBe(before)
+      else expect(await fs.stat(target).catch(() => null)).toBeNull()
+      expect((await fs.readdir(root)).filter((name) => name.endsWith(".tmp"))).toEqual([])
+    } finally {
+      renameSpy.mockRestore()
+    }
+  })
+}

@@ -66,7 +66,8 @@ export namespace JsonFile {
     return text.endsWith("\n") ? text : text + "\n"
   }
 
-  export async function write(filename: string, text: string, mode = 0o600) {
+  export async function write(filename: string, text: string, mode = 0o600, signal?: AbortSignal) {
+    signal?.throwIfAborted()
     await fs.mkdir(path.dirname(filename), { recursive: true })
     // Atomic replacement would otherwise bypass the target file's read-only mode.
     // Honor an explicit chmod even when the containing directory is writable.
@@ -77,9 +78,11 @@ export namespace JsonFile {
     if (current && (current.mode & 0o222) === 0) {
       throw Object.assign(new Error(`Configuration file is read-only: ${filename}`), { code: "EACCES" })
     }
+    signal?.throwIfAborted()
     const temporary = `${filename}.${randomUUID()}.tmp`
     try {
-      await fs.writeFile(temporary, text, { mode, flag: "wx" })
+      await fs.writeFile(temporary, text, { mode, flag: "wx", signal })
+      signal?.throwIfAborted()
       await fs.rename(temporary, filename)
     } finally {
       await fs.unlink(temporary).catch((error) => {
@@ -89,23 +92,34 @@ export namespace JsonFile {
   }
 
   /** Validate/mutate all documents before committing. Roll back completed writes on I/O failure. */
-  export async function transaction(filenames: string[], edit: (documents: Document[]) => void | Promise<void>) {
+  export async function transaction(filenames: string[], edit: (documents: Document[]) => void | Promise<void>, signal?: AbortSignal) {
+    signal?.throwIfAborted()
     const paths = await Promise.all(filenames.map(canonical))
     if (new Set(paths).size !== paths.length) throw new Error("Configuration sources must use distinct files")
     const locks: Disposable[] = []
     try {
-      for (const filename of [...paths].sort()) locks.push(await Lock.write(filename))
+      for (const filename of [...paths].sort()) {
+        signal?.throwIfAborted()
+        locks.push(await Lock.write(filename))
+        // A cancelled caller may have been waiting behind another writer.
+        signal?.throwIfAborted()
+      }
       const originals = await Promise.all(paths.map(read))
+      signal?.throwIfAborted()
       const documents = structuredClone(originals)
       await edit(documents)
+      signal?.throwIfAborted()
       const written: Document[] = []
       try {
         for (let index = 0; index < documents.length; index++) {
           const original = originals[index]
           const document = documents[index]
           if (JSON.stringify(original.data) === JSON.stringify(document.data)) continue
-          await write(document.path, render(original.text, original.data, document.data), document.mode)
+          await write(document.path, render(original.text, original.data, document.data), document.mode, signal)
           written.push(original)
+          // If cancellation arrived during the atomic rename, roll back under
+          // the same locks. Rollback deliberately ignores the cancelled signal.
+          signal?.throwIfAborted()
         }
       } catch (error) {
         const rollbackErrors: unknown[] = []
@@ -127,10 +141,10 @@ export namespace JsonFile {
     }
   }
 
-  export async function update(filename: string, edit: (data: Object) => void | Promise<void>) {
+  export async function update(filename: string, edit: (data: Object) => void | Promise<void>, signal?: AbortSignal) {
     const [data] = await transaction([filename], async ([document]) => {
       await edit(document.data)
-    })
+    }, signal)
     return data
   }
 }

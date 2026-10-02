@@ -107,7 +107,8 @@ export namespace Preferences {
     }
   }
 
-  export async function add(input: z.infer<typeof Add>, context: Context, globalPath = filename()): Promise<Info> {
+  export async function add(input: z.infer<typeof Add>, context: Context, globalPath = filename(), signal?: AbortSignal): Promise<Info> {
+    signal?.throwIfAborted()
     const parsed = Add.parse(input)
     const scope = parsed.scope ?? "global"
     const preference: Info = {
@@ -122,7 +123,7 @@ export namespace Preferences {
       const preferences = entries(data)
       data.version ??= 1
       data.preferences = [...preferences, preference]
-    })
+    }, signal)
     return preference
   }
 

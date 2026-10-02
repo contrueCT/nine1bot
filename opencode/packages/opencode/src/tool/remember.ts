@@ -12,11 +12,14 @@ export const RememberTool = Tool.define("remember", {
     scope: z.enum(["global", "project"]).describe("Required scope: all projects or this session's project"),
   }),
   async execute(input, ctx) {
+    ctx.abort.throwIfAborted()
     if (!Preferences.enabled()) throw new Error("Preferences are only available in Nine1Bot")
     // cwd is supplied by the session executor, never by model arguments.
     const directory = await Instance.normalizeDirectory(ctx.cwd)
+    ctx.abort.throwIfAborted()
     const { project } = await Project.fromDirectory(directory)
     const context = { projectID: project.id, directory: project.rootDirectory, workingDirectory: directory }
+    ctx.abort.throwIfAborted()
     const content = Preferences.Content.parse(input.content)
     const metadata = { content, scope: input.scope, directory: context.directory }
     await ctx.ask({
@@ -25,7 +28,8 @@ export const RememberTool = Tool.define("remember", {
       always: [input.scope === "global" ? "global" : `project:${project.id}`],
       metadata: { ...metadata, description: rememberPermissionDescription(metadata) },
     })
-    const preference = await Preferences.add({ ...input, content, source: "ai" }, context)
+    ctx.abort.throwIfAborted()
+    const preference = await Preferences.add({ ...input, content, source: "ai" }, context, undefined, ctx.abort)
     return { title: "Preference saved", output: JSON.stringify(preference), metadata: { preference } }
   },
 })
