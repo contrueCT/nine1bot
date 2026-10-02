@@ -19,7 +19,7 @@ export type BridgeServer = {
   pressKey(...args: any[]): Promise<any>
   scroll(...args: any[]): Promise<any>
   waitForText(...args: any[]): Promise<any>
-  handleDialog(...args: any[]): Promise<any>
+  handleDialog(tabId: string, action: "accept" | "dismiss", promptText?: string, browser?: "user" | "bot"): Promise<void>
   locateElements(...args: any[]): Promise<any>
   findElements(...args: any[]): Promise<any>
   uploadFile(...args: any[]): Promise<any>
