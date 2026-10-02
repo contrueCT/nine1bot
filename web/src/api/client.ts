@@ -1740,6 +1740,7 @@ export const api = {
 
       eventSource.onerror = () => {
         if (closed) return
+        options.onDisconnect?.()
         if (eventSource?.readyState === EventSource.CLOSED && reconnectAttempts < maxReconnectAttempts) {
           reconnectAttempts++
           const delay = baseReconnectDelay * Math.pow(2, reconnectAttempts - 1)
@@ -1749,6 +1750,8 @@ export const api = {
               connect()
             }
           }, delay)
+        } else if (eventSource?.readyState === EventSource.CLOSED) {
+          options.onGiveUp?.()
         }
       }
 

@@ -111,4 +111,21 @@ describe('session runtime event subscription', () => {
     expect(globalUrl.searchParams.get('content')).toBe('false')
     globalSubscription.close()
   })
+
+  it('notifies global native-stream interruption before its automatic reconnect', async () => {
+    let connected = false
+    const subscription = api.subscribeGlobalEvents(() => {}, {
+      onOpen: () => { connected = true },
+      onDisconnect: () => { connected = false },
+    })
+    FakeEventSource.latest.open()
+    await subscription.ready
+    expect(connected).toBe(true)
+    FakeEventSource.latest.readyState = FakeEventSource.CONNECTING
+    FakeEventSource.latest.onerror?.(new Event('error'))
+    expect(connected).toBe(false)
+    FakeEventSource.latest.open()
+    expect(connected).toBe(true)
+    subscription.close()
+  })
 })
