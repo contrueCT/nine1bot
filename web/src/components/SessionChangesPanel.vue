@@ -9,6 +9,7 @@ const props = defineProps<{
   directory: string
   sessionTitle?: string
   isStreaming: boolean
+  revision?: number
 }>()
 const emit = defineEmits<{ close: [] }>()
 const root = ref<HTMLElement>()
@@ -34,6 +35,7 @@ watch(() => [props.sessionId, props.directory], () => {
 watch(() => props.isStreaming, (running, wasRunning) => {
   if (wasRunning && !running) void refresh()
 })
+watch(() => props.revision, () => { void refresh() })
 onUnmounted(reset)
 useModalFocus(root, () => emit('close'))
 </script>
@@ -53,7 +55,7 @@ useModalFocus(root, () => emit('close'))
       </div>
     </header>
     <p class="changes-note">查看会话快照中的变更前后内容。快照可能包含会话期间的其他操作；提交前请核对当前工作区和测试结果。</p>
-    <p v-if="isStreaming" class="changes-note" role="status">任务仍在运行，当前只显示已记录的快照；结束后会刷新。</p>
+    <p v-if="isStreaming" class="changes-note" role="status">任务仍在运行，当前只显示已记录的快照；结束后会尝试刷新，快照生成完成后会再次更新。</p>
     <div v-if="error" class="changes-error" role="alert">
       {{ error }}<span v-if="loadedAt">，下方保留上次成功读取的快照</span>
       <button type="button" class="btn btn-ghost" :disabled="loading" @click="refresh">重试</button>

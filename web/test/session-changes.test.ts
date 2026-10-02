@@ -81,3 +81,13 @@ describe('session change review', () => {
     expect(state.loadedAt.value).toBeNull()
   })
 })
+
+import { isCurrentSessionDiff } from '../src/utils/session-diff-event'
+
+test('snapshot publication refreshes only its currently selected owner', () => {
+  expect(isCurrentSessionDiff({ type: 'session.diff', properties: { sessionID: 'A' } }, 'A')).toBe(true)
+  expect(isCurrentSessionDiff({ type: 'session.diff', properties: { sessionID: 'A' } }, 'B')).toBe(false)
+  expect(isCurrentSessionDiff({ type: 'session.updated', properties: { sessionID: 'A' } }, 'A')).toBe(false)
+  expect(isCurrentSessionDiff(undefined, 'A')).toBe(false)
+  expect(isCurrentSessionDiff({ type: 'session.diff', properties: { sessionID: 'A' } }, undefined)).toBe(false)
+})

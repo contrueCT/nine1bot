@@ -27,6 +27,7 @@ import { Globe2, LogOut, Plus, RefreshCw, Settings, Terminal } from 'lucide-vue-
 import { getTrustedExtensionParentContext, isTrustedExtensionParentEvent } from './utils/extension-parent'
 import { useAccessAuth } from './composables/useAccessAuth'
 import { parseSettingsDeepLink } from './utils/settings-deeplink'
+import { isCurrentSessionDiff } from './utils/session-diff-event'
 
 import { MAX_PARALLEL_AGENTS } from './composables/useParallelSessions'
 
@@ -213,6 +214,7 @@ const showTodoList = ref(false)
 // Plan面板状态
 const showPlanPanel = ref(false)
 const showChangesPanel = ref(false)
+const changesRevision = ref(0)
 
 // MCP project panel state
 const showMcpPanel = ref(false)
@@ -407,6 +409,10 @@ function subscribeGlobalEvents() {
 
   globalEventSource = api.subscribeGlobalEvents((event: GlobalSSEEventEnvelope) => {
     const payload = event.payload
+    if (isCurrentSessionDiff(payload, currentSession.value?.id)) {
+      changesRevision.value += 1
+      return
+    }
     if (payload?.type === 'session.updated') {
       applySessionTitle(payload.properties?.info)
       applyRecentSessionTitle(payload.properties?.info)
@@ -1265,9 +1271,11 @@ function handlePromptSelect(prompt: string) {
           </div>
         </template>
 
-        <div v-if="showChangesPanel && currentSession" class="panel-overlay" @click.self="showChangesPanel = false">
-          <SessionChangesPanel :sessionId="currentSession.id" :directory="currentSession.directory" :sessionTitle="currentSession.title" :isStreaming="isStreaming" @close="showChangesPanel = false" />
-        </div>
+        <Teleport to="body">
+          <div v-if="showChangesPanel && currentSession" class="changes-overlay" @click.self="showChangesPanel = false">
+            <SessionChangesPanel :sessionId="currentSession.id" :directory="currentSession.directory" :sessionTitle="currentSession.title" :isStreaming="isStreaming" :revision="changesRevision" @close="showChangesPanel = false" />
+          </div>
+        </Teleport>
 
         <!-- Plan Panel (click outside to close) -->
         <div v-if="showPlanPanel" class="panel-overlay" @click.self="showPlanPanel = false">
@@ -1597,6 +1605,18 @@ function handlePromptSelect(prompt: string) {
 
 .extension-chat-body :deep(.input-container) {
   padding-bottom: 0;
+}
+
+/* A viewport-level overlay avoids clipping by the chat/sidebar/preview columns. */
+.changes-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(10, 10, 12, 0.35);
 }
 
 .panel-overlay {

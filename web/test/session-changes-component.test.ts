@@ -134,3 +134,26 @@ test('a binary or empty-file snapshot is not presented as verified empty content
   expect(text(root)).toContain('此快照未提供文本差异')
   expect(descendants(root).some(item => item.type === 'pre')).toBe(false)
 })
+
+test('diff publication after idle replaces an early empty snapshot without losing expansion', async () => {
+  let published = false
+  api.getSessionChanges = async () => published ? [{ file: 'late.ts', before: '', after: 'persisted', additions: 1, deletions: 0 }] : []
+  const running = Vue.ref(true)
+  const revision = Vue.ref(0)
+  const root = await mount(() => ({ sessionId: 'A', directory: '/A', isStreaming: running.value, revision: revision.value }))
+  running.value = false; await settle()
+  expect(text(root)).toContain('尚无已记录的文件变更')
+  published = true
+  revision.value++; await settle()
+  expect(text(root)).toContain('late.ts')
+  button(root, 'late.ts').props.onClick(); await settle()
+  revision.value++; await settle()
+  expect(text(root)).toContain('persisted')
+})
+
+test('the dialog host uses a viewport overlay outside clipped application columns', async () => {
+  const source = await Bun.file(new URL('../src/App.vue', import.meta.url)).text()
+  expect(source).toMatch(/<Teleport to="body">\s*<div v-if="showChangesPanel && currentSession" class="changes-overlay"/)
+  expect(source).toMatch(/\.changes-overlay\s*\{\s*position:\s*fixed;\s*inset:\s*0;/)
+  expect(source).toContain(':revision="changesRevision"')
+})
