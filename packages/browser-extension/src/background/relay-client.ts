@@ -44,6 +44,19 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 30000
 // The bridge stops waiting after 30s; a command must not outlive that budget.
 const MAX_COMMAND_TIMEOUT_MS = 30000
 
+function normalizeCommandTimeoutMs(timeoutMs: unknown): number {
+  // Invalid input must not disable the deadline. Rounding a finite positive
+  // value up guarantees a minimum delay of 1ms.
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return DEFAULT_COMMAND_TIMEOUT_MS
+  }
+  const roundedMs = Math.ceil(timeoutMs)
+  if (roundedMs > MAX_COMMAND_TIMEOUT_MS) {
+    return MAX_COMMAND_TIMEOUT_MS
+  }
+  return roundedMs
+}
+
 let configuredServerOrigin = DEFAULT_SERVER_ORIGIN
 let pairedInstanceId: string | null = null
 
@@ -514,12 +527,7 @@ async function executeTrackedCommand<T>(options: {
     })
   }
 
-  // Relay input is untrusted: invalid values must never disable the deadline,
-  // and large values must not overflow the browser's timer delay.
-  let deadlineMs = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.max(1, Math.ceil(timeoutMs))
-    : DEFAULT_COMMAND_TIMEOUT_MS
-  if (deadlineMs > MAX_COMMAND_TIMEOUT_MS) deadlineMs = MAX_COMMAND_TIMEOUT_MS
+  const deadlineMs = normalizeCommandTimeoutMs(timeoutMs)
   const timeoutHandle = setTimeout(() => {
     command.cancelReason = 'timeout'
     controller.abort('timeout')
