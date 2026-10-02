@@ -1,4 +1,4 @@
-import { rememberPermissionDescription } from "@/preferences/permission"
+import { rememberPermissionDescription, REMEMBER_SESSION_GRANT_NOTICE } from "@/preferences/permission"
 import { createStore } from "solid-js/store"
 import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
@@ -151,7 +151,7 @@ export function PermissionPrompt(props: { request: PermissionRequest }) {
             <Switch>
               <Match when={props.request.permission === "remember"}>
                 <scrollbox height="100%">
-                  <TextBody title="Allow future preference saves in this scope without reviewing each one until OpenCode restarts." description={rememberDescription() ?? "Preference preview is missing. Cancel this request."} />
+                  <TextBody title={REMEMBER_SESSION_GRANT_NOTICE} description={rememberDescription() ?? "Preference preview is missing. Cancel this request."} />
                 </scrollbox>
               </Match>
               <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
