@@ -153,6 +153,7 @@ test.each(["directory", "empty-git"])("%s preferences can be explicitly recovere
   const saved = await addPreference({ content: "before first commit sentinel", scope: "project" }, a)
   const disposable = await request(a, "/", "POST", { content: "recoverable deletion", scope: "project" }).then((res) => res.json())
   const oldID = saved.projectID
+  if (typeof oldID !== "string") throw new Error("Expected a project-scoped preference identity")
   expect(oldID).toStartWith("dir_")
   expect(await prompt(a)).toContain(saved.content)
   const original = await fs.readFile(process.env.NINE1BOT_PREFERENCES_PATH!, "utf8")

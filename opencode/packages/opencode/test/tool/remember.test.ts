@@ -297,7 +297,7 @@ test("remember, routes, wrapper and prompts keep the session owner after its fir
   await Instance.provide({ directory: root, fn: async () => {
     expect(Instance.project.id).not.toBe(owner)
     const app = new Hono().route("/preferences", PreferencesRoutes())
-    const state = await app.request("/preferences").then((response) => response.json())
+    const state = await (await app.request("/preferences")).json()
     expect(state.project).toEqual([])
     expect(state.unresolved).toHaveLength(2)
     expect(state.unresolved.every((entry: { projectID: string }) => entry.projectID === owner)).toBe(true)
