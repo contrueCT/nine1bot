@@ -5,7 +5,7 @@
 
 import { spawn, type ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
-import { mkdir, rm } from 'fs/promises'
+import { mkdir } from 'fs/promises'
 import { tmpdir, homedir, platform } from 'os'
 import { join } from 'path'
 import { getCdpVersion } from './cdp'
@@ -26,6 +26,7 @@ export interface ChromeLaunchOptions {
   userDataDir?: string
   executablePath?: string
   args?: string[]
+  startupTimeoutMs?: number
 }
 
 /**
@@ -78,22 +79,31 @@ export function detectChromeExecutable(): string | null {
   return null
 }
 
-/**
- * 等待 CDP 端点可用
- */
-async function waitForCdp(cdpUrl: string, timeout = 30000): Promise<void> {
-  const startTime = Date.now()
-
-  while (Date.now() - startTime < timeout) {
+/** Poll only while this launch owns a live process and its startup deadline. */
+async function waitForCdp(cdpUrl: string, signal: AbortSignal): Promise<void> {
+  while (!signal.aborted) {
     try {
-      await getCdpVersion(cdpUrl)
-      return
+      const response = await fetch(new URL('/json/version', cdpUrl), { signal })
+      if (response.ok) {
+        await response.json()
+        signal.throwIfAborted()
+        return
+      }
     } catch {
-      await new Promise(resolve => setTimeout(resolve, 200))
+      signal.throwIfAborted()
     }
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer)
+        signal.removeEventListener('abort', finish)
+        resolve()
+      }
+      const timer = setTimeout(finish, 200)
+      signal.addEventListener('abort', finish, { once: true })
+      if (signal.aborted) finish()
+    })
   }
-
-  throw new Error(`CDP endpoint not available after ${timeout}ms`)
+  signal.throwIfAborted()
 }
 
 /**
@@ -134,42 +144,114 @@ export async function launchChrome(options: ChromeLaunchOptions = {}): Promise<C
     ...(options.args ?? []),
   ]
 
-  // 启动 Chrome 进程
-  const chromeProcess = spawn(executablePath, args, {
-    detached: false,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
-  const pid = chromeProcess.pid
-  if (!pid) {
-    throw new Error('Failed to start Chrome process')
+  const cdpUrl = `http://127.0.0.1:${cdpPort}`
+  const timeoutMs = options.startupTimeoutMs ?? 30000
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('startupTimeoutMs must be a positive finite number')
   }
 
-  const cdpUrl = `http://127.0.0.1:${cdpPort}`
-
-  // 等待 CDP 端点可用
+  let chromeProcess: ChildProcess
   try {
-    await waitForCdp(cdpUrl)
+    chromeProcess = spawn(executablePath, args, {
+      detached: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
   } catch (error) {
-    chromeProcess.kill()
-    throw error
+    throw new Error(`Failed to launch Chrome: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  const startup = new AbortController()
+  let stderr = ''
+  let closed = false
+  let exited = false
+  // Drain both streams so a noisy child cannot block before opening CDP.
+  chromeProcess.stdout?.resume()
+  chromeProcess.stderr?.on('data', (chunk: Buffer | string) => {
+    stderr = (stderr + String(chunk)).slice(-4096)
+  })
+  const onError = (error: Error) => startup.abort(new Error(`Chrome process error: ${error.message}`))
+  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    exited = true
+    startup.abort(new Error(`Chrome exited before CDP became available (code ${code ?? 'none'}, signal ${signal ?? 'none'})`))
+  }
+  chromeProcess.on('error', onError)
+  chromeProcess.once('exit', onExit)
+  chromeProcess.once('close', () => { closed = true })
+
+  let stopping: Promise<void> | undefined
+  const stop = (): Promise<void> => {
+    if (stopping) return stopping
+    stopping = (async () => {
+      if (!closed) {
+        await new Promise<void>((resolve, reject) => {
+          let forceTimer: ReturnType<typeof setTimeout> | undefined
+          const finish = (error?: Error) => {
+            clearTimeout(timer)
+            if (forceTimer) clearTimeout(forceTimer)
+            chromeProcess.removeListener('close', onClose)
+            if (error) reject(error)
+            else resolve()
+          }
+          const onClose = () => finish()
+          // Kill only the child we spawned, never a process discovered via a port.
+          const timer = setTimeout(() => {
+            try {
+              if (!exited && chromeProcess.pid) chromeProcess.kill('SIGKILL')
+              forceTimer = setTimeout(() => {
+                finish(exited || closed ? undefined : new Error('Owned Chrome process did not exit after termination'))
+              }, 1000)
+            } catch (error) {
+              finish(error instanceof Error ? error : new Error(String(error)))
+            }
+          }, 5000)
+          chromeProcess.once('close', onClose)
+          try {
+            if (!exited && chromeProcess.pid) chromeProcess.kill()
+            if (closed) finish()
+          } catch (error) {
+            finish(error instanceof Error ? error : new Error(String(error)))
+          }
+        })
+      }
+    })()
+    return stopping
+  }
+
+  const deadline = setTimeout(() => {
+    startup.abort(new Error(`CDP endpoint not available after ${timeoutMs}ms`))
+  }, timeoutMs)
+  let rejectStartup: (() => void) | undefined
+  try {
+    // The race also bounds a transport that fails to honor AbortSignal.
+    await Promise.race([
+      waitForCdp(cdpUrl, startup.signal),
+      new Promise<never>((_, reject) => {
+        rejectStartup = () => reject(startup.signal.reason)
+        startup.signal.addEventListener('abort', rejectStartup, { once: true })
+        if (startup.signal.aborted) reject(startup.signal.reason)
+      }),
+    ])
+    startup.signal.throwIfAborted()
+    if (!chromeProcess.pid) throw new Error('Failed to start Chrome process')
+  } catch (error) {
+    startup.abort(error)
+    let cleanupError = ''
+    try { await stop() } catch (failure) { cleanupError = `\nCleanup failed: ${String(failure)}` }
+    const detail = stderr.trim()
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${detail ? `\nChrome stderr (last 4096 characters): ${detail}` : ''}${cleanupError}`)
+  } finally {
+    clearTimeout(deadline)
+    if (rejectStartup) startup.signal.removeEventListener('abort', rejectStartup)
   }
 
   const instance: ChromeInstance = {
     process: chromeProcess,
-    pid,
+    pid: chromeProcess.pid!,
     cdpPort,
     cdpUrl,
     userDataDir,
     executablePath,
-    stop: async () => {
-      chromeProcess.kill()
-      // 等待进程退出
-      await new Promise<void>((resolve) => {
-        chromeProcess.on('exit', resolve)
-        setTimeout(resolve, 5000) // 超时强制继续
-      })
-    },
+    stop,
   }
 
   return instance
