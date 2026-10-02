@@ -8,6 +8,7 @@ export interface SendAttempt extends MessageAttempt {
   planMode: boolean
   attachments: FileAttachment[]
   status: 'sending' | 'failed'
+  generation: number
 }
 
 export interface ComposerDraft {
@@ -46,6 +47,7 @@ export function beginSend(draft: ComposerDraft): SendAttempt {
     planMode: draft.planMode,
     attachments: [...draft.uploads.attachments.value],
     status: 'sending',
+    generation: 0,
   })
   draft.text = ''
   draft.planMode = false
@@ -54,7 +56,8 @@ export function beginSend(draft: ComposerDraft): SendAttempt {
   return attempt
 }
 
-export function finishSend(draft: ComposerDraft, attempt: SendAttempt, success: boolean) {
+export function finishSend(draft: ComposerDraft, attempt: SendAttempt, success: boolean, generation = attempt.generation) {
+  if (attempt.generation !== generation || !draft.attempts.includes(attempt)) return
   if (!success) {
     attempt.status = 'failed'
     return
@@ -66,6 +69,7 @@ export function finishSend(draft: ComposerDraft, attempt: SendAttempt, success: 
 export function restoreAttempt(draft: ComposerDraft, attempt: SendAttempt) {
   // An uncertain POST may already be accepted. Only replay its original ID/payload.
   if (attempt.submitted || draft.text || draft.uploads.attachments.value.length) return false
+  attempt.generation++
   draft.text = attempt.text
   draft.planMode = attempt.planMode
   draft.uploads.attachments.value = attempt.attachments

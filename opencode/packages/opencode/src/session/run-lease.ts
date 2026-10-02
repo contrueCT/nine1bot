@@ -20,6 +20,47 @@ export namespace RunLease {
     },
   )
 
+  export type PendingAdmission = Disposable & {
+    sessionID: string
+    controller: AbortController
+    bindOwner(): void
+  }
+  const pending = new Map<string, Set<PendingAdmission>>()
+  const pendingOwned = Instance.state(
+    () => new Set<PendingAdmission>(),
+    async (admissions) => {
+      for (const admission of admissions) {
+        admission.controller.abort()
+        admission[Symbol.dispose]()
+      }
+    },
+  )
+
+  // Register synchronously before looking up request receipts. This permits Stop
+  // while distinguishing new work from a side-effect-free replay; it neither
+  // claims execution ownership nor replaces an unrelated running turn.
+  export function trackAdmission(sessionID: string): PendingAdmission {
+    const group = pending.get(sessionID) ?? new Set<PendingAdmission>()
+    const owners = new Set<Set<PendingAdmission>>()
+    const admission: PendingAdmission = {
+      sessionID,
+      bindOwner() {
+        const owned = pendingOwned()
+        owned.add(admission)
+        owners.add(owned)
+      },
+      controller: new AbortController(),
+      [Symbol.dispose]() {
+        for (const owner of owners) owner.delete(admission)
+        group.delete(admission)
+        if (group.size === 0 && pending.get(sessionID) === group) pending.delete(sessionID)
+      },
+    }
+    group.add(admission)
+    pending.set(sessionID, group)
+    return admission
+  }
+
   export function reserve(sessionID: string, signal?: AbortSignal): Info {
     signal?.throwIfAborted()
     if (active.has(sessionID)) throw new Session.BusyError(sessionID)
@@ -46,9 +87,11 @@ export namespace RunLease {
 
   export function cancel(sessionID: string): boolean {
     const lease = current(sessionID)
-    if (!lease) return false
-    lease.controller.abort()
-    return true
+    const admissions = pending.get(sessionID)
+    const cancelled = Boolean(lease || admissions?.size)
+    lease?.controller.abort()
+    for (const admission of admissions ?? []) admission.controller.abort()
+    return cancelled
   }
 
   export function release(sessionID: string, leaseID: string): boolean {

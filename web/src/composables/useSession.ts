@@ -63,7 +63,7 @@ export function useSession() {
     clearSession
   } = useParallelSessions()
 
-  type LocalSend = { key: string; sessionID?: string; cancelled: boolean; posted: boolean }
+  type LocalSend = { key: string; sessionID?: string; cancelled: boolean; posted: boolean; onCancel?: () => void }
   const localSends = ref<LocalSend[]>([])
   const ownsCurrentView = (send: LocalSend) => send.sessionID
     ? send.sessionID === currentSession.value?.id
@@ -112,8 +112,13 @@ export function useSession() {
     const sessionID = currentSession.value?.id
     return () => version === selectionVersion && sessionID === currentSession.value?.id
   }
+  function cancelLocalSend(send: LocalSend) {
+    if (send.cancelled) return
+    send.cancelled = true
+    send.onCancel?.()
+  }
   function cancelPreflight() {
-    for (const send of localSends.value) if (!send.posted) send.cancelled = true
+    for (const send of localSends.value) if (!send.posted) cancelLocalSend(send)
   }
   const pendingCreations = new Map<string, Promise<Session>>()
   let sessionsLoadVersion = 0
@@ -573,7 +578,7 @@ export function useSession() {
       attempt.modelCaptured = true
     }
     const originalFiles = files?.map(file => ({ ...file }))
-    const send: LocalSend = { key: composerKey.value, sessionID: currentSession.value?.id, cancelled: false, posted: false }
+    const send: LocalSend = { key: composerKey.value, sessionID: currentSession.value?.id, cancelled: false, posted: false, onCancel: attempt.onCancel }
     localSends.value.push(send)
     // Vue proxies objects inserted into refs; keep the proxy for reactive cancellation.
     const operation = localSends.value[localSends.value.length - 1]
@@ -649,7 +654,7 @@ export function useSession() {
       return false
     } finally {
       localSends.value = localSends.value.filter(item => item !== operation)
-      if (isOwner()) streamingMessage.value = null
+      if (isCurrentSend()) streamingMessage.value = null
     }
   }
 
@@ -944,7 +949,7 @@ export function useSession() {
   // Abort any session by ID
   async function abortSession(sessionId: string) {
     const local = localSends.value.filter(send => send.sessionID === sessionId)
-    for (const send of local) send.cancelled = true
+    for (const send of local) cancelLocalSend(send)
     if (local.length && local.every(send => !send.posted) && !isSessionRunning(sessionId)) return
     try {
       await api.abortSession(sessionId)
@@ -966,7 +971,7 @@ export function useSession() {
   }
 
   async function abortCurrentSession() {
-    for (const send of localSends.value) if (ownsCurrentView(send)) send.cancelled = true
+    for (const send of localSends.value) if (ownsCurrentView(send)) cancelLocalSend(send)
     if (currentSession.value) {
       await abortSession(currentSession.value.id)
     }

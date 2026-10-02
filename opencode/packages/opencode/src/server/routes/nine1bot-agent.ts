@@ -376,7 +376,11 @@ const preparingMessages = new Map<string, {
   pending: ReturnType<typeof prepareControllerMessage>
 }>()
 
-export async function sendControllerMessage(sessionID: string, body: RuntimeControllerProtocol.MessageSendRequest) {
+export async function sendControllerMessage(
+  sessionID: string,
+  body: RuntimeControllerProtocol.MessageSendRequest,
+  admission?: RunLease.PendingAdmission,
+) {
   SessionRequest.assertIdentity(body)
   const fingerprint = SessionRequest.fingerprint(body)
   const key = body.requestID ? `request:${body.requestID}` : body.messageID ? `message:${body.messageID}` : undefined
@@ -389,7 +393,7 @@ export async function sendControllerMessage(sessionID: string, body: RuntimeCont
     }
     return awaitPreparedMessage(current.pending)
   }
-  const pending = prepareControllerMessage(sessionID, body, body.requestID ? fingerprint : undefined)
+  const pending = prepareControllerMessage(sessionID, body, body.requestID ? fingerprint : undefined, admission)
   if (key) preparingMessages.set(key, { sessionID, fingerprint, pending })
   try {
     return await awaitPreparedMessage(pending)
@@ -413,26 +417,30 @@ async function prepareControllerMessage(
   sessionID: string,
   body: RuntimeControllerProtocol.MessageSendRequest,
   runtimeRequestFingerprint?: string,
+  admissionOwner?: RunLease.PendingAdmission,
 ) {
-  if (body.requestID) {
-    const replay = await SessionRequest.replayClient(sessionID, body.requestID, runtimeRequestFingerprint!)
-    if (replay) {
-      return {
-        response: { version: RuntimeControllerProtocol.VERSION, accepted: true, sessionId: sessionID, turnSnapshotId: replay.turnSnapshotId },
-        status: 202,
-      }
-    }
-  }
+  using pending = admissionOwner ?? RunLease.trackAdmission(sessionID)
+  if (pending.sessionID !== sessionID) throw new Error("Controller admission belongs to another session")
+  pending.bindOwner()
   let turnSnapshotId = ulid()
   let preparedBody = body
   let admission: RunLease.Info | undefined
   let handedOff = false
   let contextEnrichment: RuntimeControllerProtocol.ContextEnrichmentSummary | undefined
   try {
+    if (body.requestID) {
+      const replay = await SessionRequest.replayClient(sessionID, body.requestID, runtimeRequestFingerprint!)
+      if (replay) {
+        return {
+          response: { version: RuntimeControllerProtocol.VERSION, accepted: true, sessionId: sessionID, turnSnapshotId: replay.turnSnapshotId },
+          status: 202,
+        }
+      }
+    }
     // Legacy accepted IDs still need their compiled payload checked, but a replay
     // must not reserve or replace the lease of an unrelated active turn.
     const acceptedLegacy = body.messageID && await SessionRequest.isAccepted(sessionID, body.messageID)
-    if (!acceptedLegacy) admission = RunLease.reserve(sessionID)
+    if (!acceptedLegacy) admission = RunLease.reserve(sessionID, pending.controller.signal)
     const configuredBody = await applyBrowserExtensionPrompt(sessionID, body)
     admission?.controller.signal.throwIfAborted()
     const prepared = await prepareFeishuControllerMessageContext(configuredBody, { cacheScope: sessionID })
@@ -465,7 +473,7 @@ async function prepareControllerMessage(
         status: 409,
       }
     }
-    if (admission?.controller.signal.aborted) {
+    if (pending.controller.signal.aborted || admission?.controller.signal.aborted) {
       throw new HTTPException(409, {
         res: Response.json({ error: { code: "REQUEST_CANCELLED", message: "请求已停止，请检查会话记录；重试将核对原请求状态。" } }, { status: 409 }),
       })
@@ -756,7 +764,7 @@ export const Nine1BotAgentRoutes = lazy(() =>
           entry: body.entry,
           protocolVersion: RuntimeControllerProtocol.VERSION,
           run: async () => {
-            const response = await sendControllerMessage(c.req.valid("param").sessionID, body)
+            const response = await sendControllerMessage(c.req.valid("param").sessionID, body, c.get("controllerAdmission"))
             return {
               status: response.status,
               accepted: response.response.accepted,

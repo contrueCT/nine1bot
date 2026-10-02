@@ -4,6 +4,7 @@ import { Session } from "../../src/session"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRequest } from "../../src/session/request"
 import { RunLease } from "../../src/session/run-lease"
+import { Storage } from "../../src/storage/storage"
 import { SessionStatus } from "../../src/session/status"
 import { Server } from "../../src/server/server"
 import { ControllerAgentRunCompiler } from "../../src/runtime/controller/agent-run-compiler"
@@ -61,6 +62,134 @@ function compileGate() {
   })
   return { started, released, compile }
 }
+
+function receiptGate(namespace: string) {
+  const started = deferred()
+  const released = deferred()
+  const original = Storage.read
+  let blocked = false
+  const read = spyOn(Storage, "read").mockImplementation(async (key, options) => {
+    if (!blocked && key[0] === namespace) {
+      blocked = true
+      started.resolve()
+      await released.promise
+    }
+    return original(key, options)
+  })
+  return { started, released, read }
+}
+
+test("Stop before the first receipt read returns cancels all copies without requiring an execution lease", async () => {
+  await fixture(async session => {
+    for (const identity of [{ requestID: "req_before_receipt" }, { messageID: Identifier.ascending("message") }]) {
+      const input = { noReply: true, parts: [{ type: "text", text: "cancel receipt lookup" }], ...identity }
+      const gate = receiptGate(identity.requestID ? "client_message_request" : "message_request")
+      try {
+        const first = send(session, input)
+        await gate.started.promise
+        expect(RunLease.current(session.id)).toBeUndefined()
+        const duplicate = send(session, input)
+        const conflict = await send(session, { ...input, parts: [{ type: "text", text: "changed" }] })
+        expect(conflict.status).toBe(409)
+        await stop(session)
+        gate.released.resolve()
+        for (const response of await Promise.all([first, duplicate])) {
+          expect(response.status).toBe(409)
+          expect(await response.json()).toMatchObject({ error: { code: "REQUEST_CANCELLED" } })
+        }
+        expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+        expect(RunLease.current(session.id)).toBeUndefined()
+        expect(SessionPrompt.cancel(session.id)).toBe(false)
+        expect((await send(session, input)).status).toBe(202)
+        const messages = await Session.messages({ sessionID: session.id })
+        expect(messages).toHaveLength(1)
+        await Session.removeMessage({ sessionID: session.id, messageID: messages[0].info.id })
+      } finally { gate.released.resolve(); gate.read.mockRestore() }
+    }
+  })
+})
+
+test("Stop covers the session-routing await before the message handler and legacy/unkeyed calls", async () => {
+  await fixture(async session => {
+    for (const identity of [{ requestID: "req_before_routing" }, { messageID: Identifier.ascending("message") }, {}]) {
+      const started = deferred()
+      const released = deferred()
+      const original = Session.get
+      let calls = 0
+      const get = spyOn(Session, "get").mockImplementation(async id => {
+        if (id === session.id && ++calls <= 2) {
+          if (calls === 2) started.resolve()
+          await released.promise
+        }
+        return original(id)
+      })
+      try {
+        const input = { noReply: true, parts: [{ type: "text", text: "cancel session routing" }], ...identity }
+        const pending = [send(session, input), send(session, input)]
+        await started.promise
+        expect(RunLease.current(session.id)).toBeUndefined()
+        await stop(session)
+        released.resolve()
+        expect((await Promise.all(pending)).map(response => response.status)).toEqual([409, 409])
+        expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+        expect(SessionPrompt.cancel(session.id)).toBe(false)
+      } finally { released.resolve(); get.mockRestore() }
+    }
+  })
+})
+
+test("accepted receipt lookup remains a replay after Stop and never borrows an unrelated lease", async () => {
+  await fixture(async session => {
+    const input = body("req_replay_receipt_gate")
+    const accepted = await send(session, input)
+    expect(accepted.status).toBe(202)
+    const turn = (await accepted.json()).turnSnapshotId
+    const gate = receiptGate("client_message_request")
+    const unrelated = RunLease.reserve(session.id)
+    try {
+      const replay = send(session, input)
+      await gate.started.promise
+      expect(RunLease.current(session.id)).toBe(unrelated)
+      expect(unrelated.controller.signal.aborted).toBe(false)
+      gate.released.resolve()
+      expect((await (await replay).json()).turnSnapshotId).toBe(turn)
+      expect(RunLease.current(session.id)).toBe(unrelated)
+      expect(unrelated.controller.signal.aborted).toBe(false)
+    } finally { gate.released.resolve(); gate.read.mockRestore(); RunLease.release(session.id, unrelated.id) }
+    const stoppedGate = receiptGate("client_message_request")
+    try {
+      const replay = send(session, input)
+      await stoppedGate.started.promise
+      expect(RunLease.current(session.id)).toBeUndefined()
+      await stop(session)
+      stoppedGate.released.resolve()
+      const response = await replay
+      expect(response.status).toBe(202)
+      expect((await response.json()).turnSnapshotId).toBe(turn)
+      expect(await Session.messages({ sessionID: session.id })).toHaveLength(1)
+      expect(await SessionRequest.isAccepted(session.id, undefined, input.requestID)).toBe(true)
+      expect(SessionPrompt.cancel(session.id)).toBe(false)
+    } finally { stoppedGate.released.resolve(); stoppedGate.read.mockRestore() }
+  })
+})
+
+test("disconnect during receipt lookup is not Stop and validation failures retire pending ownership", async () => {
+  await fixture(async session => {
+    const gate = receiptGate("client_message_request")
+    const connection = new AbortController()
+    try {
+      const pending = send(session, body("req_receipt_disconnect"), connection.signal)
+      await gate.started.promise
+      connection.abort()
+      gate.released.resolve()
+      expect((await pending).status).toBe(202)
+      expect(await Session.messages({ sessionID: session.id })).toHaveLength(1)
+      expect(SessionPrompt.cancel(session.id)).toBe(false)
+      expect((await send(session, { requestID: "invalid-id", parts: [] })).status).toBe(400)
+      expect(SessionPrompt.cancel(session.id)).toBe(false)
+    } finally { gate.released.resolve(); gate.read.mockRestore() }
+  })
+})
 
 test("Stop during compilation cancels every concurrent copy, rejects other work, and permits explicit retry", async () => {
   await fixture(async session => {

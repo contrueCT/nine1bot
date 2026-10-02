@@ -26,6 +26,7 @@ import { Global } from "../global"
 import { ProjectRoutes } from "./routes/project"
 import { SessionRoutes } from "./routes/session"
 import { Session } from "../session"
+import { RunLease } from "../session/run-lease"
 import { PtyRoutes } from "./routes/pty"
 import { McpRoutes } from "./routes/mcp"
 import { FileRoutes } from "./routes/file"
@@ -312,13 +313,20 @@ export namespace Server {
             const body = await c.req.raw.clone().json().catch(() => undefined)
             if (typeof body?.directory === "string") directory = body.directory
           }
-          return Instance.provide({
+          const sessionID = c.req.path.match(/^\/(?:session|nine1bot\/agent\/sessions)\/(ses_[^/]+)(?:\/|$)/)?.[1]
+          // Own cancellation before asynchronous instance/session routing, without
+          // reserving execution: an accepted transport replay must still work busy.
+          using admission = c.req.method === "POST" && sessionID && c.req.path === `/nine1bot/agent/sessions/${sessionID}/messages`
+            ? RunLease.trackAdmission(sessionID)
+            : undefined
+          if (admission) c.set("controllerAdmission", admission)
+          return await Instance.provide({
             directory,
             init: InstanceBootstrap,
             async fn() {
+              admission?.bindOwner()
               // A session owns its execution directory. Requests from another directory
               // in the same project must use the same bus, permissions and tool context.
-              const sessionID = c.req.path.match(/^\/(?:session|nine1bot\/agent\/sessions)\/(ses_[^/]+)(?:\/|$)/)?.[1]
               if (sessionID) {
                 const session = await Session.get(sessionID)
                 const owner = await Instance.normalizeDirectory(session.directory)

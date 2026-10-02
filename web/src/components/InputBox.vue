@@ -92,8 +92,11 @@ function handleSend() {
 function performSend(owner: ComposerDraft, attempt: SendAttempt, initial = false) {
   if ((!initial && attempt.status === 'sending') || owner.attempts.some(item => item !== attempt && item.status === 'sending')) return
   attempt.status = 'sending'
+  const generation = ++attempt.generation
+  const complete = (success: boolean) => finishSend(owner, attempt, success, generation)
+  attempt.onCancel = () => complete(false)
   const files = attempt.attachments.filter(file => file.url).map(file => ({ type: 'file' as const, mime: file.mime, filename: file.filename, url: file.url! }))
-  emit('send', attempt.text, files, attempt.planMode, success => finishSend(owner, attempt, success), attempt)
+  emit('send', attempt.text, files, attempt.planMode, complete, attempt)
 }
 
 function togglePlanMode() {

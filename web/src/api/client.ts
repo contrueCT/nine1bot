@@ -368,6 +368,8 @@ export interface MessageSubmission {
 
 export interface MessageAttempt {
   id: string
+  // Local composer completion, captured per operation; never serialized on the wire.
+  onCancel?: () => void
   modelCaptured?: boolean
   model?: { providerID: string; modelID: string }
   submission?: { sessionID: string; request: MessageSubmission }
