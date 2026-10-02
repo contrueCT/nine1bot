@@ -67,7 +67,8 @@ useModalFocus(root, () => emit('close'))
           <span class="change-path">{{ file.file }}</span>
           <span class="change-counts"><span class="added">+{{ file.additions }}</span> <span class="removed">−{{ file.deletions }}</span></span>
         </button>
-        <div v-if="opened.has(file.file)" class="change-columns">
+        <p v-if="opened.has(file.file) && !file.before && !file.after && file.additions === 0 && file.deletions === 0" class="changes-note change-no-text">此快照未提供文本差异，可能是二进制文件或空文件。请在工作区核对文件内容。</p>
+        <div v-else-if="opened.has(file.file)" class="change-columns">
           <section><h3>变更前</h3><p v-if="file.before.length > TEXT_LIMIT" class="changes-note">内容较长，仅显示前 {{ TEXT_LIMIT }} 个字符</p><pre>{{ file.before.slice(0, TEXT_LIMIT) || '（空）' }}</pre></section>
           <section><h3>变更后</h3><p v-if="file.after.length > TEXT_LIMIT" class="changes-note">内容较长，仅显示前 {{ TEXT_LIMIT }} 个字符</p><pre>{{ file.after.slice(0, TEXT_LIMIT) || '（空）' }}</pre></section>
         </div>
@@ -92,6 +93,7 @@ useModalFocus(root, () => emit('close'))
 .change-file-toggle { width: 100%; padding: 12px; background: var(--bg-secondary); color: inherit; border: none; text-align: left; cursor: pointer; }
 .change-path { min-width: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12px; }
 .change-counts { flex-shrink: 0; font-size: 12px; }
+.change-no-text { padding: 0 12px; }
 .change-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .change-columns section { min-width: 0; }
 .change-columns section + section { border-left: 1px solid var(--border-default); }

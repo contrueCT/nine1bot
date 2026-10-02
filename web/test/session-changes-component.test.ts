@@ -125,3 +125,12 @@ test('real panel refreshes once after execution ends and bounds rendered file co
   expect(calls).toBe(2)
   expect(text(root)).not.toContain('任务仍在运行')
 })
+
+
+test('a binary or empty-file snapshot is not presented as verified empty contents', async () => {
+  api.getSessionChanges = async () => [{ file: 'image.png', before: '', after: '', additions: 0, deletions: 0 }]
+  const root = await mount(() => ({ sessionId: 'A', directory: '/A', isStreaming: false }))
+  button(root, 'image.png').props.onClick(); await settle()
+  expect(text(root)).toContain('此快照未提供文本差异')
+  expect(descendants(root).some(item => item.type === 'pre')).toBe(false)
+})
