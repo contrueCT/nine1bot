@@ -226,7 +226,9 @@ export namespace CommandAnalyzer {
     const tree = p.parse(command.trim())
     if (!tree) throw new Error("Unable to parse shell command; execution was not authorized")
     try {
-      if (tree.rootNode.hasError) throw new Error("Unable to parse shell command; execution was not authorized")
+      if (tree.rootNode.hasError) {
+        throw new Error("Unable to parse shell command as Bash-compatible syntax; execution was not authorized")
+      }
 
       const directories = new Set<string>()
 
@@ -292,9 +294,40 @@ export namespace CommandAnalyzer {
         }
       }
 
-      // Assignments and redirects can have side effects without a command node.
-      // Keep their complete input in the permission request instead of allowing silently.
-      if (tree.rootNode.descendantsOfType("command").length === 0) {
+      // Redirections and assignments are executable shell operations in their own
+      // right, including when attached to cd or mixed with an allowed command.
+      for (const node of tree.rootNode.descendantsOfType([
+        "file_redirect",
+        "heredoc_redirect",
+        "herestring_redirect",
+        "variable_assignment",
+        "declaration_command",
+        "unset_command",
+        "arithmetic_expansion",
+      ])) {
+        if (!node) continue
+        result.commands.push({
+          name: node.type,
+          tokens: [node.text],
+          pattern: node.text,
+          alwaysPattern: node.text,
+        })
+      }
+
+      // Only a simple cd can omit bash permission: its literal destination is
+      // checked above. Compound or otherwise uncovered syntax must not inherit
+      // that exception just because it also contains a cd command node.
+      const statement = tree.rootNode.namedChildCount === 1 ? tree.rootNode.namedChild(0) : undefined
+      const plainCd =
+        statement?.type === "command" &&
+        statement.childForFieldName("name")?.text === "cd" &&
+        statement.namedChildren.every((child) =>
+          child && ["command_name", "word", "string", "raw_string"].includes(child.type),
+        ) &&
+        statement.descendantsOfType([
+          "expansion", "simple_expansion", "arithmetic_expansion", "command_substitution", "process_substitution",
+        ]).length === 0
+      if (result.commands.length === 0 && !plainCd) {
         result.commands.push({
           name: command.trim(),
           tokens: [command.trim()],

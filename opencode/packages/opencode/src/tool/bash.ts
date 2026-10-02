@@ -20,7 +20,7 @@ export const log = Log.create({ service: "bash-tool" })
 
 // TODO: we may wanna rename this tool so it works better on other shells
 export const BashTool = Tool.define("bash", async () => {
-  const shell = Shell.acceptable()
+  const shell = Shell.bash()
   log.info("bash tool using shell", { shell })
 
   return {

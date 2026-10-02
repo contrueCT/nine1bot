@@ -1,4 +1,4 @@
-Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures.
+Executes a given Bash-compatible command in a fresh Bash or POSIX sh process with optional timeout and permission checks. This tool always uses Bash-compatible syntax, even when the user's interactive shell is zsh, fish, or another shell. Use Bash syntax; unsupported dialect syntax is rejected before execution.
 
 All commands run in ${directory} by default. Use the `workdir` parameter if you need to run a command in a different directory. AVOID using `cd <directory> && <command>` patterns - use `workdir` instead.
 

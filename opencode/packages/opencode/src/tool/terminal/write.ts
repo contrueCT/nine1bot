@@ -7,6 +7,7 @@ import { Instance } from "../../project/instance"
 
 export const TerminalWriteTool = Tool.define("terminal_write", {
   description: `Send input to a terminal session.
+Command input must use Bash-compatible syntax. If this session was created with a different shell or has switched shells, unsupported syntax is rejected; rewrite it in Bash syntax instead. Interactive replies and control keys still use the terminal-input heuristic.
 
 Use this to:
 - Type commands and press Enter

@@ -232,3 +232,10 @@ type ResourceFailureEvent = {
 9. resource failure 不会导致 agent loop 中途自动重编译 resources。
 10. audit 能展示协议版本、能力协商、session grants 和 resource failures。
 
+## 10. 命令执行与解析方言
+
+- `bash` 工具使用 Bash 或 POSIX sh 执行命令。兼容的 `SHELL` 设置会被保留；若用户的交互 shell 是 zsh 等其他方言，执行工具会选择已安装的 Bash，或使用 POSIX sh。Windows 需要 Bash/Git Bash，不会退回 cmd.exe 执行未经匹配解析的输入。
+- `terminal_create` 新建的 agent 终端同样使用 Bash/sh。普通用户 PTY 的 shell 偏好不受此规则修改。
+- `terminal_write` 保留交互回复和控制键的识别，但被识别为命令的输入必须通过 Bash 语法解析。已有的其他 shell 终端、主动切换过 shell 的终端，以及尚未输入完整的命令，都可能因不支持或不完整的语法被拒绝。应改写成完整的 Bash 兼容命令，不会通过跳过权限检查来兼容。
+- 解析器加载失败、返回空结果或语法树含错误时，命令不会执行。普通命令、重定向和变量赋值分别进入权限评估；同一批操作中任何模式被拒绝，整批操作都不能执行。
+- 这些检查不构成完整的 shell 沙箱。路径分析仅覆盖部分命令和字面路径，无法保证解析所有动态展开目标；需要强隔离的部署仍应使用操作系统或容器的文件系统与进程边界。
