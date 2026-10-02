@@ -40,7 +40,9 @@ const RECONNECT_BASE_INTERVAL = 5000
 const RECONNECT_MAX_INTERVAL = 60000
 const HEALTH_REPORT_INTERVAL = 60000
 const AGENT_HEARTBEAT_INTERVAL = 1500
-const DEFAULT_TOOL_TIMEOUT_MS = 30000
+const DEFAULT_COMMAND_TIMEOUT_MS = 30000
+// The bridge stops waiting after 30s; a command must not outlive that budget.
+const MAX_COMMAND_TIMEOUT_MS = 30000
 
 let configuredServerOrigin = DEFAULT_SERVER_ORIGIN
 let pairedInstanceId: string | null = null
@@ -512,13 +514,15 @@ async function executeTrackedCommand<T>(options: {
     })
   }
 
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null
-  if ((timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS) > 0) {
-    timeoutHandle = setTimeout(() => {
-      command.cancelReason = 'timeout'
-      controller.abort('timeout')
-    }, timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS)
-  }
+  // Relay input is untrusted: invalid values must never disable the deadline,
+  // and large values must not overflow the browser's timer delay.
+  const deadlineMs = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.min(MAX_COMMAND_TIMEOUT_MS, Math.max(1, Math.ceil(timeoutMs)))
+    : DEFAULT_COMMAND_TIMEOUT_MS
+  const timeoutHandle = setTimeout(() => {
+    command.cancelReason = 'timeout'
+    controller.abort('timeout')
+  }, deadlineMs)
 
   let rejectOnAbort: (() => void) | undefined
   try {
@@ -549,10 +553,7 @@ async function executeTrackedCommand<T>(options: {
     throw error
   } finally {
     if (rejectOnAbort) controller.signal.removeEventListener('abort', rejectOnAbort)
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle)
-      timeoutHandle = null
-    }
+    clearTimeout(timeoutHandle)
     if (runningCommands.get(commandId) === command) {
       runningCommands.delete(commandId)
       markCommandFinish(command)

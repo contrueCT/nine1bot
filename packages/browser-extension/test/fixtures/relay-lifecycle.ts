@@ -51,7 +51,8 @@ class FakeWebSocket {
   send(data:string){this.sent.push(JSON.parse(data))}
   close(){this.readyState=3}
   open(){this.readyState=1;this.onopen?.()}
-  receive(message:any){this.onmessage?.({data:JSON.stringify(message)})}
+  receive(message:any){this.receiveRaw(JSON.stringify(message))}
+  receiveRaw(data:string){this.onmessage?.({data})}
 }
 ;(globalThis as any).WebSocket=FakeWebSocket
 const relay = await import('../../src/background/relay-client')
@@ -70,6 +71,79 @@ async function command(method:string, params:any, targetId?:string, sessionId?:s
   return ws.sent.find(x=>x.id===id)
 }
 const scenario=process.argv[2]
+if(scenario==='native_deadline_bounds'||scenario==='tool_deadline_bounds') {
+  tabs[0].url='https://inside.test'
+  await connect()
+  const isTool=scenario==='tool_deadline_bounds'
+  // Raw JSON numeric overflow reaches JSON.parse as Infinity; serializing an
+  // Infinity value with JSON.stringify would only test null instead.
+  const cases: [string, string | undefined, number][] = [
+    ['missing',undefined,30000], ['null','null',30000],
+    ['string','"5000"',30000], ['invalid string','"NaN"',30000],
+    ['boolean','true',30000], ['object','{}',30000], ['array','[]',30000],
+    ['zero','0',30000], ['negative zero','-0',30000], ['negative','-1',30000],
+    ['positive infinity','1e309',30000], ['negative infinity','-1e309',30000],
+    ['timer overflow','2147483648',30000], ['huge finite','1.7976931348623157e308',30000],
+    ['over maximum','30001',30000], ['maximum','30000',30000],
+    ['below maximum','29999',29999], ['tab refresh','5000',5000],
+    ['short deadline','50',50], ['fraction','1.5',2],
+    ['submillisecond','0.1',1], ['minimum finite','5e-324',1],
+  ]
+  for(const [label,rawTimeout,expected] of cases) {
+    for(const outcome of ['success','timeout','cancel','disconnect']) {
+      assert.equal(timers.length,0,`${label}: previous deadline leaked`)
+      let release!:()=>void
+      let signal: AbortSignal | undefined
+      const pending=new Promise<void>(resolve=>release=resolve)
+      if(isTool) {
+        toolExecutors.computer=async (_args,context)=>{
+          signal=context?.signal
+          await pending
+          return {content:[{type:'text',text:'done'}]}
+        }
+      } else {
+        debuggerPending=pending
+      }
+      const id=nextId++
+      const params: Record<string,unknown> = isTool
+        ? {toolName:'computer',args:{action:'wait'}}
+        : {text:'fixture'}
+      if(rawTimeout!==undefined) params.timeoutMs='__timeout_ms__'
+      const message=JSON.stringify({id,method:'forwardCDPCommand',params:{method:isTool?'Extension.callTool':'Input.insertText',targetId:'11',params}})
+      ws.receiveRaw(rawTimeout===undefined?message:message.replace('"__timeout_ms__"',rawTimeout))
+      await flush()
+      assert.equal(ws.sent.some(x=>x.id===id),false,`${label}: command should be pending`)
+      assert.deepEqual(timers.map(timer=>timer.delay),[expected],`${label}: deadline must be finite, positive, and bounded`)
+      if(isTool) assert.equal(signal?.aborted,false)
+      const socket=ws
+      if(outcome==='success') release()
+      if(outcome==='timeout') timers[0].callback()
+      if(outcome==='cancel') {
+        const cancelId=nextId++
+        ws.receive({id:cancelId,method:'cancelCDPCommand',params:{commandId:id}})
+        await flush()
+        assert.equal(ws.sent.find(x=>x.id===cancelId).result.cancelled,1)
+      }
+      if(outcome==='disconnect') relay.disconnectFromRelay()
+      await flush()
+      assert.equal(timers.length,0,`${label}: ${outcome} must clear the command deadline`)
+      const response=socket.sent.find(x=>x.id===id)
+      if(outcome==='success') assert.ok(response?.result)
+      if(outcome==='timeout') assert.equal(response?.error,'Command timeout')
+      if(outcome==='cancel') assert.match(response?.error,/Command cancelled/)
+      if(outcome==='disconnect') assert.equal(response,undefined)
+      if(isTool) assert.equal(signal?.aborted,outcome!=='success')
+      // An uncooperative executor may finish later, but cannot publish a second
+      // result, resurrect its deadline, or respond on a replacement socket.
+      debuggerPending=undefined
+      if(outcome==='disconnect') await connect()
+      release();await flush()
+      assert.equal(timers.length,0)
+      assert.equal(socket.sent.filter(x=>x.id===id).length,outcome==='disconnect'?0:1)
+      if(outcome==='disconnect') assert.equal(ws.sent.some(x=>x.id===id),false)
+    }
+  }
+}
 if(scenario==='blank') {
   await connect()
   assert.equal((await command('Extension.callTool',{toolName:'tabs_context_mcp',args:{}})).result.isError,undefined)
