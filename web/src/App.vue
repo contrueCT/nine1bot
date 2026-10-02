@@ -435,10 +435,9 @@ function subscribeGlobalEvents() {
   }, {
     onDisconnect: changesConnection.disconnected,
     onGiveUp: changesConnection.disconnected,
-    onReconnect: changesConnection.ready,
+    onOpen: changesConnection.ready,
   })
   globalEventSource = subscription
-  void subscription.ready.then(changesConnection.ready, changesConnection.disconnected)
 }
 
 async function refreshExtensionPageContext() {

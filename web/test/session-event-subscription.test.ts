@@ -78,7 +78,11 @@ describe('session runtime event subscription', () => {
 
   it('notifies reconnect only after a later successful open', async () => {
     const reconnects: number[] = []
+    const opens: number[] = []
     const subscription = api.subscribeSessionRuntimeEvents('ses_1', () => {}, {
+      onOpen(generation) {
+        opens.push(generation)
+      },
       onReconnect(generation) {
         reconnects.push(generation)
       },
@@ -87,10 +91,12 @@ describe('session runtime event subscription', () => {
     FakeEventSource.latest.open()
     await subscription.ready
     expect(reconnects).toEqual([])
+    expect(opens).toEqual([1])
 
     FakeEventSource.latest.open()
     expect(subscription.connectionGeneration()).toBe(2)
     expect(reconnects).toEqual([2])
+    expect(opens).toEqual([1, 2])
     subscription.close()
   })
 

@@ -103,8 +103,8 @@ function createEventStreamConnection(options: EventStreamOptions = {}) {
         readySettled = true
         clearTimeout(readyTimer)
         resolveReady()
-        return
       }
+      options.onOpen?.(generation)
       if (generation > 1) options.onReconnect?.(generation)
     },
     close() {
@@ -1784,6 +1784,8 @@ export interface EventStreamSubscription {
 }
 
 export interface EventStreamOptions {
+  // Fires for every successful open, including a first open after ready times out.
+  onOpen?(generation: number): void
   onDisconnect?(): void
   onReconnect?(generation: number): void
   // 重连次数耗尽、彻底放弃时触发
