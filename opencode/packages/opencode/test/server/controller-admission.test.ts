@@ -118,13 +118,13 @@ test("Stop covers the session-routing await before the message handler and legac
       const released = deferred()
       const original = Session.get
       let calls = 0
-      const get = spyOn(Session, "get").mockImplementation(async id => {
+      const get = spyOn(Session, "get").mockImplementation(Object.assign(async (id: string) => {
         if (id === session.id && ++calls <= 2) {
           if (calls === 2) started.resolve()
           await released.promise
         }
         return original(id)
-      })
+      }, { force: original.force, schema: original.schema }))
       try {
         const input = { noReply: true, parts: [{ type: "text", text: "cancel session routing" }], ...identity }
         const pending = [send(session, input), send(session, input)]

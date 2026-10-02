@@ -547,7 +547,7 @@ test("unsafe legacy IDs and receipt index paths fail closed without following pa
       const index = ["session_message_request", session.id, "unsafe-index"]
       await Storage.writeAtomic(index, { target: ["message_request", messageID] })
       await expect(SessionRequest.removeSession(session.id)).rejects.toMatchObject({ status: 409 })
-      expect(await Storage.read(index)).toEqual({ target: ["message_request", messageID] })
+      expect(await Storage.read<{ target: string[] }>(index)).toEqual({ target: ["message_request", messageID] })
       await Storage.remove(index)
     }
     expect(await Storage.list(["session_message_request", session.id])).toHaveLength(0)

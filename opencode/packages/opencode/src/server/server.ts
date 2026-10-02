@@ -168,7 +168,7 @@ export namespace Server {
 
   export const App: (() => Hono) & { reset(): void } = lazy(
     () => {
-      const app = new Hono()
+      const app = new Hono<{ Variables: { controllerAdmission?: RunLease.PendingAdmission } }>()
       // TODO: Break server.ts into smaller route files to fix type inference
       return app
         .onError((err, c) => {

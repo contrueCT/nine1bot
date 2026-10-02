@@ -653,7 +653,7 @@ function writeEnvelope(
 }
 
 export const Nine1BotAgentRoutes = lazy(() =>
-  new Hono()
+  new Hono<{ Variables: { controllerAdmission?: RunLease.PendingAdmission } }>()
     .get(
       "/runtime/capabilities",
       describeRoute({
