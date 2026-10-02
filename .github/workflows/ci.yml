@@ -1,8 +1,8 @@
 name: CI
 
 on:
+  # Validate pull requests targeting stacked feature branches as well as main.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
