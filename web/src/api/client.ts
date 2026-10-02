@@ -312,6 +312,14 @@ export class SessionBusyError extends Error {
   }
 }
 
+export interface SessionFileChange {
+  file: string
+  before: string
+  after: string
+  additions: number
+  deletions: number
+}
+
 export interface Session {
   id: string
   slug?: string
@@ -1166,6 +1174,21 @@ export const api = {
     const session = data.session || data.data || data
     if (!session?.id || typeof session.directory !== 'string') throw new Error('创建会话响应格式无效')
     return normalizeSession(session)
+  },
+
+  // Read-only review of the session snapshot, pinned to its owning directory.
+  async getSessionChanges(sessionId: string, directory: string): Promise<SessionFileChange[]> {
+    const url = applyDirectoryToUrl(`${BASE_URL}/session/${encodeURIComponent(sessionId)}/diff`, directory)
+    const response = await requireOk(await fetchWithTimeout(url, {
+      headers: { 'x-opencode-directory': directory },
+    }, DEFAULT_TIMEOUT, false))
+    const data: unknown = await response.json()
+    if (!Array.isArray(data) || data.some(item => !item || typeof item.file !== 'string'
+      || typeof item.before !== 'string' || typeof item.after !== 'string'
+      || !Number.isFinite(item.additions) || !Number.isFinite(item.deletions))) {
+      throw new Error('文件变更响应格式无效')
+    }
+    return data as SessionFileChange[]
   },
 
   // 获取消息历史

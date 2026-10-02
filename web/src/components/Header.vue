@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Square, PanelLeftOpen, Folder, BarChart3, MessageSquare, Menu } from 'lucide-vue-next'
+import { Square, PanelLeftOpen, Folder, BarChart3, MessageSquare, Menu, FileDiff } from 'lucide-vue-next'
 import type { Session } from '../api/client'
 import { tildify, useHomeDirectory } from '../composables/useWorkspacePath'
 
@@ -22,6 +22,7 @@ const emit = defineEmits<{
   'toggle-mobile-sidebar': []
   'abort': []
   'toggle-metrics': []
+  'toggle-changes': []
 }>()
 
 const home = useHomeDirectory()
@@ -92,6 +93,9 @@ const shortDirectory = computed(() => tildify(displayDirectory.value, home.value
     </div>
 
     <div class="header-right">
+      <button v-if="session" class="btn btn-ghost metrics-btn" type="button" @click="emit('toggle-changes')" title="查看会话文件变更" aria-label="查看会话文件变更">
+        <FileDiff :size="14" /><span>变更</span>
+      </button>
       <button
         class="btn btn-ghost metrics-btn"
         @click="emit('toggle-metrics')"

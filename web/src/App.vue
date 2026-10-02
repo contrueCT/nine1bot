@@ -30,6 +30,7 @@ import { parseSettingsDeepLink } from './utils/settings-deeplink'
 
 import { MAX_PARALLEL_AGENTS } from './composables/useParallelSessions'
 
+const SessionChangesPanel = defineAsyncComponent(() => import('./components/SessionChangesPanel.vue'))
 const MetricsDashboard = defineAsyncComponent(() => import('./components/MetricsDashboard.vue'))
 const SearchOverlay = defineAsyncComponent(() => import('./components/SearchOverlay.vue'))
 const ProjectsPage = defineAsyncComponent(() => import('./components/ProjectsPage.vue'))
@@ -211,6 +212,7 @@ const showTodoList = ref(false)
 
 // Plan面板状态
 const showPlanPanel = ref(false)
+const showChangesPanel = ref(false)
 
 // MCP project panel state
 const showMcpPanel = ref(false)
@@ -668,7 +670,8 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
   // Escape 统一关闭浮层（搜索/文件查看器/目录选择器各自处理自己的 Escape）
   if (e.key === 'Escape') {
-    if (showPlanPanel.value) showPlanPanel.value = false
+    if (showChangesPanel.value) showChangesPanel.value = false
+    else if (showPlanPanel.value) showPlanPanel.value = false
     else if (showTodoList.value) showTodoList.value = false
     else if (showMcpPanel.value) showMcpPanel.value = false
     else if (sidebarMobileOpen.value) sidebarMobileOpen.value = false
@@ -1172,6 +1175,7 @@ function handlePromptSelect(prompt: string) {
         @toggle-mobile-sidebar="toggleSidebar"
         @abort="abortCurrentSession"
         @toggle-metrics="handleToggleMetrics"
+        @toggle-changes="showChangesPanel = true"
       />
 
       <!-- Chat Area -->
@@ -1260,6 +1264,10 @@ function handlePromptSelect(prompt: string) {
             />
           </div>
         </template>
+
+        <div v-if="showChangesPanel && currentSession" class="panel-overlay" @click.self="showChangesPanel = false">
+          <SessionChangesPanel :sessionId="currentSession.id" :directory="currentSession.directory" :sessionTitle="currentSession.title" :isStreaming="isStreaming" @close="showChangesPanel = false" />
+        </div>
 
         <!-- Plan Panel (click outside to close) -->
         <div v-if="showPlanPanel" class="panel-overlay" @click.self="showPlanPanel = false">
