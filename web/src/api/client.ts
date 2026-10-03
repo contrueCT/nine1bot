@@ -2650,7 +2650,35 @@ export const providerApi = {
   }
 }
 
+export interface BrowserSettings {
+  enabled: boolean
+  cdpPort: number
+  autoLaunch: boolean
+  headless: boolean
+  executablePath?: string
+}
+export interface BrowserReadiness {
+  settings: BrowserSettings
+  writable: boolean
+  modelConfigured: boolean
+  modelVerification: 'not-tested'
+  restartRequired: boolean
+  chrome: { state: 'available' | 'missing' | 'invalid'; message: string }
+  bridge: 'active' | 'inactive'
+  bot: 'running' | 'stopped' | 'unknown'
+  extension: 'connected' | 'disconnected' | 'unknown'
+  issues: Array<{ code: string; severity: string; message: string }>
+}
+
 export const nine1botConfigApi = {
+  async readiness(): Promise<BrowserReadiness> {
+    return (await requireOk(await fetchWithTimeout(`${BASE_URL}/config/nine1bot/readiness`))).json()
+  },
+  async updateBrowser(settings: Omit<BrowserSettings, 'executablePath'> & { executablePath: string | null }): Promise<void> {
+    await requireOk(await fetchWithTimeout(`${BASE_URL}/config/nine1bot/browser`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings),
+    }))
+  },
   // 获取 Nine1Bot 默认配置（nine1bot.config.jsonc）
   async get(): Promise<{ model?: string; small_model?: string; customProviders?: Record<string, CustomProvider>; configPath: string }> {
     const res = await requireOk(await fetchWithTimeout(`${BASE_URL}/config/nine1bot`))

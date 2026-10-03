@@ -66,6 +66,21 @@ afterEach(() => {
 })
 
 describe('web config APIs', () => {
+  it('reads readiness and saves a cleared browser path without launching or inference', async () => {
+    installFetchMock(() => jsonResponse({ modelVerification: 'not-tested' }))
+    expect((await nine1botConfigApi.readiness()).modelVerification).toBe('not-tested')
+    await nine1botConfigApi.updateBrowser({ enabled: true, cdpPort: 9333, autoLaunch: true, headless: false, executablePath: null })
+    expect(callSummary()).toEqual([
+      ['GET', '/config/nine1bot/readiness'],
+      ['PATCH', '/config/nine1bot/browser'],
+    ])
+    expect(calls[1].body).toEqual({ enabled: true, cdpPort: 9333, autoLaunch: true, headless: false, executablePath: null })
+  })
+  it('does not report success when browser settings persistence fails', async () => {
+    installFetchMock(() => jsonResponse({ error: 'Read-only config' }, 500))
+    await expect(nine1botConfigApi.updateBrowser({ enabled: false, cdpPort: 9222, autoLaunch: false, headless: false, executablePath: null })).rejects.toThrow()
+  })
+
   it('passes source, limit, and offset when paging webhook runs', async () => {
     installFetchMock((url) => {
       if (url === '/webhooks/runs?sourceID=src%2Ftest&limit=11&offset=20') {

@@ -1,3 +1,4 @@
+import { BrowserSettingsPatch, readBrowserSettings, patchBrowserSettings, browserReadiness } from "../nine1bot-browser-settings"
 import { Hono } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
@@ -156,6 +157,19 @@ export const ConfigRoutes = lazy(() =>
       } catch (e: any) {
         return c.json({ error: e.message }, 500)
       }
+    })
+    .get("/nine1bot/browser", async (c) => {
+      try { return c.json(await readBrowserSettings()) }
+      catch (e: any) { return c.json({ error: e.message }, 500) }
+    })
+    .patch("/nine1bot/browser", validator("json", BrowserSettingsPatch), async (c) => {
+      if (!process.env.NINE1BOT_CONFIG_PATH) return c.json({ error: "No config path" }, 404)
+      try { return c.json(await patchBrowserSettings(c.req.valid("json"))) }
+      catch (e: any) { return c.json({ error: e.message }, 500) }
+    })
+    .get("/nine1bot/readiness", async (c) => {
+      try { return c.json(await browserReadiness()) }
+      catch (e: any) { return c.json({ error: e.message }, 500) }
     })
     .get("/nine1bot/browser-extension", async (c) => {
       try {

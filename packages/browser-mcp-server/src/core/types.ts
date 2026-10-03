@@ -10,6 +10,8 @@ export interface BrowserMcpConfig {
   /** Run Chrome in headless mode (default: false) */
   headless?: boolean
   /** Chrome executable path (auto-detected if omitted) */
+  executablePath?: string
+  /** @deprecated Use executablePath. */
   chromePath?: string
 }
 
@@ -77,6 +79,7 @@ export interface BrowserRuntimeConflict {
 }
 
 export interface BrowserRuntimeStatus {
+  configuration?: { cdpPort: number; autoLaunch: boolean; headless: boolean; executablePath?: string }
   mode: 'embedded'
   serverOrigin: string
   instanceId: string

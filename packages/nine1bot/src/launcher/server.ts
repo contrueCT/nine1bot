@@ -199,6 +199,7 @@ export async function startServer(options: StartServerOptions): Promise<ServerIn
       const serverOrigin = getBrowserServerOrigin(server.hostname, server.port)
       bridgeServer = new BridgeServer({
         cdpPort: browserConfig.cdpPort ?? 9222,
+        executablePath: browserConfig.executablePath,
         autoLaunch: browserConfig.autoLaunch ?? true,
         headless: browserConfig.headless ?? false,
         serverOrigin,

@@ -72,7 +72,9 @@ export const BrowserConfigSchema = z.object({
   // 是否启用浏览器控制
   enabled: z.boolean().default(false),
   // Chrome CDP 端口
-  cdpPort: z.number().default(9222),
+  cdpPort: z.number().int().min(1).max(65535).default(9222),
+  // Absolute executable filename on the server; never shell syntax
+  executablePath: z.string().trim().min(1).refine(value => /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(value) && !/[\0\r\n]/.test(value), "Use an absolute executable path").optional(),
   // 是否自动启动 Chrome
   autoLaunch: z.boolean().default(true),
   // 是否使用无头模式

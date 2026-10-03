@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Nine1Bot real Chrome fixture</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font: 18px system-ui; padding: 32px; max-width: 760px; }
+    label, input, button, output { display: block; margin: 16px 0; }
+    input, button { padding: 12px; font: inherit; }
+    #offscreen { margin-top: 1400px; }
+  </style>
+</head>
+<body>
+  <h1>Local browser regression fixture</h1>
+  <p id="route"></p>
+  <form id="profile-form">
+    <label for="display-name">Display name</label>
+    <input id="display-name" name="displayName" aria-label="Display name" autocomplete="off">
+    <button type="submit">Save profile</button>
+    <output id="result" role="status">No changes saved</output>
+  </form>
+  <button id="offscreen">Offscreen action</button>
+  <output id="offscreen-result">Offscreen untouched</output>
+  <script>
+    document.querySelector('#route').textContent = location.pathname + location.search
+    document.querySelector('#profile-form').addEventListener('submit', event => {
+      event.preventDefault()
+      document.querySelector('#result').textContent = 'Saved: ' + document.querySelector('#display-name').value
+    })
+    document.querySelector('#offscreen').addEventListener('click', () => {
+      document.querySelector('#offscreen-result').textContent = 'Offscreen clicked'
+    })
+    document.documentElement.dataset.fixtureReady = 'true'
+  </script>
+</body>
+</html>

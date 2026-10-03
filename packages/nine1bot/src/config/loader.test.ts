@@ -98,6 +98,10 @@ describe('loadConfig platform config support', () => {
 })
 
 describe('loadConfig browser migration guards', () => {
+  it('preserves a custom Chrome executable path', async () => {
+    const config = await loadConfig(await writeConfig({ browser: { executablePath: '/opt/My Chrome/chrome' } }))
+    expect(config.browser.executablePath).toBe('/opt/My Chrome/chrome')
+  })
   it('loads supported embedded browser config with defaults', async () => {
     const configPath = await writeConfig({
       browser: {

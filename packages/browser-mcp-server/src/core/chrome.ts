@@ -116,7 +116,7 @@ export async function launchChrome(options: ChromeLaunchOptions = {}): Promise<C
   // 检测或使用指定的可执行文件路径
   const executablePath = options.executablePath ?? detectChromeExecutable()
   if (!executablePath) {
-    throw new Error('Chrome executable not found. Please install Chrome or specify executablePath.')
+    throw new Error('Chrome executable not found. Install Chrome on the Nine1Bot server or set browser.executablePath to its absolute executable filename, then restart Nine1Bot.')
   }
 
   // 创建用户数据目录
@@ -238,7 +238,8 @@ export async function launchChrome(options: ChromeLaunchOptions = {}): Promise<C
     let cleanupError = ''
     try { await stop() } catch (failure) { cleanupError = `\nCleanup failed: ${String(failure)}` }
     const detail = stderr.trim()
-    throw new Error(`${error instanceof Error ? error.message : String(error)}${detail ? `\nChrome stderr (last 4096 characters): ${detail}` : ''}${cleanupError}`)
+    const hint = chromeStartupHint(`${String(error)} ${detail}`)
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${detail ? `\nChrome stderr (last 4096 characters): ${detail}` : ''}${hint ? `\nNext step: ${hint}` : ''}${cleanupError}`)
   } finally {
     clearTimeout(deadline)
     if (rejectStartup) startup.signal.removeEventListener('abort', rejectStartup)
@@ -276,4 +277,15 @@ export async function connectToChrome(cdpPort = 9222): Promise<{ cdpUrl: string;
   const cdpUrl = `http://127.0.0.1:${cdpPort}`
   const version = await getCdpVersion(cdpUrl)
   return { cdpUrl, version }
+}
+
+/** Actionable diagnostics without suggesting security/sandbox workarounds. */
+export function chromeStartupHint(message: string): string {
+  if (/ENOENT|no such file/i.test(message)) return 'Check browser.executablePath on the Nine1Bot server and restart the service after saving.'
+  if (/EACCES|permission denied/i.test(message)) return 'Check that the configured Chrome file is executable by the account running Nine1Bot.'
+  if (/sandbox/i.test(message)) return 'Chrome could not use its sandbox. Run Chrome as a supported non-root user on a system with a working sandbox; do not disable the sandbox.'
+  if (/display|x server|ozone/i.test(message)) return 'No usable desktop display was found. Configure browser.headless on a headless server, then restart Nine1Bot.'
+  if (/Singleton|profile.*(use|lock)/i.test(message)) return 'The bot profile is already in use. Close the conflicting bot Chrome instance before retrying; do not delete an active profile lock.'
+  if (/CDP endpoint not available/i.test(message)) return 'Check the configured CDP port and Chrome startup output. Ensure the port is available and the server can reach its own loopback interface.'
+  return ''
 }

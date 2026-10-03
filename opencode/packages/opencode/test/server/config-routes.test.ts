@@ -31,6 +31,31 @@ afterEach(async () => {
 })
 
 describe("config routes reload behavior", () => {
+  test("browser settings persist separately, clear paths, and report restart without model inference", async () => {
+    const setup = await setupProject()
+    for (const executablePath of ["/opt/My Chrome/chrome", null]) {
+      const response = await request(setup.projectDir, "/config/nine1bot/browser", {
+        method: "PATCH", headers: jsonHeaders,
+        body: JSON.stringify({ enabled: true, cdpPort: 9333, executablePath }),
+      })
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.restartRequired).toBe(true)
+      expect(body.settings.executablePath).toBe(executablePath ?? undefined)
+      const stored = JSON.parse(await readFile(process.env.NINE1BOT_CONFIG_PATH!, "utf8"))
+      expect(stored.browser.cdpPort).toBe(9333)
+      expect(stored.browser.executablePath).toBe(executablePath ?? undefined)
+      expect(JSON.parse(await readFile(setup.runtimeConfigPath, "utf8")).browser).toBeUndefined()
+    }
+    const invalid = await request(setup.projectDir, "/config/nine1bot/browser", {
+      method: "PATCH", headers: jsonHeaders, body: JSON.stringify({ executablePath: "chrome --no-sandbox" }),
+    })
+    expect(invalid.status).toBe(400)
+    const readiness = await request(setup.projectDir, "/config/nine1bot/readiness", { method: "GET" })
+    expect(readiness.status).toBe(200)
+    expect((await readiness.json()).modelVerification).toBe("not-tested")
+  })
+
   test("PATCH /config refreshes config without disposing the current instance", async () => {
     const setup = await setupProject()
     const disposed = collectInstanceDisposedEvents()

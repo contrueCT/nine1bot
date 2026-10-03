@@ -25,6 +25,7 @@ const props = defineProps<{
   sessionError?: { message: string; dismissable?: boolean } | null
   currentDirectory?: string
   canChangeDirectory?: boolean
+  showReadiness?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -33,7 +34,7 @@ const emit = defineEmits<{
   (e: 'questionRejected', requestId: string): void
   (e: 'permissionResponded', requestId: string, response: 'once' | 'always' | 'reject'): void
   (e: 'clearError'): void
-  (e: 'openSettings'): void
+  (e: 'openSettings', tab?: 'browser'): void
   (e: 'deletePart', messageId: string, partId: string, done: MessageMutationDone): void
   (e: 'updatePart', messageId: string, partId: string, updates: { text?: string }, done: MessageMutationDone): void
   (e: 'changeDirectory', path: string): void
@@ -281,6 +282,7 @@ onUnmounted(() => {
           </div>
         </template>
         <p v-else class="welcome-lead">{{ greeting }}，可以直接提问，也可以让 Nine1Bot 处理当前页面。</p>
+        <button v-if="showReadiness" type="button" class="btn btn-ghost btn-sm" @click="emit('openSettings', 'browser')">首次使用？检查模型与浏览器配置</button>
       </div>
     </div>
 
