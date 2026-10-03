@@ -279,13 +279,31 @@ export async function connectToChrome(cdpPort = 9222): Promise<{ cdpUrl: string;
   return { cdpUrl, version }
 }
 
+function hasProfileLockDiagnostic(message: string): boolean {
+  let profileOnLine = false
+  // Fixed tokens advance through the input once. Retrying profile.* at each
+  // repeated prefix would rescan the suffix quadratically on a failed match.
+  for (const match of message.matchAll(/singleton|profile|use|lock|[\r\n\u2028\u2029]/gi)) {
+    const token = match[0].toLowerCase()
+    if (token === 'singleton') return true
+    if (token === 'profile') profileOnLine = true
+    else if (token === 'use' || token === 'lock') {
+      if (profileOnLine) return true
+    } else {
+      // Preserve the original same-line match, including every JS line separator.
+      profileOnLine = false
+    }
+  }
+  return false
+}
+
 /** Actionable diagnostics without suggesting security/sandbox workarounds. */
 export function chromeStartupHint(message: string): string {
   if (/ENOENT|no such file/i.test(message)) return 'Check browser.executablePath on the Nine1Bot server and restart the service after saving.'
   if (/EACCES|permission denied/i.test(message)) return 'Check that the configured Chrome file is executable by the account running Nine1Bot.'
   if (/sandbox/i.test(message)) return 'Chrome could not use its sandbox. Run Chrome as a supported non-root user on a system with a working sandbox; do not disable the sandbox.'
   if (/display|x server|ozone/i.test(message)) return 'No usable desktop display was found. Configure browser.headless on a headless server, then restart Nine1Bot.'
-  if (/Singleton|profile.*(use|lock)/i.test(message)) return 'The bot profile is already in use. Close the conflicting bot Chrome instance before retrying; do not delete an active profile lock.'
+  if (hasProfileLockDiagnostic(message)) return 'The bot profile is already in use. Close the conflicting bot Chrome instance before retrying; do not delete an active profile lock.'
   if (/CDP endpoint not available/i.test(message)) return 'Check the configured CDP port and Chrome startup output. Ensure the port is available and the server can reach its own loopback interface.'
   return ''
 }
