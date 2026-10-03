@@ -108,6 +108,12 @@ export function useSession() {
   const directoryVersions = new Map<string, number>()
   const draftDirectories = new Map<string, string>()
   const successfulDirectoryVersions = new Map<string, number>()
+  const committedDirectories = ref(new Map<string, { directory: string; updatedAt: number }>())
+  function resolveSessionDirectory(session: Session): Session {
+    const committed = committedDirectories.value.get(session.id)
+    if (!committed || session.directory === committed.directory || session.time.updated > committed.updatedAt) return session
+    return { ...session, directory: committed.directory, time: { ...session.time, updated: Math.max(session.time.updated, committed.updatedAt) } }
+  }
   let pendingSessionReadiness: { sessionID: string; selection: number; promise: Promise<EventStreamSubscription> } | undefined
   let todoVersion = 0
   // Capture view ownership before awaiting work, including same-session reselection.
@@ -337,6 +343,17 @@ export function useSession() {
         const updated = await api.updateSession(sessionID, { directory })
         if (version < (successfulDirectoryVersions.get(sessionID) || 0)) return
         successfulDirectoryVersions.set(sessionID, version)
+        // Directory authority is session-owned, not selection-owned. Patch only
+        // this metadata so a late directory response cannot roll back a new title.
+        committedDirectories.value.set(sessionID, { directory: updated.directory, updatedAt: updated.time.updated })
+        const index = sessions.value.findIndex(session => session.id === sessionID)
+        if (index !== -1) sessions.value[index] = resolveSessionDirectory(sessions.value[index]!)
+        // Do not invalidate a same-session re-selection's in-flight snapshot.
+        const pending = pendingSessionReadiness
+        if (pending?.sessionID === sessionID && pending.selection === selectionVersion) {
+          await pending.promise.catch(() => undefined)
+          if (version < (successfulDirectoryVersions.get(sessionID) || 0)) return
+        }
         // A committed update owns its draft even after navigation releases the view.
         // Use the last migrated scope for repeated updates, not a stale selection.
         moveComposerDraft(sessionID, sessionID, updated.directory, previousDirectory)
@@ -345,13 +362,11 @@ export function useSession() {
           moveComposerDraft(sessionID, sessionID, updated.directory, migratedDirectory)
         }
         draftDirectories.set(sessionID, updated.directory)
-        if (!isOwner() || version !== directoryVersions.get(sessionID)) return
-        currentSession.value = updated
-        currentDirectory.value = updated.directory
+        if (currentSession.value?.id !== sessionID || version !== directoryVersions.get(sessionID)) return
+        currentSession.value = resolveSessionDirectory(currentSession.value)
+        currentDirectory.value = currentSession.value.directory
         setApiDirectory(currentDirectory.value)
         reconnectEventsForDirectory()
-        const index = sessions.value.findIndex(s => s.id === updated.id)
-        if (index !== -1) sessions.value[index] = updated
         unsubscribeSessionRuntimeEvents()
         await openSessionEventStreamAndReconcile(updated.id)
       } catch (error) {
@@ -530,6 +545,7 @@ export function useSession() {
   }
 
   async function selectSession(session: Session) {
+    session = resolveSessionDirectory(session)
     cancelPreflight()
     const requestVersion = ++selectionVersion
     try {
@@ -1466,6 +1482,7 @@ export function useSession() {
     createSession,
     ensureSession,
     selectSession,
+    resolveSessionDirectory,
     viewOwner,
     sendMessage,
     abortSession,

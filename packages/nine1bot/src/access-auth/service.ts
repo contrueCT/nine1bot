@@ -279,15 +279,9 @@ export class AccessAuthService implements ServerAccessAuthProvider {
       }
     }
     if (path === '/access-auth/status' && method === 'GET') {
-      return credentialReady
-        ? this.status(c, request)
-        : this.jsonWithCors(c, request, {
-            enabled: true,
-            authenticated: false,
-            surface: null,
-            expiresAt: null,
-            secureTransport: this.secureRequest(c),
-          })
+      // An unreadable credential store cannot determine whether an existing
+      // cookie is valid. Report availability failure, never a false logout.
+      return credentialReady ? this.status(c, request) : this.authUnavailable(c, request)
     }
     if (path === '/access-auth/login' && method === 'POST') {
       if (!credentialReady) return this.authUnavailable(c, request)

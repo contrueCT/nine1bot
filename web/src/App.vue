@@ -68,6 +68,7 @@ const {
   createSession,
   ensureSession,
   selectSession,
+  resolveSessionDirectory,
   viewOwner,
   sendMessage,
   abortSession,
@@ -263,7 +264,7 @@ const sidebarSessions = computed(() => {
   if (currentSession.value && !merged.has(currentSession.value.id)) {
     merged.set(currentSession.value.id, currentSession.value)
   }
-  return Array.from(merged.values()).sort((a, b) => b.time.updated - a.time.updated)
+  return Array.from(merged.values()).map(resolveSessionDirectory).sort((a, b) => b.time.updated - a.time.updated)
 })
 
 const sidebarSessionsLoading = computed(() =>

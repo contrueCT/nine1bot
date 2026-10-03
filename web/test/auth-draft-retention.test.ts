@@ -112,3 +112,58 @@ test('explicit logout and a confirmed login denial purge retained drafts', async
   expect(auth.status.value).toBe('unauthenticated')
   expect(values.has(key)).toBe(false)
 })
+
+test('real credential-store EIO reports unavailable and preserves drafts until same-cookie recovery', async () => {
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { FileAccessCredentialStore } = await import('../../packages/nine1bot/src/access-auth/credential-store')
+  const { createAccessAuthRuntime } = await import('../../packages/nine1bot/src/access-auth/service')
+  const { AuthConfigSchema } = await import('../../packages/nine1bot/src/config/schema')
+  const directory = await mkdtemp(join(tmpdir(), 'auth-draft-credential-outage-'))
+  try {
+    const password = 'test-only credential store password'
+    const store = new FileAccessCredentialStore(join(directory, 'access-auth.json'))
+    await store.setPassword(password)
+    const runtime = await createAccessAuthRuntime(AuthConfigSchema.parse({ enabled: true }), { store, env: {} })
+    const origin = 'http://127.0.0.1:4096'
+    const dispatch = async (path: string, init: RequestInit = {}) => {
+      const request = new Request(origin + path, init)
+      const context = {
+        req: { raw: request, path, method: request.method, url: request.url,
+          header: (name: string) => request.headers.get(name) ?? undefined, json: () => request.json() },
+        json: (body: unknown, status = 200, headers: Record<string, string> = {}) => Response.json(body, { status, headers }),
+      }
+      return await runtime.service.handle(context, async () => {}, { remoteAddress: '127.0.0.1', localBrowserRelay: false }) as Response
+    }
+    const login = await dispatch('/access-auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify({ password, surface: 'web' }) })
+    expect(login.status).toBe(200)
+    const cookie = login.headers.get('Set-Cookie')!.split(';')[0]!
+    const readStatus = () => dispatch('/access-auth/status', { headers: { Cookie: cookie } })
+    const initial = await (await readStatus()).json()
+    expect(initial.authenticated).toBe(true)
+    globalThis.fetch = async () => readStatus()
+    await auth.initialize('web')
+    const lifecycle = await appAuthLifecycle()
+    const load = store.load.bind(store)
+    store.load = async () => { throw Object.assign(new Error('temporary credential read failure'), { code: 'EIO' }) }
+    const unavailable = await readStatus()
+    expect(unavailable.status).toBe(503)
+    expect((await unavailable.json()).error.code).toBe('access_auth_unavailable')
+    await lifecycle.mounted(); await Vue.nextTick()
+    expect(auth.status.value).toBe('unknown')
+    expect(auth.required.value).toBe(true)
+    expect(values.has(key)).toBe(true)
+    store.load = load
+    const recovered = await (await readStatus()).json()
+    expect(recovered.authenticated).toBe(true)
+    expect(recovered.expiresAt).toBe(initial.expiresAt)
+    await lifecycle.mounted(); await Vue.nextTick()
+    expect(getComposerDraft('auth-session', undefined, '/auth/project').text).toBe('private text before outage')
+    await dispatch('/access-auth/logout', { method: 'POST', headers: { Cookie: cookie, Origin: origin } })
+    expect((await (await readStatus()).json()).authenticated).toBe(false)
+    await lifecycle.mounted(); await Vue.nextTick()
+    expect(auth.status.value).toBe('unauthenticated')
+    expect(values.has(key)).toBe(false)
+  } finally { await rm(directory, { recursive: true, force: true }) }
+})

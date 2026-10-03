@@ -319,7 +319,7 @@ describe('stream and selected-session ownership', () => {
     expect(active.historyError.value).toBeNull()
     expect(active.messages.value[0].info.sessionID).toBe('B')
   })
-  it('ignores a late directory update after changing sessions and returning', async () => {
+  it('synchronizes a committed directory after changing sessions and returning', async () => {
     await active.selectSession(session('A'))
     const update = deferred<Session>()
     api.updateSession = () => update.promise
@@ -328,7 +328,7 @@ describe('stream and selected-session ownership', () => {
     await active.selectSession(session('A'))
     update.resolve({ ...session('A'), directory: '/new/A' })
     await changing
-    expect(active.currentDirectory.value).toBe('/workspace/A')
+    expect(active.currentDirectory.value).toBe('/new/A')
   })
   it('keeps only the latest same-session directory response', async () => {
     await active.selectSession(session('A'))
