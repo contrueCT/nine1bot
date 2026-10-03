@@ -11,7 +11,8 @@ harness unit test, a typecheck, or an extension build is **not** a real-browser 
 
 ## Prerequisites
 
-- Bun 1.3.14 and installed workspace dependencies
+- Bun 1.4.2 for this real-Chrome fixture and installed workspace dependencies
+  (ordinary project CI remains on Bun 1.3.14)
 - An existing Chrome for Testing binary, supplied as an absolute `CHROME_PATH`
 - A non-root account with working Chrome sandbox support
 - Permission to run Chrome and access loopback HTTP/WebSocket endpoints in the
@@ -64,6 +65,10 @@ only its own Chrome children. CDP uses ephemeral loopback ports discovered from
 the corresponding profile's `DevToolsActivePort` file. No existing browser is
 attached, stopped, or modified. There is no process-name/global kill command.
 Profiles are removed after the owned process exits, including failure cleanup.
+Cleanup awaits each owned resource with a 15-second deadline, attempts remaining
+resources after any failure, and records and throws all failures. A passing run
+requires both browser/profile disposal and HTTP/WebSocket server shutdown; a
+cleanup timeout is never treated as a pass.
 
 The fixture/relay binds `127.0.0.1:4096` **before the extension starts** because
 4096 is the real extension's initial server origin. If another listener owns it,
@@ -127,9 +132,26 @@ the full `Google Chrome for Testing` brand. A regular Chrome installation fails
 with a prerequisite diagnostic rather than timing out waiting for an extension
 that its command-line interface cannot load.
 
+Only this workflow uses Bun 1.4.2. Bun 1.3.14 has an [upstream WebSocket shutdown
+bug](https://github.com/oven-sh/bun/issues/36223): a server-initiated socket close
+leaves the server's connection count nonzero and `await server.stop(true)` never
+resolves. The required relay disconnect/reconnect check triggers that bug. The
+workflow explicitly runs the socket-cleanup regression before Chrome starts:
+
+```sh
+RUN_BROWSER_RUNTIME_CHECKS=1 bun test packages/browser-mcp-server/test/real-chrome/server-cleanup.test.ts
+```
+
+This runtime-only check opens no browser. It fails on Bun 1.3.14 and passes on
+the fixture's pinned Bun 1.4.2. Ordinary CI skips it explicitly while retaining
+the synthetic cleanup-helper tests. The real-Chrome integration itself is never
+skipped or weakened because of a runtime cleanup failure. Project manifests and
+the ordinary CI runtime pin are unchanged.
+
 Artifacts include `evidence.json` with each completed step's pass/fail status,
-browser version responses, extension hello, final runtime status, fixture-only
-screenshots, and bounded Chrome stderr. The workflow also saves test stdout.
+the exact Bun version/revision, browser version responses, extension hello,
+final runtime status, fixture-only screenshots, and bounded Chrome stderr.
+The workflow also saves test stdout.
 An interrupted run or one without `passed: true` is not a pass. Profile databases,
 cookies, login state, and arbitrary user pages are never uploaded.
 

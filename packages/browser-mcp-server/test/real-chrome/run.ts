@@ -7,7 +7,7 @@ import { BridgeServer } from '../../src/bridge/server'
 import { getExtensionRelay } from '../../src/bridge/relay-routes'
 import { evaluateScript, listCdpTargets } from '../../src/core/cdp'
 import type { BrowserTarget } from '../../src/core/types'
-import { artifactDirectory, eventually, FIXTURE_ORIGIN, startChrome, verifyChromeForTesting, within, type OwnedChrome } from './harness'
+import { artifactDirectory, cleanupResources, eventually, FIXTURE_ORIGIN, startChrome, verifyChromeForTesting, within, type OwnedChrome } from './harness'
 
 type Step = { name: string; status: 'passed' | 'failed'; durationMs: number; error?: string }
 
@@ -18,11 +18,13 @@ export async function runRealChromeRegression(): Promise<void> {
   const artifacts = artifactDirectory()
   await mkdir(artifacts, { recursive: true })
   const steps: Step[] = []
+  const failures: unknown[] = []
   let passed = false
   const evidence = async () => writeFile(resolve(artifacts, 'evidence.json'), JSON.stringify({
     kind: 'real-chrome-integration',
     passed,
     recordedAt: new Date().toISOString(),
+    runtime: { bunVersion: Bun.version, bunRevision: Bun.revision },
     steps,
     scope: 'Production browser bridge + bot CDP + built unpacked MV3 extension; local fixture only; no LLM calls',
   }, null, 2))
@@ -196,18 +198,35 @@ export async function runRealChromeRegression(): Promise<void> {
       assert.equal(await activeBridge.evaluate(userTab, '6 + 7', 'user'), 13)
     })
     await writeFile(resolve(artifacts, 'final-status.json'), JSON.stringify(await activeBridge.getStatus(), null, 2))
-    passed = true
+  } catch (error) {
+    failures.push(error)
   } finally {
     // Close only resources created here. No global kill, shared profiles, or policy bypasses.
-    const cleanup = await Promise.allSettled([user?.stop(), bot?.stop()])
-    try { await bridge?.stop() } finally { await server?.stop(true) }
-    const failures = cleanup.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-    if (failures.length) {
-      passed = false
-      steps.push({ name: 'dispose owned Chrome processes/profiles', status: 'failed', durationMs: 0, error: failures.map(result => String(result.reason)).join('; ') })
+    const cleanup = await cleanupResources([
+      ...(user ? [{ name: 'dispose extension Chrome and profile', dispose: () => user!.stop() }] : []),
+      ...(bot ? [{ name: 'dispose bot Chrome and profile', dispose: () => bot!.stop() }] : []),
+      ...(bridge ? [{ name: 'stop production browser bridge', dispose: () => bridge!.stop() }] : []),
+      ...(server ? [{ name: 'stop fixture HTTP/WebSocket server', dispose: async () => {
+        await server!.stop(true)
+        assert.equal(server!.pendingRequests, 0, 'Fixture HTTP requests must drain')
+        assert.equal(server!.pendingWebSockets, 0, 'Fixture WebSocket connections must drain')
+      } }] : []),
+    ])
+    // stop(true) was awaited above. A failed runtime must not retain the test
+    // process; its failure still prevents a pass and is thrown below.
+    server?.unref()
+    for (const result of cleanup) {
+      if (result.status === 'failed') failures.push(result.error)
+      steps.push({
+        name: result.name, status: result.status, durationMs: result.durationMs,
+        ...(result.status === 'failed' ? { error: String(result.error) } : {}),
+      })
+      console.info(`[real-chrome] ${result.status === 'passed' ? 'PASS' : 'FAIL'} ${result.name}`)
     }
+    passed = failures.length === 0
     await evidence()
     console.info(`[real-chrome] Evidence: ${artifacts}`)
-    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Chrome cleanup failed')
   }
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) throw new AggregateError(failures, 'Real Chrome regression and cleanup failures')
 }

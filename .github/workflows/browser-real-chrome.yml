@@ -35,13 +35,19 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.14
+          # Bun 1.3.14 never resolves server.stop() after a server-side WS close
+          # (oven-sh/bun#36223). Keep this pin local to the real-browser fixture.
+          bun-version: 1.4.2
       - name: Install workspace dependencies
         run: bun install
       - name: Build actual MV3 extension
         run: bun run --cwd packages/browser-extension build
       - name: Typecheck regression harness and imported browser runtime
         run: packages/browser-mcp-server/node_modules/.bin/tsc --project packages/browser-mcp-server/test/real-chrome/tsconfig.json
+      - name: Verify fixture runtime drains server-closed WebSockets
+        env:
+          RUN_BROWSER_RUNTIME_CHECKS: '1'
+        run: bun test packages/browser-mcp-server/test/real-chrome/server-cleanup.test.ts
       - name: Install Chrome for Testing
         id: chrome
         # v1 channel installs use branded Chrome, which no longer supports

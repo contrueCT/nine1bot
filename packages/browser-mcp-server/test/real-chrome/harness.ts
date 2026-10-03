@@ -63,6 +63,28 @@ export async function within<T>(label: string, promise: Promise<T>, timeoutMs: n
   }
 }
 
+export type CleanupResult =
+  | { name: string; status: 'passed'; durationMs: number }
+  | { name: string; status: 'failed'; durationMs: number; error: unknown }
+
+/** Attempt every owned resource, including after a failure; callers must report/throw failures. */
+export async function cleanupResources(
+  resources: Array<{ name: string; dispose: () => void | Promise<void> }>,
+  timeoutMs = 15000,
+): Promise<CleanupResult[]> {
+  const results: CleanupResult[] = []
+  for (const { name, dispose } of resources) {
+    const started = Date.now()
+    try {
+      await within(name, Promise.resolve().then(dispose), timeoutMs)
+      results.push({ name, status: 'passed', durationMs: Date.now() - started })
+    } catch (error) {
+      results.push({ name, status: 'failed', durationMs: Date.now() - started, error })
+    }
+  }
+  return results
+}
+
 export async function eventually<T>(label: string, check: () => Promise<T | undefined | false>, timeoutMs = 10000): Promise<T> {
   const deadline = Date.now() + timeoutMs
   let lastError: unknown
