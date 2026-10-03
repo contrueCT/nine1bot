@@ -2674,7 +2674,7 @@ export const nine1botConfigApi = {
   async readiness(): Promise<BrowserReadiness> {
     return (await requireOk(await fetchWithTimeout(`${BASE_URL}/config/nine1bot/readiness`))).json()
   },
-  async updateBrowser(settings: Omit<BrowserSettings, 'executablePath'> & { executablePath: string | null }): Promise<void> {
+  async updateBrowser(settings: Partial<Omit<BrowserSettings, 'executablePath'> & { executablePath: string | null }>): Promise<void> {
     await requireOk(await fetchWithTimeout(`${BASE_URL}/config/nine1bot/browser`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings),
     }))

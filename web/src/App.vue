@@ -999,6 +999,11 @@ function handleOpenSkills() {
 }
 
 // 起手任务只填进输入框，让用户补充要求后再发送
+function handleChatOpenSettings(tab?: 'browser') {
+  if (tab) settingsTab.value = tab
+  openSettings()
+}
+
 function handlePromptSelect(prompt: string) {
   mainInputBox.value?.fillDraft(prompt)
 }
@@ -1258,7 +1263,7 @@ function handlePromptSelect(prompt: string) {
               @question-rejected="rejectQuestion"
               @permission-responded="respondPermission"
               @clear-error="clearSessionError"
-              @open-settings="(tab?: 'browser') => { if (tab) settingsTab = tab; openSettings() }"
+              @open-settings="handleChatOpenSettings"
               @delete-part="handleDeletePart"
               @update-part="handleUpdatePart"
               @change-directory="changeDirectory"

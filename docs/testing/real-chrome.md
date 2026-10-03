@@ -110,8 +110,9 @@ page interaction implementation counts as real-browser evidence.
 
 ## Evidence and CI
 
-Dispatch `.github/workflows/browser-real-chrome.yml` manually on the commit to
-verify. It installs Chrome for Testing stable, builds the extension, typechecks
+`.github/workflows/browser-real-chrome.yml` runs on pull requests touching its
+browser/config/launcher path filters, and can also be dispatched manually. PR
+runs check out the exact PR head SHA, with `github.sha` used for manual dispatch. It installs Chrome for Testing stable, builds the extension, typechecks
 the harness, and runs the opt-in test. It is not a required check by default and
 does not run on every pull request. Chrome stable is intentionally a moving
 compatibility target; each run records the exact browser version and GitHub

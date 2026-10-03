@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { browserSettingsChanges } from '../utils/browser-settings'
 import { nine1botConfigApi, type BrowserReadiness, type BrowserSettings } from '../api/client'
 const emit = defineEmits<{ openModels: [] }>()
 const readiness = ref<BrowserReadiness>()
@@ -34,7 +35,8 @@ async function save() {
   error.value = ''; notice.value = ''
   try {
     const settings = { ...draft.value, executablePath: draft.value.executablePath?.trim() || null }
-    await nine1botConfigApi.updateBrowser(settings)
+    const changes = browserSettingsChanges(JSON.parse(saved.value), draft.value)
+    await nine1botConfigApi.updateBrowser(changes)
     draft.value = { ...draft.value, executablePath: settings.executablePath ?? undefined }
     saved.value = JSON.stringify(draft.value)
     restartRequired.value = true
@@ -67,8 +69,8 @@ onMounted(refresh)
       <form @submit.prevent="save">
         <fieldset :disabled="isSaving || loading || !readiness.writable">
           <label><input v-model="draft.enabled" type="checkbox">启用浏览器服务</label>
-          <label>Chrome 可执行文件路径<input v-model="draft.executablePath" type="text" placeholder="留空自动检测" autocomplete="off" spellcheck="false"></label>
-          <p>填写运行 Nine1Bot 的服务器上的绝对路径，不是你正在浏览网页的电脑路径。不要填写引号、命令或参数。</p>
+          <label>Chrome 可执行文件路径<input v-model="draft.executablePath" type="text" placeholder="自动检测" autocomplete="off" spellcheck="false"></label>
+          <p>填写运行 Nine1Bot 的服务器上的绝对路径，不是你正在浏览网页的电脑路径。不要填写引号、命令或参数。清空已填路径会明确启用自动检测，并覆盖全局配置中的路径。</p>
           <label>CDP 端口<input v-model.number="draft.cdpPort" type="number" min="1" max="65535" required></label>
           <label><input v-model="draft.autoLaunch" type="checkbox">需要时自动启动</label>
           <label><input v-model="draft.headless" type="checkbox">无头模式</label>

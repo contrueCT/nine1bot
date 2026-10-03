@@ -1,8 +1,17 @@
-name: Real Chrome browser regression (opt-in)
+name: Real Chrome browser regression (fixture-only)
 
-# Intentionally manual: a skipped real-browser test in normal CI is not evidence
-# that either production browser channel works with an installed extension.
+# Runs only fixture-based browser checks, without model credentials or inference.
 on:
+  pull_request:
+    paths:
+      - 'packages/browser-mcp-server/**'
+      - 'packages/browser-extension/**'
+      - 'packages/nine1bot/src/config/**'
+      - 'packages/nine1bot/src/launcher/**'
+      - 'opencode/packages/opencode/src/browser/**'
+      - 'opencode/packages/opencode/src/server/nine1bot-browser*.ts'
+      - 'opencode/packages/opencode/src/server/routes/browser.ts'
+      - '.github/workflows/browser-real-chrome.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,6 +32,8 @@ jobs:
       REAL_CHROME_ARTIFACTS: ${{ runner.temp }}/nine1bot-real-chrome-artifacts
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
@@ -49,7 +60,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-chrome-${{ github.sha }}
+          name: real-chrome-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/nine1bot-real-chrome-artifacts
           if-no-files-found: warn
           retention-days: 7

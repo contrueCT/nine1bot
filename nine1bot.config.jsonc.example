@@ -40,7 +40,8 @@
     "enabled": false,
     "cdpPort": 9222,
     // Optional absolute Chrome executable path on the Nine1Bot server.
-    // Omit for automatic detection. Restart Nine1Bot after changing browser settings.
+    // Omit to inherit (automatic detection if no global path); null explicitly selects auto-detection.
+    // Restart Nine1Bot after changing browser settings.
     // "executablePath": "/opt/google/chrome/chrome",
     "autoLaunch": true,
     "headless": false

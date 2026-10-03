@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test, spyOn } from 'bun:test'
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import * as os from 'node:os'
 import { BrowserConfigSchema } from '../../nine1bot/src/config/schema'
 import { chromeStartupHint } from '../src/core/chrome'
 import { BrowserSettingsPatch, browserReadiness, inspectChromeExecutable, readBrowserSettings } from '../../../opencode/packages/opencode/src/server/nine1bot-browser-settings'
@@ -33,7 +34,7 @@ test('accepts absolute Chrome paths with spaces and validates port and path', ()
   expect(BrowserSettingsPatch.safeParse({ sidepanel: {} }).success).toBe(false)
 })
 test('readiness never calls a model or launches Chrome, even with model configuration', async () => {
-  await writeFile(process.env.NINE1BOT_CONFIG_PATH!, JSON.stringify({ model: 'fixture/test', customProviders: { secret: { apiKey: 'do-not-return' } }, browser: { executablePath: '/missing-chrome' } }))
+  await writeFile(process.env.NINE1BOT_CONFIG_PATH!, JSON.stringify({ model: 'fixture/test', customProviders: { secret: { name: 'fixture', protocol: 'openai', baseURL: 'https://example.invalid', models: [{ id: 'fixture' }], apiKey: 'do-not-return' } }, browser: { executablePath: '/missing-chrome' } }))
   const fetch = spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network forbidden'))
   try {
     const result = await browserReadiness()
@@ -77,4 +78,56 @@ test('startup guidance remains actionable without sandbox bypass advice', () => 
   expect(chromeStartupHint('No usable sandbox')).toContain('do not disable')
   expect(chromeStartupHint('Missing X server')).toContain('headless')
   expect(chromeStartupHint('CDP endpoint not available')).toContain('port')
+})
+
+test('layered settings match startup; partial saves preserve inheritance and source env expressions', async () => {
+  const { getGlobalConfigPath, loadConfig } = await import('../../nine1bot/src/config/loader')
+  const { mkdir, readFile } = await import('node:fs/promises')
+  const { dirname } = await import('node:path')
+  const { patchBrowserSettings } = await import('../../../opencode/packages/opencode/src/server/nine1bot-browser-settings')
+  const homeMock = spyOn(os, 'homedir').mockReturnValue(root)
+  const envPath = process.env.CHROME_EXEC
+  process.env.CHROME_EXEC = '/opt/Environment Chrome/chrome'
+  try {
+    const global = getGlobalConfigPath()
+    await mkdir(dirname(global), { recursive: true })
+    await writeFile(global, JSON.stringify({ model: 'global/model', browser: { enabled: true, cdpPort: 9444, executablePath: '/opt/global/chrome' } }))
+    await writeFile(process.env.NINE1BOT_CONFIG_PATH!, '{}')
+    const inherited = await readBrowserSettings()
+    expect(inherited.modelConfigured).toBe(true)
+    expect(inherited.settings).toMatchObject({ enabled: true, cdpPort: 9444, executablePath: '/opt/global/chrome' })
+    await patchBrowserSettings({ headless: true })
+    expect(JSON.parse(await readFile(process.env.NINE1BOT_CONFIG_PATH!, 'utf8')).browser).toEqual({ headless: true })
+    expect((await loadConfig(process.env.NINE1BOT_CONFIG_PATH)).browser.executablePath).toBe('/opt/global/chrome')
+
+    await writeFile(process.env.NINE1BOT_CONFIG_PATH!, JSON.stringify({ browser: { executablePath: '{env:CHROME_EXEC}' } }))
+    expect((await readBrowserSettings()).settings.executablePath).toBe(process.env.CHROME_EXEC)
+    await patchBrowserSettings({ headless: true })
+    expect(JSON.parse(await readFile(process.env.NINE1BOT_CONFIG_PATH!, 'utf8')).browser.executablePath).toBe('{env:CHROME_EXEC}')
+    expect((await readBrowserSettings()).settings.headless).toBe(true)
+    const beforeInvalid = await readFile(process.env.NINE1BOT_CONFIG_PATH!, 'utf8')
+    process.env.CHROME_EXEC = 'relative-invalid'
+    await expect(patchBrowserSettings({ headless: false })).rejects.toThrow('Invalid config')
+    expect(await readFile(process.env.NINE1BOT_CONFIG_PATH!, 'utf8')).toBe(beforeInvalid)
+    process.env.CHROME_EXEC = '/opt/Environment Chrome/chrome'
+
+    const cleared = await patchBrowserSettings({ executablePath: null })
+    expect(cleared.settings.executablePath).toBeUndefined()
+    expect(JSON.parse(await readFile(process.env.NINE1BOT_CONFIG_PATH!, 'utf8')).browser.executablePath).toBeNull()
+    expect((await loadConfig(process.env.NINE1BOT_CONFIG_PATH)).browser.executablePath).toBeUndefined()
+    expect((await readBrowserSettings()).settings.executablePath).toBeUndefined()
+
+    await writeFile(process.env.NINE1BOT_CONFIG_PATH!, JSON.stringify({ isolation: { disableGlobalConfig: true }, browser: { executablePath: '{env:CHROME_EXEC}' } }))
+    const isolated = await readBrowserSettings()
+    expect(isolated.modelConfigured).toBe(false)
+    expect(isolated.settings.enabled).toBe(false)
+    expect(isolated.settings.cdpPort).toBe(9222)
+    await patchBrowserSettings({ headless: true })
+    expect((await readBrowserSettings()).settings.executablePath).toBe(process.env.CHROME_EXEC)
+    await patchBrowserSettings({ executablePath: null })
+    expect((await loadConfig(process.env.NINE1BOT_CONFIG_PATH)).browser.executablePath).toBeUndefined()
+  } finally {
+    homeMock.mockRestore()
+    if (envPath === undefined) delete process.env.CHROME_EXEC; else process.env.CHROME_EXEC = envPath
+  }
 })

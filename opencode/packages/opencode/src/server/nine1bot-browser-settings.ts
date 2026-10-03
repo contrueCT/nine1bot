@@ -1,32 +1,41 @@
 import { constants } from "node:fs"
 import { access, stat } from "node:fs/promises"
-import { BrowserConfigSchema } from "../../../../../packages/nine1bot/src/config/schema"
+import z from "zod"
+import { ChromeExecutablePathPattern } from "../../../../../packages/nine1bot/src/config/schema"
+import { loadConfig } from "../../../../../packages/nine1bot/src/config/loader"
 import { detectChromeExecutable } from "../../../../../packages/browser-mcp-server/src/core/chrome"
 import { JsonFile } from "../util/json-file"
 import { getBridgeServer } from "../browser/bridge"
 
-export const BrowserSettingsPatch = BrowserConfigSchema.omit({ sidepanel: true }).partial().extend({
-  executablePath: BrowserConfigSchema.shape.executablePath.unwrap().nullable().optional(),
+// Keep HTTP/OpenAPI schemas on the runtime's local Zod version. Business validation
+// still runs through the startup loader before any source file is committed.
+export const BrowserSettingsPatch = z.object({
+  enabled: z.boolean().optional(),
+  cdpPort: z.number().int().min(1).max(65535).optional(),
+  autoLaunch: z.boolean().optional(),
+  headless: z.boolean().optional(),
+  executablePath: z.string().trim().min(1).regex(ChromeExecutablePathPattern).nullable().optional(),
 }).strict()
 
 export async function readBrowserSettings() {
   const path = process.env.NINE1BOT_CONFIG_PATH
-  const document = path ? await JsonFile.read(path) : undefined
-  const raw = document?.data ?? {}
-  const { sidepanel: _, ...settings } = BrowserConfigSchema.parse(raw.browser ?? {})
-  return { settings, writable: Boolean(path), modelConfigured: typeof raw.model === "string" && raw.model.includes("/") }
+  const effective = await loadConfig(path)
+  const { sidepanel: _, ...settings } = effective.browser
+  return { settings, writable: Boolean(path), modelConfigured: typeof effective.model === "string" && /^[^/]+\/.+/.test(effective.model) }
 }
 
 export async function patchBrowserSettings(input: unknown) {
   const patch = BrowserSettingsPatch.parse(input)
-  const { updateNine1botConfig } = await import("../config/nine1bot")
-  await updateNine1botConfig((draft) => {
+  const path = process.env.NINE1BOT_CONFIG_PATH
+  if (!path) throw new Error("No config path")
+  // Browser settings are launcher-only and never copied into runtime OpenCode config.
+  await JsonFile.update(path, async (draft) => {
     draft.browser ??= {}
     for (const [key, value] of Object.entries(patch)) {
-      if (value === null) delete draft.browser[key]
-      else if (value !== undefined) draft.browser[key] = value
+      if (value !== undefined) draft.browser[key] = value
     }
-    BrowserConfigSchema.parse(draft.browser)
+    // Resolve env expressions only for validation; preserve source expressions verbatim.
+    await loadConfig(path, draft)
   })
   return { ...(await readBrowserSettings()), restartRequired: true }
 }

@@ -1,3 +1,6 @@
+import { Hono } from "hono"
+import { generateSpecs, validator } from "hono-openapi"
+import { BrowserSettingsPatch } from "../../src/server/nine1bot-browser-settings"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises"
 import { tmpdir } from "os"
@@ -31,6 +34,12 @@ afterEach(async () => {
 })
 
 describe("config routes reload behavior", () => {
+  test("browser PATCH schema generates OpenAPI using local runtime Zod", async () => {
+    const app = new Hono().patch("/browser", validator("json", BrowserSettingsPatch), (c) => c.json({ success: true }))
+    const spec = await generateSpecs(app)
+    expect(spec.paths?.["/browser"]?.patch?.requestBody).toBeDefined()
+  })
+
   test("browser settings persist separately, clear paths, and report restart without model inference", async () => {
     const setup = await setupProject()
     for (const executablePath of ["/opt/My Chrome/chrome", null]) {
@@ -44,7 +53,7 @@ describe("config routes reload behavior", () => {
       expect(body.settings.executablePath).toBe(executablePath ?? undefined)
       const stored = JSON.parse(await readFile(process.env.NINE1BOT_CONFIG_PATH!, "utf8"))
       expect(stored.browser.cdpPort).toBe(9333)
-      expect(stored.browser.executablePath).toBe(executablePath ?? undefined)
+      expect(stored.browser.executablePath).toBe(executablePath)
       expect(JSON.parse(await readFile(setup.runtimeConfigPath, "utf8")).browser).toBeUndefined()
     }
     const invalid = await request(setup.projectDir, "/config/nine1bot/browser", {
