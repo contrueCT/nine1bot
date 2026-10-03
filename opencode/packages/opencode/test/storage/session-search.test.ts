@@ -253,3 +253,123 @@ test("repeated cache invalidation during awaited IO uses one bounded retry", asy
   }
   expect((await search()).results[0].session.title).toBe("new needle")
 })
+
+for (const code of ["EIO", "EACCES", "ENOENT"]) {
+  test(`initial search enumeration treats ${code} truthfully`, async () => {
+    const project = `${projectID}-${code}`
+    const key = ["session", project, info.id]
+    const query = () => Storage.searchSessions({ projectID: project, q: "needle" })
+    await Bun.write(path.join(Global.Path.data, "storage", ...key) + ".json", JSON.stringify(info))
+    const original = Bun.Glob.prototype.scan
+    const target = path.join(Global.Path.data, "storage", "session", project)
+    Bun.Glob.prototype.scan = function (this: Bun.Glob, options: any) {
+      if (options.cwd === target) throw Object.assign(new Error("historical enumeration failure"), { code })
+      return original.call(this, options)
+    } as typeof original
+    try {
+      if (code === "ENOENT") expect((await query()).results).toEqual([])
+      else await expect(query()).rejects.toThrow("could not read history")
+      expect(await Storage.list(["session", project])).toEqual([])
+    } finally {
+      Bun.Glob.prototype.scan = original
+    }
+    if (code === "ENOENT") await Storage.rebuildSessionSearch()
+    try {
+      expect((await query()).results).toHaveLength(1)
+      expect(await Storage.read<typeof info>(key)).toEqual(info)
+    } finally {
+      await Storage.remove(key)
+    }
+  })
+}
+
+for (const subtree of ["message", "part"] as const) {
+  test(`ready project retries a newly indexed parent's failed ${subtree} enumeration`, async () => {
+    // Establish project completeness before this parent's pre-existing history
+    // becomes visible. Its only dirty marker is the later parent write.
+    await search()
+    const session = "ses_new_history"
+    const message = "msg_new_history"
+    const part = "prt_new_history"
+    const parentKey = ["session", projectID, session]
+    const messageKey = ["message", session, message]
+    const partKey = ["part", message, part]
+    const sourcePath = (key: string[]) => path.join(Global.Path.data, "storage", ...key) + ".json"
+    await Bun.write(sourcePath(messageKey), JSON.stringify({ id: message, sessionID: session, role: "user" }))
+    await Bun.write(
+      sourcePath(partKey),
+      JSON.stringify({ id: part, messageID: message, sessionID: session, type: "text", text: "historical needle" }),
+    )
+    await Storage.write(parentKey, { id: session, title: "New parent", time: { updated: 2 } })
+    const target = path.join(Global.Path.data, "storage", subtree, subtree === "message" ? session : message)
+    const original = Bun.Glob.prototype.scan
+    let injected = 0
+    Bun.Glob.prototype.scan = function (this: Bun.Glob, options: any) {
+      if (options.cwd === target) {
+        injected++
+        throw Object.assign(new Error("child enumeration EACCES"), { code: "EACCES" })
+      }
+      return original.call(this, options)
+    } as typeof original
+    try {
+      await expect(search()).rejects.toThrow("could not read history")
+      expect(injected).toBe(1)
+    } finally {
+      Bun.Glob.prototype.scan = original
+    }
+    try {
+      expect(
+        (await search()).results.some((result) => result.session.id === session && result.messageID === message),
+      ).toBe(true)
+      expect((await search()).results.some((result) => result.session.id === session)).toBe(true)
+      expect(await Bun.file(sourcePath(partKey)).json()).toMatchObject({ text: "historical needle" })
+    } finally {
+      await Storage.remove(parentKey)
+      await Storage.remove(messageKey)
+      await Storage.remove(partKey)
+    }
+  })
+}
+
+test("an obsolete source walk cannot invalidate a newer ready cache", async () => {
+  await Storage.write(sessionKey, info)
+  await Storage.rebuildSessionSearch()
+  const started = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  const original = Bun.Glob.prototype.scan
+  const target = path.join(Global.Path.data, "storage", "session", projectID)
+  Bun.Glob.prototype.scan = function (this: Bun.Glob, options: any) {
+    if (options.cwd !== target) return original.call(this, options)
+    return (async function* () {
+      started.resolve()
+      await resume.promise
+      throw Object.assign(new Error("obsolete source walk failed"), { code: "EIO" })
+    })()
+  } as typeof original
+  const obsolete = search().then(
+    () => undefined,
+    (error: unknown) => error,
+  )
+  await started.promise
+  Bun.Glob.prototype.scan = original
+  try {
+    await Storage.rebuildSessionSearch()
+    expect((await search()).results).toHaveLength(1)
+    const db = new Database(journalFilename)
+    try {
+      const epoch = () => db.query("SELECT value FROM cache_epoch WHERE slot = 1").get()
+      const before = epoch()
+      resume.resolve()
+      expect(await obsolete).toBeInstanceOf(Error)
+      expect(epoch()).toEqual(before)
+      expect(await Bun.file(filename).exists()).toBe(true)
+      expect((await search()).results).toHaveLength(1)
+    } finally {
+      db.close()
+    }
+  } finally {
+    resume.resolve()
+    Bun.Glob.prototype.scan = original
+    await obsolete
+  }
+})

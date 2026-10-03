@@ -24,13 +24,21 @@ export namespace Storage {
     return (searchJournal ??= new SearchJournal(journalFilename))
   }
   let searchIndex: SessionSearch.Index | undefined
+  class SearchHistoryReadError extends Error {
+    constructor(cause: unknown) {
+      super("Session search could not read history", { cause })
+    }
+  }
 
-  function invalidateSearch(error?: unknown) {
-    journal().replaceCache(() => {
-      searchIndex?.close()
-      searchIndex = undefined
-      for (const suffix of ["", "-wal", "-shm"]) fsSync.rmSync(searchFilename + suffix, { force: true })
-    })
+  function invalidateSearch(error?: unknown, owner?: SessionSearch.Index) {
+    journal().replaceCache(
+      () => {
+        searchIndex?.close()
+        searchIndex = undefined
+        for (const suffix of ["", "-wal", "-shm"]) fsSync.rmSync(searchFilename + suffix, { force: true })
+      },
+      () => !owner || owner.isCurrent(),
+    )
     if (error) log.warn("rebuilding session search index", { error })
   }
 
@@ -39,13 +47,19 @@ export namespace Storage {
     searchIndex?.close()
     searchIndex = undefined
     const source: SessionSearch.Source = {
-      list,
+      list: async (prefix) => {
+        try {
+          return await listEntries(prefix, true)
+        } catch (error) {
+          throw new SearchHistoryReadError(error)
+        }
+      },
       read: async (key) => {
         try {
           return await read(key, { preserveCorrupted: true })
         } catch (error) {
           if (NotFoundError.isInstance(error) || CorruptedError.isInstance(error)) return undefined
-          throw error
+          throw new SearchHistoryReadError(error)
         }
       },
     }
@@ -98,6 +112,13 @@ export namespace Storage {
         current = index()
         return await current.search(input)
       } catch (error) {
+        if (error instanceof SearchHistoryReadError) {
+          // A parent may already have been reconciled before its descendants
+          // failed to enumerate. Discard all derived completeness, never the
+          // journal, so the next query walks the canonical history again.
+          invalidateSearch(error, current)
+          throw error
+        }
         if (error instanceof SessionSearch.StaleIndexError) {
           // Never delete a replacement cache because an older awaited reader lost ownership.
           if (searchIndex === current) {
@@ -403,6 +424,10 @@ export namespace Storage {
 
   const glob = new Bun.Glob("**/*")
   export async function list(prefix: string[]) {
+    return listEntries(prefix)
+  }
+
+  async function listEntries(prefix: string[], strict = false) {
     const dir = await state().then((x) => x.dir)
     try {
       const result = await Array.fromAsync(
@@ -413,7 +438,8 @@ export namespace Storage {
       ).then((results) => results.map((x) => [...prefix, ...x.slice(0, -5).split(path.sep)]))
       result.sort()
       return result
-    } catch {
+    } catch (error) {
+      if (strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error
       return []
     }
   }

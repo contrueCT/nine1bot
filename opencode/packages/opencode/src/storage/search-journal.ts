@@ -265,11 +265,12 @@ export class SearchJournal {
     return this.db.transaction(action).immediate()
   }
 
-  replaceCache(action: () => void) {
+  replaceCache(action: () => void, ownsCache: () => boolean = () => true) {
     // Invalidation can itself be handling a failed completion. Do not recursively
     // retry that completion here; its bounded retry remains scheduled.
     this.db
       .transaction(() => {
+        if (!ownsCache()) return
         this.bindCache(randomUUID())
         action()
       })
