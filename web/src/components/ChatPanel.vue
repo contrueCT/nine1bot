@@ -4,6 +4,7 @@ import { readChatViewport, saveChatViewport } from '../composables/chat-viewport
 import { isAtBottom, isTypingTarget, nextFollowing, UP_KEYS } from '../composables/scroll-follow'
 import { splitPath, tildify, useWorkspacePath } from '../composables/useWorkspacePath'
 import { ArrowDown, FolderOpen } from 'lucide-vue-next'
+import type { MessageMutationDone } from '../composables/message-mutation'
 import type { InteractionState } from '../composables/interaction-state'
 import type { Message, QuestionRequest, PermissionRequest } from '../api/client'
 import MessageItem from './MessageItem.vue'
@@ -33,8 +34,8 @@ const emit = defineEmits<{
   (e: 'permissionResponded', requestId: string, response: 'once' | 'always' | 'reject'): void
   (e: 'clearError'): void
   (e: 'openSettings'): void
-  (e: 'deletePart', messageId: string, partId: string): void
-  (e: 'updatePart', messageId: string, partId: string, updates: { text?: string }): void
+  (e: 'deletePart', messageId: string, partId: string, done: MessageMutationDone): void
+  (e: 'updatePart', messageId: string, partId: string, updates: { text?: string }, done: MessageMutationDone): void
   (e: 'changeDirectory', path: string): void
 }>()
 
@@ -297,8 +298,8 @@ onUnmounted(() => {
         <MessageItem
           v-if="group.type === 'user'"
           :message="group.message"
-          @delete-part="(msgId, partId) => emit('deletePart', msgId, partId)"
-          @update-part="(msgId, partId, updates) => emit('updatePart', msgId, partId, updates)"
+          @delete-part="(msgId, partId, done) => emit('deletePart', msgId, partId, done)"
+          @update-part="(msgId, partId, updates, done) => emit('updatePart', msgId, partId, updates, done)"
         />
         <!-- Consecutive agent messages as one group -->
         <div v-else class="agent-message-row">

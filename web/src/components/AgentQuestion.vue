@@ -77,6 +77,12 @@ const submitAnswer = () => {
   emit('answered', props.request.id, answers)
 }
 
+function handleCustomKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return
+  event.preventDefault()
+  submitAnswer()
+}
+
 const rejectQuestion = () => {
   if (isSubmitting.value || isAnswered.value) return
 
@@ -121,7 +127,7 @@ const rejectQuestion = () => {
           class="custom-input"
           placeholder="或者输入你自己的回答..."
           :disabled="isAnswered || isSubmitting"
-          @keyup.enter="submitAnswer"
+          @keydown="handleCustomKeydown"
         />
       </div>
     </div>

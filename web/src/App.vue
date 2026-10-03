@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { MessageMutationDone } from './composables/message-mutation'
 import type { MessageAttempt } from './api/client'
 import { ref, computed, onMounted, onUnmounted, watch, defineAsyncComponent } from 'vue'
 import { useSession } from './composables/useSession'
@@ -926,20 +927,24 @@ async function handleRenameSession(sessionId: string, title: string) {
 }
 
 // 处理消息部分删除
-async function handleDeletePart(messageId: string, partId: string) {
+async function handleDeletePart(messageId: string, partId: string, done: MessageMutationDone) {
   try {
     await deleteMessagePart(messageId, partId)
+    done()
   } catch (error) {
     console.error('Failed to delete message part:', error)
+    done('删除结果未确认，请刷新查看后再重试。')
   }
 }
 
 // 处理消息部分更新
-async function handleUpdatePart(messageId: string, partId: string, updates: { text?: string }) {
+async function handleUpdatePart(messageId: string, partId: string, updates: { text?: string }, done: MessageMutationDone) {
   try {
     await updateMessagePart(messageId, partId, updates)
+    done()
   } catch (error) {
     console.error('Failed to update message part:', error)
+    done('保存结果未确认，编辑内容已保留。请重试。')
   }
 }
 
