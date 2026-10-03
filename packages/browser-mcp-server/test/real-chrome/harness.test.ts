@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { assertChromeForTestingVersion, chromeArguments, eventually, parseDebuggingPort, within } from './harness'
+import { assertChromeForTestingVersion, chromeArguments, cleanupResources, eventually, parseDebuggingPort, within } from './harness'
 
 describe('real-Chrome harness unit checks (synthetic; do not launch Chrome)', () => {
   test('requires the actual Chrome for Testing brand, not a branded Chrome channel or CDP version', () => {
@@ -43,5 +43,22 @@ describe('real-Chrome harness unit checks (synthetic; do not launch Chrome)', ()
   test('bounds hung readiness checks and operations', async () => {
     await expect(within('synthetic pending', new Promise(() => {}), 10)).rejects.toThrow('exceeded')
     await expect(eventually('synthetic hung check', () => new Promise(() => {}), 10)).rejects.toThrow('within 10ms')
+  })
+  test('cleanup awaits completion and attempts later resources after rejection, throw, or timeout', async () => {
+    const attempted: string[] = []
+    const rejection = new Error('synthetic rejected cleanup')
+    const thrown = new Error('synthetic synchronous cleanup failure')
+    const results = await cleanupResources([
+      { name: 'completed', dispose: async () => { await Bun.sleep(5); attempted.push('completed') } },
+      { name: 'rejected', dispose: () => Promise.reject(rejection) },
+      { name: 'thrown', dispose: () => { throw thrown } },
+      { name: 'hung', dispose: () => new Promise<void>(() => {}) },
+      { name: 'last', dispose: () => { attempted.push('last') } },
+    ], 50)
+    expect(attempted).toEqual(['completed', 'last'])
+    expect(results.map(result => result.status)).toEqual(['passed', 'failed', 'failed', 'failed', 'passed'])
+    expect(results[1]).toMatchObject({ name: 'rejected', error: rejection })
+    expect(results[2]).toMatchObject({ name: 'thrown', error: thrown })
+    expect(String(results[3].status === 'failed' && results[3].error)).toContain('hung exceeded 50ms')
   })
 })
