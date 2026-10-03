@@ -4,6 +4,7 @@ import path from "path"
 import fs from "fs/promises"
 import fsSync from "fs"
 import { SessionSearch } from "./session-search"
+import { SearchJournal } from "./search-journal"
 import { Global } from "../global"
 import { Filesystem } from "../util/filesystem"
 import { lazy } from "../util/lazy"
@@ -17,6 +18,11 @@ export namespace Storage {
 
   // This cache is rebuildable. Search failures must never prevent saving a conversation.
   const searchFilename = path.join(Global.Path.cache, "session-search-v1.sqlite")
+  const journalFilename = path.join(Global.Path.data, "session-search-journal-v1.sqlite")
+  let searchJournal: SearchJournal | undefined
+  function journal() {
+    return (searchJournal ??= new SearchJournal(journalFilename))
+  }
   let searchIndex: SessionSearch.Index | undefined
   let searchIdentity: string | undefined
 
@@ -49,10 +55,10 @@ export namespace Storage {
       },
     }
     try {
-      searchIndex = new SessionSearch.Index(searchFilename, source)
+      searchIndex = new SessionSearch.Index(searchFilename, source, journal())
     } catch (error) {
       invalidateSearch(error)
-      searchIndex = new SessionSearch.Index(searchFilename, source)
+      searchIndex = new SessionSearch.Index(searchFilename, source, journal())
     }
     const created = fsSync.statSync(searchFilename)
     searchIdentity = `${created.dev}:${created.ino}`
@@ -62,8 +68,9 @@ export namespace Storage {
   function searchChange(key: string[], phase: "begin" | "finish", value?: unknown, token?: string) {
     if (!SessionSearch.relevant(key)) return
     try {
-      if (phase === "begin") return index().begin(key)
-      else index().finish(key, value, token)
+      if (phase === "begin") return journal().begin(key)
+      journal().finish(key, token)
+      if (value === undefined) index().purge(key)
     } catch (error) {
       try {
         invalidateSearch(error)
@@ -250,10 +257,15 @@ export namespace Storage {
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
       const searchWrite = searchChange(key, "begin")
-      await fs.unlink(target).catch((error) => {
-        if (error.code !== "ENOENT") throw error
-      })
-      searchChange(key, "finish", undefined, searchWrite)
+      let removed = false
+      try {
+        await fs.unlink(target).catch((error) => {
+          if (error.code !== "ENOENT") throw error
+        })
+        removed = true
+      } finally {
+        searchChange(key, "finish", removed ? undefined : null, searchWrite)
+      }
     })
   }
 
@@ -270,8 +282,11 @@ export namespace Storage {
           log.warn("corrupted JSON file", { path: target, retained: Boolean(options.preserveCorrupted) })
           if (!options.preserveCorrupted) {
             const searchWrite = searchChange(key, "begin")
-            await fs.unlink(target).catch(() => {})
-            searchChange(key, "finish", undefined, searchWrite)
+            try {
+              await fs.unlink(target).catch(() => {})
+            } finally {
+              searchChange(key, "finish", undefined, searchWrite)
+            }
           }
           throw new CorruptedError({ message: `Corrupted JSON file: ${target}` })
         }
@@ -292,16 +307,22 @@ export namespace Storage {
         if (e instanceof SyntaxError) {
           log.warn("corrupted JSON file, removing", { path: target })
           const searchWrite = searchChange(key, "begin")
-          await fs.unlink(target).catch(() => {})
-          searchChange(key, "finish", undefined, searchWrite)
+          try {
+            await fs.unlink(target).catch(() => {})
+          } finally {
+            searchChange(key, "finish", undefined, searchWrite)
+          }
           throw new CorruptedError({ message: `Corrupted JSON file: ${target}` })
         }
         throw e
       }
       fn(content)
       const searchWrite = searchChange(key, "begin")
-      await Bun.write(target, JSON.stringify(content, null, 2))
-      searchChange(key, "finish", content, searchWrite)
+      try {
+        await Bun.write(target, JSON.stringify(content, null, 2))
+      } finally {
+        searchChange(key, "finish", content, searchWrite)
+      }
       return content as T
     })
   }
@@ -312,8 +333,11 @@ export namespace Storage {
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
       const searchWrite = searchChange(key, "begin")
-      await Bun.write(target, JSON.stringify(content, null, 2))
-      searchChange(key, "finish", content, searchWrite)
+      try {
+        await Bun.write(target, JSON.stringify(content, null, 2))
+      } finally {
+        searchChange(key, "finish", content, searchWrite)
+      }
     })
   }
 
@@ -326,8 +350,8 @@ export namespace Storage {
       await fs.mkdir(path.dirname(target), { recursive: true })
       const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
       const bytes = Buffer.from(JSON.stringify(content, null, 2))
+      const searchWrite = searchChange(key, "begin")
       try {
-        const searchWrite = searchChange(key, "begin")
         const written = await Bun.write(temporary, bytes)
         if (written !== bytes.length) throw new Error("Incomplete atomic storage write")
         const file = await fs.open(temporary, "r+")
@@ -337,8 +361,8 @@ export namespace Storage {
           await file.close()
         }
         await fs.rename(temporary, target)
-        searchChange(key, "finish", content, searchWrite)
       } finally {
+        searchChange(key, "finish", content, searchWrite)
         await fs.unlink(temporary).catch(() => {})
       }
     })

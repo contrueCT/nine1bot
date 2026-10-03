@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto"
 import { Database } from "bun:sqlite"
+import { SearchJournal } from "./search-journal"
 import type { Session } from "../session"
 
 /** A disposable, derived index. JSON storage remains the source of truth. */
@@ -27,17 +27,21 @@ export namespace SessionSearch {
   }
 
   export class Index {
-    private db: Database
+    private db!: Database
+    private journal: SearchJournal
+    private ownsJournal: boolean
     private backfills = new Map<string, Promise<void>>()
     private recovering?: Promise<void>
-    private writers = new Map<string, string[]>()
 
     constructor(
       filename: string,
       private source: Source,
+      journal?: SearchJournal,
     ) {
-      this.db = new Database(filename, { create: true })
+      this.journal = journal ?? new SearchJournal(filename === ":memory:" ? ":memory:" : `${filename}.journal`)
+      this.ownsJournal = !journal
       try {
+        this.db = new Database(filename, { create: true })
         this.db.exec(`
         PRAGMA journal_mode = WAL;
         PRAGMA busy_timeout = 5000;
@@ -66,80 +70,38 @@ export namespace SessionSearch {
           INSERT INTO document_fts(rowid, normalized) VALUES (new.id, new.normalized);
         END;
         CREATE TABLE IF NOT EXISTS ready (project_id TEXT PRIMARY KEY);
-        CREATE TABLE IF NOT EXISTS pending (key TEXT PRIMARY KEY, pid INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS writers (id TEXT PRIMARY KEY, key TEXT NOT NULL, pid INTEGER NOT NULL);
-        CREATE INDEX IF NOT EXISTS writer_key ON writers(key);
-        CREATE TABLE IF NOT EXISTS versions (key TEXT PRIMARY KEY, revision INTEGER NOT NULL);
       `)
       } catch (error) {
-        this.db.close()
+        this.db?.close()
+        if (this.ownsJournal) this.journal.close()
         throw error
       }
     }
 
     close() {
       this.db.close()
+      if (this.ownsJournal) this.journal.close()
     }
 
-    /** Persist before changing JSON so a crash between writes is repaired on the next search. */
     begin(key: string[]) {
-      if (!relevant(key)) return
-      const serialized = JSON.stringify(key)
-      const token = randomUUID()
-      this.db.transaction(() => {
-        this.dirty(serialized)
-        this.db.query("INSERT INTO writers VALUES (?, ?, ?)").run(token, serialized, process.pid)
-      })()
-      const tokens = this.writers.get(serialized) ?? []
-      tokens.push(token)
-      this.writers.set(serialized, tokens)
-      return token
-    }
-
-    private dirty(serialized: string) {
-      this.db
-        .query("INSERT INTO versions VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET revision = revision + 1")
-        .run(serialized)
-      this.db
-        .query("INSERT INTO pending VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET pid = excluded.pid")
-        .run(serialized, process.pid)
+      if (relevant(key)) return this.journal.begin(key)
     }
 
     finish(key: string[], value?: unknown, token?: string) {
       if (!relevant(key)) return
-      const serialized = JSON.stringify(key)
-      const tokens = this.writers.get(serialized) ?? []
-      const completed = token ?? tokens[0]
-      const remaining = tokens.filter((value) => value !== completed)
-      if (remaining.length) this.writers.set(serialized, remaining)
-      else this.writers.delete(serialized)
-      // Completion order is not JSON write order. Never publish the caller's snapshot.
-      // Fence readers again, including when begin() belonged to a replaced cache.
-      this.db.transaction(() => {
-        this.dirty(serialized)
-        if (completed) this.db.query("DELETE FROM writers WHERE id = ? AND key = ?").run(completed, serialized)
-        // Eagerly purge deleted text, but retain the dirty marker: a later writer may
-        // already have recreated the source, which canonical reconciliation restores.
-        if (value === undefined) this.apply(key, undefined)
-      })()
+      this.journal.finish(key, token)
+      if (value === undefined) this.purge(key)
     }
 
-    private hasLiveWriter(serialized: string) {
-      const writers = this.db
-        .query<{ id: string; pid: number }, [string]>("SELECT id, pid FROM writers WHERE key = ?")
-        .all(serialized)
-      let live = false
-      for (const writer of writers) {
-        try {
-          process.kill(writer.pid, 0)
-          live = true
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ESRCH")
-            this.db.query("DELETE FROM writers WHERE id = ?").run(writer.id)
-          else live = true
-        }
+    purge(key: string[]) {
+      // Purging is fenced too, so it cannot race a canonical reader that already
+      // restored a concurrently recreated record and consumed the prior marker.
+      const token = this.journal.begin(key)
+      try {
+        this.db.transaction(() => this.apply(key, undefined))()
+      } finally {
+        this.journal.finish(key, token)
       }
-      return live
     }
 
     private apply(key: string[], value?: unknown) {
@@ -238,34 +200,23 @@ export namespace SessionSearch {
         .run(key, sessionID, projectID, messageID, partID, text, text.toLowerCase())
     }
 
-    private version(key: string) {
-      return (
-        this.db.query<{ revision: number }, [string]>("SELECT revision FROM versions WHERE key = ?").get(key)
-          ?.revision ?? 0
-      )
-    }
-
     private async load(key: string[], refreshChildren = false) {
       const serialized = JSON.stringify(key)
       for (;;) {
-        const revision = this.version(serialized)
+        const revision = this.journal.version(serialized)
         const value = await this.source.read(key)
-        const applied = this.db.transaction(() => {
-          // A begin OR finish after our read invalidates this snapshot. Retrying
-          // canonical JSON also handles late finish payloads and cache replacement.
-          if (this.version(serialized) !== revision) return undefined
-          const existed =
-            key[0] === "session"
-              ? this.db.query("SELECT 1 FROM sessions WHERE project_id = ? AND id = ?").get(key[1], key[2])
-              : key[0] === "message"
-                ? this.db.query("SELECT 1 FROM messages WHERE session_id = ? AND id = ?").get(key[1], key[2])
-                : true
-          this.apply(key, value)
-          // Keep the journal while any writer is still active. A reader may run
-          // between that writer's begin and actual JSON write, followed by a crash.
-          if (!this.hasLiveWriter(serialized)) this.db.query("DELETE FROM pending WHERE key = ?").run(serialized)
-          return { children: refreshChildren || !existed }
-        })()
+        const applied = this.journal.reconcile(serialized, revision, () =>
+          this.db.transaction(() => {
+            const existed =
+              key[0] === "session"
+                ? this.db.query("SELECT 1 FROM sessions WHERE project_id = ? AND id = ?").get(key[1], key[2])
+                : key[0] === "message"
+                  ? this.db.query("SELECT 1 FROM messages WHERE session_id = ? AND id = ?").get(key[1], key[2])
+                  : true
+            this.apply(key, value)
+            return { children: refreshChildren || !existed }
+          })(),
+        )
         if (!applied) continue
         // A parent first seen during an active write must not permanently lose
         // already existing descendants merely because they were visited too early.
@@ -282,14 +233,8 @@ export namespace SessionSearch {
     private async recover() {
       if (this.recovering) return this.recovering
       this.recovering = (async () => {
-        const pending = this.db
-          .query<{ key: string }, []>(
-            `SELECT key FROM pending
-          ORDER BY CASE json_extract(key, '$[0]') WHEN 'session' THEN 0 WHEN 'message' THEN 1 ELSE 2 END`,
-          )
-          .all()
-        for (const row of pending) {
-          if (this.db.query("SELECT 1 FROM pending WHERE key = ?").get(row.key)) await this.load(JSON.parse(row.key))
+        for (const row of this.journal.pending()) {
+          if (this.journal.isPending(row.key)) await this.load(JSON.parse(row.key))
         }
       })().finally(() => {
         this.recovering = undefined

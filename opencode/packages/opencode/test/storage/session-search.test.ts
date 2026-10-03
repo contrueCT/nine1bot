@@ -54,7 +54,13 @@ describe("session search cache recovery", () => {
   })
 })
 
-for (const scenario of ["backfill-live-writer", "writer-finishes-late", "cache-replacement-storage"]) {
+for (const scenario of [
+  "backfill-live-writer",
+  "writer-finishes-late",
+  "cache-replacement-storage",
+  "cache-rebuild-writer-crash",
+  "journal-unavailable-storage",
+]) {
   test(`canonical reconciliation across processes: ${scenario}`, async () => {
     const root = await fs.mkdtemp(path.join((await import("node:os")).tmpdir(), "search-race-"))
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures", `${scenario}.ts`)], {
@@ -77,4 +83,74 @@ for (const scenario of ["backfill-live-writer", "writer-finishes-late", "cache-r
       await fs.rm(root, { recursive: true, force: true })
     }
   }, 20000)
+}
+
+const journalFilename = path.join(Global.Path.data, "session-search-journal-v1.sqlite")
+function assertNoWriters() {
+  const db = new Database(journalFilename)
+  try {
+    expect(db.query("SELECT id FROM writers WHERE key = ?").all(JSON.stringify(sessionKey))).toEqual([])
+  } finally {
+    db.close()
+  }
+}
+
+for (const operation of ["write", "update", "writeAtomic", "remove", "corrupt-read", "corrupt-update"] as const) {
+  test(`terminal ${operation} failure retires its exact writer and preserves bounded reads`, async () => {
+    await Storage.write(sessionKey, info)
+    await search()
+    const target = path.join(Global.Path.data, "storage", ...sessionKey) + ".json"
+    if (operation.startsWith("corrupt")) await Bun.write(target, "{broken")
+    const write = Bun.write
+    const unlink = fs.unlink
+    const failure = Object.assign(new Error("simulated source failure"), { code: "ENOSPC" })
+    Bun.write = (async (...args: any[]) => {
+      if (
+        String(args[0]) === target ||
+        String(args[0]).startsWith(path.join(path.dirname(target), ".ses_cache_test.json."))
+      )
+        throw failure
+      return (write as (...values: any[]) => any)(...args)
+    }) as typeof Bun.write
+    fs.unlink = (async (file: any) => {
+      if (String(file) === target) throw failure
+      return unlink(file)
+    }) as typeof fs.unlink
+    try {
+      const mutation =
+        operation === "write"
+          ? Storage.write(sessionKey, info)
+          : operation === "update"
+            ? Storage.update<typeof info>(sessionKey, (draft) => {
+                draft.title = "changed"
+              })
+            : operation === "writeAtomic"
+              ? Storage.writeAtomic(sessionKey, info)
+              : operation === "remove"
+                ? Storage.remove(sessionKey)
+                : operation === "corrupt-read"
+                  ? Storage.read(sessionKey)
+                  : Storage.update(sessionKey, () => {})
+      await expect(mutation).rejects.toThrow()
+    } finally {
+      Bun.write = write
+      fs.unlink = unlink
+    }
+    assertNoWriters()
+    await Storage.write(sessionKey, info)
+    await search()
+    const file = Bun.file
+    let reads = 0
+    Bun.file = ((...args: any[]) => {
+      if (String(args[0]) === target) reads++
+      return (file as (...values: any[]) => any)(...args)
+    }) as typeof Bun.file
+    try {
+      expect((await search()).results).toHaveLength(1)
+      expect((await search()).results).toHaveLength(1)
+      expect(reads).toBe(0)
+    } finally {
+      Bun.file = file
+    }
+  })
 }

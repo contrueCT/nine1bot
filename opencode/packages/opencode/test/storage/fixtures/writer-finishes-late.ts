@@ -68,7 +68,7 @@ if (!mode) {
     assert.equal((await search("latest beta")).results[0]?.messageID, "msg-1")
     assert.equal((await search("new current")).results.length, 0)
     const { Database } = await import("bun:sqlite")
-    const db = new Database(path.join(base, "cache", "opencode", "session-search-v1.sqlite"))
+    const db = new Database(path.join(base, "data", "opencode", "session-search-journal-v1.sqlite"))
     console.log("new cache versions", db.query("SELECT * FROM versions").all())
     db.close()
   }

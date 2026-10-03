@@ -194,7 +194,7 @@ describe("session full-text index", () => {
     f.records.set(JSON.stringify(partKey), { ...part, text: "Recovered text" })
     // Simulate the journal owner having exited, rather than a live same-process writer.
     const { Database } = await import("bun:sqlite")
-    const journal = new Database(filename)
+    const journal = new Database(`${filename}.journal`)
     journal.query("UPDATE writers SET pid = 2147483647").run()
     journal.close()
     f.index.close()
@@ -328,7 +328,7 @@ test("a query during an unfinished write cannot consume its crash-recovery marke
   expect((await f.search("before")).results).toHaveLength(1)
   f.records.set(JSON.stringify(key), { id: "session-1", title: "after crash", time: { updated: 1 } })
   const { Database } = await import("bun:sqlite")
-  const journal = new Database(filename)
+  const journal = new Database(`${filename}.journal`)
   journal.query("UPDATE writers SET pid = 2147483647").run()
   journal.close()
   expect((await f.search("after crash")).results).toHaveLength(1)

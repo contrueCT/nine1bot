@@ -85,7 +85,7 @@ if (!mode) {
     assert.equal((await search("old needle")).results.length, 0)
     console.log("post-rebuild new", await search("new current"))
     const { Database } = await import("bun:sqlite")
-    const db = new Database(path.join(base, "cache", "opencode", "session-search-v1.sqlite"))
+    const db = new Database(path.join(base, "data", "opencode", "session-search-journal-v1.sqlite"))
     console.log("new cache versions", db.query("SELECT * FROM versions").all())
     db.close()
   }
