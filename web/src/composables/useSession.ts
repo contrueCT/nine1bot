@@ -1274,11 +1274,12 @@ export function useSession() {
   async function deleteMessagePart(messageId: string, partId: string) {
     if (!currentSession.value) throw new Error('No active session')
     const sessionId = currentSession.value.id
+    const isOwner = viewOwner()
 
     try {
       await api.deleteMessagePart(sessionId, messageId, partId)
 
-      if (currentSession.value?.id !== sessionId) return
+      if (!isOwner()) return
       // Confirmed server update: only remove the part
       const msgIndex = messages.value.findIndex(m => m.info.id === messageId)
       if (msgIndex !== -1) {
@@ -1300,11 +1301,12 @@ export function useSession() {
   async function updateMessagePart(messageId: string, partId: string, updates: { text?: string }) {
     if (!currentSession.value) throw new Error('No active session')
     const sessionId = currentSession.value.id
+    const isOwner = viewOwner()
 
     try {
       const updatedPart = await api.updateMessagePart(sessionId, messageId, partId, updates)
 
-      if (currentSession.value?.id !== sessionId) return updatedPart
+      if (!isOwner()) return updatedPart
       // 更新本地消息
       const msgIndex = messages.value.findIndex(m => m.info.id === messageId)
       if (msgIndex !== -1) {

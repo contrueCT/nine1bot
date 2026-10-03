@@ -44,6 +44,37 @@ describe('chat and settings reliability', () => {
     expect(state.sessionNotifications.value.at(-1)?.message).toContain('请先停止')
   })
 
+  it('does not overwrite a newer edit after navigating A to B and back to A', async () => {
+    const state = setupSession()
+    const msg = () => ({ info: { id: 'm', sessionID: 'A', role: 'user' as const, time: { created: 1 } }, parts: [{ id: 'p', type: 'text' as const, text: 'original' }] })
+    api.getMessages = async (id) => id === 'A' ? [msg()] : []
+    await state.selectSession(session('A'))
+    const old = deferred<any>()
+    api.updateMessagePart = () => old.promise
+    const pending = state.updateMessagePart('m', 'p', { text: 'old edit' })
+    await state.selectSession(session('B'))
+    await state.selectSession(session('A'))
+    api.updateMessagePart = async () => ({ id: 'p', type: 'text', text: 'new acknowledged edit' })
+    await state.updateMessagePart('m', 'p', { text: 'new acknowledged edit' })
+    old.resolve({ id: 'p', type: 'text', text: 'old edit' })
+    await pending
+    expect(state.messages.value[0].parts[0].text).toBe('new acknowledged edit')
+  })
+
+  it('does not apply a stale delete response after returning to the same session', async () => {
+    const state = setupSession()
+    api.getMessages = async (id) => id === 'A' ? [{ info: { id: 'm', sessionID: 'A', role: 'user', time: { created: 1 } }, parts: [{ id: 'p', type: 'text', text: 'restored content' }] }] : []
+    await state.selectSession(session('A'))
+    const old = deferred<boolean>()
+    api.deleteMessagePart = () => old.promise
+    const pending = state.deleteMessagePart('m', 'p')
+    await state.selectSession(session('B'))
+    await state.selectSession(session('A'))
+    old.resolve(true)
+    await pending
+    expect(state.messages.value[0].parts[0].text).toBe('restored content')
+  })
+
   it('updates titles from events for current, background and draft-mode conversations', async () => {
     const state = setupSession()
     let receive!: Parameters<typeof api.subscribeEvents>[0]
