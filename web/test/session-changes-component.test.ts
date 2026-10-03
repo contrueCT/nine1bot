@@ -4,6 +4,7 @@ import * as Icons from 'lucide-vue-next'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { api } from '../src/api/client'
 import { useSessionChanges } from '../src/composables/useSessionChanges'
+import { snapshotLineDiff } from '../src/utils/snapshot-line-diff'
 import { useModalFocus } from '../src/composables/useModalFocus'
 
 // Compile and mount the real SFC; only the DOM host and read-only API are synthetic.
@@ -15,7 +16,7 @@ async function component() {
       const owner = module === 'vue' ? 'Vue' : module === 'lucide-vue-next' ? 'Icons' : 'deps'
       return `const { ${imports.replace(/\bas\b/g, ':')} } = ${owner};`
     }).replace('export default', 'return')
-  return new Function('Vue', 'Icons', 'deps', compiled)(Vue, Icons, { useSessionChanges, useModalFocus })
+  return new Function('Vue', 'Icons', 'deps', compiled)(Vue, Icons, { useSessionChanges, useModalFocus, snapshotLineDiff })
 }
 type Host = { type: string; text: string; props: Record<string, any>; children: Host[]; parent?: Host; isConnected: boolean; focus(): void; contains(other: Host): boolean; querySelectorAll(): Host[]; getClientRects(): object[] }
 let active: any
@@ -201,4 +202,17 @@ test('search entry closes the lower changes modal before taking focus', async ()
   expect(source).toMatch(/function openSearch\(\) \{[\s\S]*?showChangesPanel\.value = false\s*showSearch\.value = true\s*\}/)
   expect(source).toContain('@open-search="openSearch"')
   expect(source).toContain('else openSearch()')
+})
+
+
+test('line diff shows escaped changes and line numbers with an accessible view toggle', async () => {
+  api.getSessionChanges = async () => [{ file: 'a.ts', before: 'same\nold\n', after: 'same\n<script>new</script>\n', additions: 1, deletions: 1 }]
+  const root = await mount(() => ({ sessionId: 'A', directory: '/A', isStreaming: false }))
+  button(root, 'a.ts').props.onClick(); await settle()
+  button(root, '切换到逐行差异').props.onClick(); await settle()
+  expect(text(root)).toContain('<script>new</script>')
+  expect(descendants(root).some(item => item.type === 'script')).toBe(false)
+  expect(descendants(root).filter(item => item.type === 'pre')).toHaveLength(1)
+  expect(text(root)).toContain('−old')
+  expect(button(root, '切换到变更前后').props['aria-pressed']).toBe(true)
 })

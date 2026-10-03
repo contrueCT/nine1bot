@@ -38,6 +38,7 @@ beforeEach(() => {
     sources.push(source)
     return { ready: Promise.resolve(), close() { source.closed = true }, connectionGeneration: () => 1 }
   }
+  api.getMessageReceipt = async (sessionID, requestID) => ({ sessionID, requestID, state: 'accepted', messageID: 'msg_original' })
   api.getMessages = async () => []
   api.getSessionStatus = async () => ({})
   api.getSessions = async () => []
@@ -145,14 +146,13 @@ describe('stoppable and replayable sends', () => {
     model.modelID = 'changed'
     const second = await active.sendMessage('changed input', model, [file], attempt)
     expect(second).toBe(true)
-    expect(payloads).toHaveLength(2)
-    expect(payloads[1]).toBe(payloads[0])
+    expect(payloads).toHaveLength(1)
     expect(JSON.parse(payloads[0])).toMatchObject({ requestID: attempt.id, model: { providerID: 'p', modelID: 'original' }, context: { page: { title: 'original page' } }, parts: [{ type: 'text', text: 'original text' }, { filename: 'original.txt' }] })
     expect(page.requests).toBe(1)
     expect(modelChanges).toBe(1)
     expect(active.sessionNotifications.value).toHaveLength(0)
   })
-  it('keeps a request identifiable in the snapshot but awaits a positive replay acknowledgement', async () => {
+  it('keeps a request identifiable in the snapshot but awaits a positive receipt acknowledgement', async () => {
     await active.selectSession(session('A'))
     const attempt: MessageAttempt = { id: createRequestID() }
     let posts = 0
@@ -165,9 +165,9 @@ describe('stoppable and replayable sends', () => {
     expect(await active.sendMessage('hello', undefined, undefined, attempt)).toBe(false)
     expect(active.messages.value[0].info.requestID).toBe(attempt.id)
     expect(await active.sendMessage('hello', undefined, undefined, attempt)).toBe(true)
-    expect(posts).toBe(2)
+    expect(posts).toBe(1)
   })
-  it('reconciles a completed replay that emits no new idle event', async () => {
+  it('reconciles a completed receipt recovery that emits no new idle event', async () => {
     await active.selectSession(session('A'))
     const attempt: MessageAttempt = { id: createRequestID() }
     let posts = 0
@@ -180,7 +180,7 @@ describe('stoppable and replayable sends', () => {
     expect(await active.sendMessage('hello', undefined, undefined, attempt)).toBe(true)
     expect(active.isStreaming.value).toBe(false)
   })
-  it('can safely retry an unknown POST even when the recovery snapshot also failed', async () => {
+  it('can safely reconcile an unknown POST even when the recovery snapshot also failed', async () => {
     await active.selectSession(session('A'))
     const attempt: MessageAttempt = { id: createRequestID() }
     let posts = 0
@@ -199,9 +199,9 @@ describe('stoppable and replayable sends', () => {
     expect(active.isStreaming.value).toBe(false)
     expect(await active.sendMessage('hello', undefined, undefined, attempt)).toBe(true)
     expect(active.isStreaming.value).toBe(false)
-    expect(posts).toBe(2)
+    expect(posts).toBe(1)
   })
-  it('reconciles idle after an accepted replay even when history stays offline, without another POST for history retry', async () => {
+  it('reconciles idle after an accepted receipt even when history stays offline, without another POST for history retry', async () => {
     await active.selectSession(session('A'))
     const displayed = message('displayed-before-failure', 'A', 'assistant')
     active.messages.value = [displayed]
@@ -230,12 +230,12 @@ describe('stoppable and replayable sends', () => {
     expect(active.messages.value).toEqual([displayed])
     expect(await active.retryHistory()).toBe(false)
     expect(active.isStreaming.value).toBe(false)
-    expect(posts).toBe(2)
+    expect(posts).toBe(1)
     api.getMessages = async () => [displayed, message('recovered-original', 'A')]
     expect(await active.retryHistory()).toBe(true)
     expect(active.historyError.value).toBeNull()
     expect(active.messages.value).toHaveLength(2)
-    expect(posts).toBe(2)
+    expect(posts).toBe(1)
   })
   it('does not let an interrupted older preflight post after a newer send starts', async () => {
     await active.selectSession(session('A'))
@@ -319,7 +319,7 @@ describe('stream and selected-session ownership', () => {
     expect(active.historyError.value).toBeNull()
     expect(active.messages.value[0].info.sessionID).toBe('B')
   })
-  it('ignores a late directory update after changing sessions and returning', async () => {
+  it('synchronizes a committed directory after changing sessions and returning', async () => {
     await active.selectSession(session('A'))
     const update = deferred<Session>()
     api.updateSession = () => update.promise
@@ -328,7 +328,7 @@ describe('stream and selected-session ownership', () => {
     await active.selectSession(session('A'))
     update.resolve({ ...session('A'), directory: '/new/A' })
     await changing
-    expect(active.currentDirectory.value).toBe('/workspace/A')
+    expect(active.currentDirectory.value).toBe('/new/A')
   })
   it('keeps only the latest same-session directory response', async () => {
     await active.selectSession(session('A'))
@@ -385,4 +385,142 @@ describe('stream and selected-session ownership', () => {
     await failing
     expect(active.todoItems.value[0].id).toBe('new-B')
   })
+})
+
+
+it('unknown, reserved and unavailable receipts never repost or imply acceptance', async () => {
+  await active.selectSession(session('A'))
+  const attempt: MessageAttempt = { id: createRequestID(), submitted: true, recoverySessionID: 'A' }
+  let posts = 0
+  api.sendMessage = async () => { posts++; throw new Error('must not post') }
+  for (const state of ['unknown', 'reserved'] as const) {
+    api.getMessageReceipt = async (sessionID, requestID) => ({ sessionID, requestID, state })
+    expect(await active.sendMessage('original', undefined, undefined, attempt)).toBe(false)
+  }
+  api.getMessageReceipt = async () => { throw new Error('offline') }
+  expect(await active.sendMessage('original', undefined, undefined, attempt)).toBe(false)
+  expect(posts).toBe(0)
+  expect(attempt.submitted).toBe(true)
+})
+
+it('refresh receipt recovery rejects a different active session', async () => {
+  await active.selectSession(session('B'))
+  let reads = 0
+  api.getMessageReceipt = async () => { reads++; throw new Error('unexpected') }
+  expect(await active.sendMessage('', undefined, undefined, { id: createRequestID(), submitted: true, recoverySessionID: 'A' })).toBe(false)
+  expect(reads).toBe(0)
+})
+
+
+it('migrates a committed directory update after navigation and keeps the other view untouched', async () => {
+  await active.selectSession(session('A'))
+  getComposerDraft('A').text = 'A before move'
+  const changed = deferred<Session>()
+  api.updateSession = () => changed.promise
+  const pending = active.changeDirectory('/workspace/new-A')
+  await active.selectSession(session('B'))
+  getComposerDraft('B').text = 'B stays private'
+  changed.resolve({ ...session('A'), directory: '/workspace/new-A' })
+  await pending
+  expect(active.currentSession.value?.id).toBe('B')
+  expect(active.currentDirectory.value).toBe('/workspace/B')
+  expect(getComposerDraft('A', undefined, '/workspace/new-A').text).toBe('A before move')
+  expect(getComposerDraft('A', undefined, '/workspace/A').text).toBe('')
+  expect(getComposerDraft('B', undefined, '/workspace/B').text).toBe('B stays private')
+})
+
+it('guards repeated same-session updates independently of another session directory update', async () => {
+  await active.selectSession(session('A'))
+  getComposerDraft('A').text = 'original A'
+  const older = deferred<Session>(), newer = deferred<Session>()
+  let count = 0
+  api.updateSession = () => ++count === 1 ? older.promise : newer.promise
+  const first = active.changeDirectory('/workspace/A-old')
+  const second = active.changeDirectory('/workspace/A-new')
+  await active.selectSession(session('B'))
+  getComposerDraft('B').text = 'original B'
+  api.updateSession = async () => ({ ...session('B'), directory: '/workspace/B-new' })
+  await active.changeDirectory('/workspace/B-new')
+  newer.resolve({ ...session('A'), directory: '/workspace/A-new' }); await second
+  older.resolve({ ...session('A'), directory: '/workspace/A-old' }); await first
+  expect(getComposerDraft('A', undefined, '/workspace/A-new').text).toBe('original A')
+  expect(getComposerDraft('A', undefined, '/workspace/A-old').text).toBe('')
+  expect(getComposerDraft('B', undefined, '/workspace/B-new').text).toBe('original B')
+  expect(active.currentDirectory.value).toBe('/workspace/B-new')
+  await active.selectSession({ ...session('A'), directory: '/workspace/A-new' })
+  api.updateSession = async () => ({ ...session('A'), directory: '/workspace/A-final' })
+  await active.changeDirectory('/workspace/A-final')
+  expect(getComposerDraft('A', undefined, '/workspace/A-final').text).toBe('original A')
+  expect(getComposerDraft('A', undefined, '/workspace/A-new').text).toBe('')
+})
+
+it('preserves an edited destination draft when a delayed directory response finally arrives', async () => {
+  await active.selectSession(session('A'))
+  const source = getComposerDraft('A'); source.text = 'source draft'
+  const changed = deferred<Session>()
+  api.updateSession = () => changed.promise
+  const changing = active.changeDirectory('/workspace/A-new')
+  await active.selectSession({ ...session('A'), directory: '/workspace/A-new' })
+  const destination = getComposerDraft('A'); destination.text = 'newer destination draft'
+  changed.resolve({ ...session('A'), directory: '/workspace/A-new' }); await changing
+  expect(getComposerDraft('A')).toBe(destination)
+  expect(destination.text).toBe('newer destination draft')
+  expect(destination.attempts.map(item => item.text)).toEqual(['source draft'])
+  expect(destination.attempts[0]?.submitted).toBeUndefined()
+  expect(getComposerDraft('A', undefined, '/workspace/A').text).toBe('')
+})
+
+
+it('does not strand an acknowledged background update when a newer same-session request fails', async () => {
+  await active.selectSession(session('A'))
+  getComposerDraft('A').text = 'keep the committed draft'
+  const older = deferred<Session>(), newer = deferred<Session>()
+  let count = 0
+  api.updateSession = () => ++count === 1 ? older.promise : newer.promise
+  const first = active.changeDirectory('/workspace/A-committed')
+  const second = active.changeDirectory('/workspace/A-failed')
+  await active.selectSession(session('B'))
+  older.resolve({ ...session('A'), directory: '/workspace/A-committed' }); await first
+  newer.reject(new Error('new update failed')); await second
+  expect(active.currentSession.value?.id).toBe('B')
+  expect(getComposerDraft('A', undefined, '/workspace/A-committed').text).toBe('keep the committed draft')
+  expect(getComposerDraft('A', undefined, '/workspace/A-failed').text).toBe('')
+})
+
+
+it('commits draft migration without waiting for obsolete same-session status IO', async () => {
+  const a = session('A'), b = session('B')
+  active.sessions.value = [a, b]
+  await active.selectSession(a)
+  getComposerDraft('A').text = 'draft must move immediately'
+  const update = deferred<Session>()
+  api.updateSession = () => update.promise
+  const changing = active.changeDirectory('/workspace/A-new')
+  await active.selectSession(b)
+  const obsoleteStatus = deferred<Record<string, any>>()
+  const statusStarted = deferred<void>()
+  let hold = true
+  api.getSessionStatus = async () => { if (hold) { hold = false; statusStarted.resolve(); return obsoleteStatus.promise } return {} }
+  const oldSelection = active.selectSession(a)
+  await statusStarted.promise
+  try {
+    getComposerDraft('A', undefined, '/workspace/A').text = 'edited during old readiness'
+    update.resolve({ ...a, directory: '/workspace/A-new' })
+    const completed = await Promise.race([changing.then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 200))])
+    expect(completed).toBe(true)
+    expect(getComposerDraft('A', undefined, '/workspace/A-new').text).toBe('edited during old readiness')
+    expect(getComposerDraft('A', undefined, '/workspace/A').text).toBe('')
+    await active.selectSession(b)
+    await active.selectSession(active.sessions.value.find(item => item.id === 'A')!)
+    expect(active.currentDirectory.value).toBe('/workspace/A-new')
+    expect(getComposerDraft('A', undefined, active.currentDirectory.value).text).toBe('edited during old readiness')
+    expect(active.connectionState.value).toBe('connected')
+  } finally {
+    obsoleteStatus.resolve({})
+    await oldSelection
+    await changing
+  }
+  await tick()
+  expect(active.currentDirectory.value).toBe('/workspace/A-new')
+  expect(active.connectionState.value).toBe('connected')
 })

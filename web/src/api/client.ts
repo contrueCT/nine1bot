@@ -1,3 +1,4 @@
+import { beginSessionRead, markSessionSnapshot, deriveSessionSnapshot } from './session-snapshot-authority'
 import {
   RUNTIME_EVENT_TYPES,
   normalizeRuntimeEventEnvelope,
@@ -234,10 +235,9 @@ function useFetchEventStream(): boolean {
 }
 
 function normalizeSession(session: Session): Session {
-  return {
-    ...session,
+  return deriveSessionSnapshot(session, {
     createdAt: session.time ? new Date(session.time.created).toISOString() : undefined
-  }
+  })
 }
 
 function webClientCapabilities(page?: RequestPagePayload) {
@@ -392,6 +392,7 @@ export interface MessageAttempt {
   model?: { providerID: string; modelID: string }
   submission?: { sessionID: string; request: MessageSubmission }
   submitted?: boolean
+  recoverySessionID?: string
   notificationId?: string
 }
 
@@ -1146,6 +1147,7 @@ export const api = {
   },
 
   async searchSessions(query: string, directory: string): Promise<SessionSearchResponse> {
+    const readStarted = beginSessionRead()
     const params = new URLSearchParams({ q: query, limit: '50', directory })
     if (clientSurface === 'browser-extension') params.set('clientSource', 'browser-extension')
     const response = await requireOk(await fetchWithTimeout(`${BASE_URL}/session/search?${params}`, {
@@ -1156,12 +1158,13 @@ export const api = {
       throw new Error('搜索响应格式无效')
     }
     return { ...data, results: data.results.map((result: SessionSearchResult) => ({
-      ...result, session: normalizeSession(result.session),
+      ...result, session: markSessionSnapshot(normalizeSession(result.session), readStarted),
     })) }
   },
 
   // 获取会话列表
   async getSessions(directory?: string): Promise<Session[]> {
+    const readStarted = beginSessionRead()
     const params = new URLSearchParams()
     if (directory) params.set('directory', directory)
     params.set('roots', 'true')  // 只获取主会话，过滤掉 subagent 会话
@@ -1178,13 +1181,14 @@ export const api = {
     }
     // 添加 createdAt 字段用于显示
     return sessions
-      .map((s: Session) => normalizeSession(s))
+      .map((s: Session) => markSessionSnapshot(normalizeSession(s), readStarted))
       .filter((session: Session) => sessionMatchesClientSurface(session))
       .sort((a: Session, b: Session) => b.time.updated - a.time.updated)
   },
 
   // 创建会话
   async createSession(directory?: string, pageContext?: RequestPagePayload): Promise<Session> {
+    const readStarted = beginSessionRead()
     const res = await requireOk(await fetchWithTimeout(`${BASE_URL}/nine1bot/agent/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1198,7 +1202,7 @@ export const api = {
     const data = await res.json()
     const session = data.session || data.data || data
     if (!session?.id || typeof session.directory !== 'string') throw new Error('创建会话响应格式无效')
-    return normalizeSession(session)
+    return markSessionSnapshot(normalizeSession(session), readStarted)
   },
 
   // Read-only review of the session snapshot, pinned to its owning directory.
@@ -1224,6 +1228,16 @@ export const api = {
     const messages = Array.isArray(data) ? data : data.data
     if (!Array.isArray(messages)) throw new Error('会话历史响应格式无效')
     return messages
+  },
+
+  // Receipt recovery is strictly read-only, including after a refresh.
+  async getMessageReceipt(sessionId: string, requestID: string, directory: string): Promise<{ state: 'unknown' | 'reserved' | 'accepted'; sessionID: string; requestID: string; messageID?: string }> {
+    const url = applyDirectoryToUrl(`${BASE_URL}/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/requests/${encodeURIComponent(requestID)}`, directory)
+    const response = await requireOk(await fetchWithTimeout(url, { headers: { 'x-opencode-directory': encodeURIComponent(directory) } }, DEFAULT_TIMEOUT, false))
+    const data = await response.json()
+    if (data.sessionID !== sessionId || data.requestID !== requestID || !['unknown', 'reserved', 'accepted'].includes(data.state)
+      || (data.state === 'accepted' && (typeof data.messageID !== 'string' || !data.messageID.startsWith('msg')))) throw new Error('发送回执响应格式无效')
+    return data
   },
 
   // 发送消息。消息流通过 per-session runtime event stream 返回。
@@ -1401,6 +1415,7 @@ export const api = {
 
   // 更新会话（重命名、修改工作目录等）
   async updateSession(sessionId: string, updates: { title?: string; directory?: string }): Promise<Session> {
+    const readStarted = beginSessionRead()
     const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -1412,7 +1427,7 @@ export const api = {
     }
     const data = await res.json()
     const session = data.data || data
-    return normalizeSession(session)
+    return markSessionSnapshot(normalizeSession(session), readStarted)
   },
 
   // 删除消息部分
@@ -1864,6 +1879,7 @@ export const projectApi = {
   },
 
   async sessions(projectID: string, opts: { roots?: boolean; search?: string; limit?: number } = {}): Promise<Session[]> {
+    const readStarted = beginSessionRead()
     const params = new URLSearchParams()
     if (opts.roots !== undefined) params.set('roots', String(opts.roots))
     if (opts.search) params.set('search', opts.search)
@@ -1875,7 +1891,7 @@ export const projectApi = {
     }
     const sessions = await res.json()
     return (sessions || [])
-      .map((s: Session) => normalizeSession(s))
+      .map((s: Session) => markSessionSnapshot(normalizeSession(s), readStarted))
       .filter((session: Session) => sessionMatchesClientSurface(session))
   },
 

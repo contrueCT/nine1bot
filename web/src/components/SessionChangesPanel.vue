@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { FileDiff, RefreshCw, X } from 'lucide-vue-next'
 import { useSessionChanges } from '../composables/useSessionChanges'
+import { snapshotLineDiff } from '../utils/snapshot-line-diff'
 import { useModalFocus } from '../composables/useModalFocus'
 
 const props = defineProps<{
@@ -21,6 +22,9 @@ const visibleFiles = computed(() => files.value.slice(0, visibleCount.value))
 const additions = computed(() => files.value.reduce((sum, file) => sum + file.additions, 0))
 const deletions = computed(() => files.value.reduce((sum, file) => sum + file.deletions, 0))
 const TEXT_LIMIT = 100_000
+const diffMode = ref(false)
+const lineDiffs = computed(() => new Map(visibleFiles.value.filter(file => opened.value.has(file.file) && diffMode.value)
+  .map(file => [file.file, snapshotLineDiff(file.before, file.after)])))
 function refresh() { return load(props.sessionId, props.directory) }
 function toggle(file: string) {
   const next = new Set(opened.value)
@@ -65,6 +69,7 @@ useModalFocus(root, () => emit('close'))
     <p v-if="loading" class="changes-note" role="status">正在读取文件变更…</p>
     <p v-else-if="loadedAt && !files.length && !error" class="changes-empty">尚无已记录的文件变更。快照未启用、尚未完成或文件未发生变化时，这里可能为空。</p>
     <div v-if="files.length" class="changes-summary">{{ files.length }} 个文件 <span class="added">+{{ additions }}</span> <span class="removed">−{{ deletions }}</span></div>
+    <button v-if="files.length" type="button" class="btn btn-ghost" :aria-pressed="diffMode" @click="diffMode = !diffMode">{{ diffMode ? '切换到变更前后' : '切换到逐行差异' }}</button>
     <div class="changes-files custom-scrollbar">
       <article v-for="file in visibleFiles" :key="file.file" class="change-file">
         <button type="button" class="change-file-toggle" :aria-expanded="opened.has(file.file)" @click="toggle(file.file)">
@@ -72,6 +77,10 @@ useModalFocus(root, () => emit('close'))
           <span class="change-counts"><span class="added">+{{ file.additions }}</span> <span class="removed">−{{ file.deletions }}</span></span>
         </button>
         <p v-if="opened.has(file.file) && !file.before && !file.after && file.additions === 0 && file.deletions === 0" class="changes-note change-no-text">此快照未提供文本差异，可能是二进制文件或空文件。请在工作区核对文件内容。</p>
+        <div v-else-if="opened.has(file.file) && diffMode" class="line-diff">
+          <p v-if="lineDiffs.get(file.file)?.unavailable" class="changes-note">{{ lineDiffs.get(file.file)?.unavailable }}</p>
+          <pre v-else tabindex="0" role="region" :aria-label="`${file.file} 逐行差异，原行号和新行号`"><span v-for="(line, index) in lineDiffs.get(file.file)?.lines" :key="index" class="diff-line" :class="line.kind"><span class="line-number">{{ line.before ?? '' }}</span><span class="line-number">{{ line.after ?? '' }}</span><span class="diff-marker">{{ line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' ' }}</span>{{ line.text }}</span></pre>
+        </div>
         <div v-else-if="opened.has(file.file)" class="change-columns">
           <section><h3>变更前</h3><p v-if="file.before.length > TEXT_LIMIT" class="changes-note">内容较长，仅显示前 {{ TEXT_LIMIT }} 个字符</p><pre tabindex="0" role="region" :aria-label="`${file.file} 变更前`">{{ file.before.slice(0, TEXT_LIMIT) || '（空）' }}</pre></section>
           <section><h3>变更后</h3><p v-if="file.after.length > TEXT_LIMIT" class="changes-note">内容较长，仅显示前 {{ TEXT_LIMIT }} 个字符</p><pre tabindex="0" role="region" :aria-label="`${file.file} 变更后`">{{ file.after.slice(0, TEXT_LIMIT) || '（空）' }}</pre></section>
@@ -98,6 +107,12 @@ useModalFocus(root, () => emit('close'))
 .change-path { min-width: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12px; }
 .change-counts { flex-shrink: 0; font-size: 12px; }
 .change-no-text { padding: 0 12px; }
+.line-diff pre { font: 12px/1.6 var(--font-mono); margin: 0; padding: 12px; max-height: 45vh; overflow: auto; white-space: pre; }
+.diff-line { display: block; min-width: max-content; }
+.diff-line.added { background: color-mix(in srgb, var(--success, #16803c) 12%, transparent); }
+.diff-line.removed { background: color-mix(in srgb, var(--error, #b82f2f) 12%, transparent); }
+.line-number { display: inline-block; width: 4em; text-align: right; margin-right: 1em; color: var(--text-muted); user-select: none; }
+.diff-marker { display: inline-block; width: 2em; }
 .change-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .change-columns section { min-width: 0; }
 .change-columns section + section { border-left: 1px solid var(--border-default); }

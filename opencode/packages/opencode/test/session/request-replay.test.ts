@@ -553,3 +553,29 @@ test("unsafe legacy IDs and receipt index paths fail closed without following pa
     expect(await Storage.list(["session_message_request", session.id])).toHaveLength(0)
   })
 })
+
+test("read-only receipt recovery distinguishes unknown, reserved, accepted and other sessions", async () => {
+  await fixture(async (session) => {
+    const requestID = 'req_readonly_recovery'
+    const get = (sessionID = session.id) => Server.App().request(`/nine1bot/agent/sessions/${sessionID}/requests/${requestID}`, {
+      headers: { 'x-opencode-directory': session.directory },
+    })
+    let response = await get()
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ requestID, sessionID: session.id, state: 'unknown' })
+    const input = { sessionID: session.id, requestID, noReply: true, parts: [{ type: 'text' as const, text: 'original' }] }
+    const messageID = await SessionRequest.prepare(input)
+    response = await get()
+    expect(await response.json()).toMatchObject({ requestID, sessionID: session.id, state: 'reserved', messageID })
+    expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+    await SessionRequest.accept({ ...input, messageID })
+    for (let i = 0; i < 2; i++) {
+      response = await get()
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(await response.json()).toMatchObject({ requestID, sessionID: session.id, state: 'accepted', messageID })
+    }
+    expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+    const other = await Session.create({})
+    expect((await get(other.id)).status).toBe(409)
+  })
+})

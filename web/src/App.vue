@@ -68,6 +68,9 @@ const {
   createSession,
   ensureSession,
   selectSession,
+  resolveSessionDirectory,
+  rememberSessionRecords,
+  sessionRecordOrder,
   viewOwner,
   sendMessage,
   abortSession,
@@ -148,6 +151,7 @@ const {
   loading: accessLoading,
   enabled: accessEnabled,
   authenticated: accessAuthenticated,
+  status: accessStatus,
   required: accessRequired,
   insecureTransport,
   initialize: initializeAccessAuth,
@@ -249,20 +253,21 @@ const extensionRelayStatus = ref({
   message: '',
 })
 
+// Register concrete list snapshots when received, not when a later PATCH ends.
+watch(globalRecentSessions, rememberSessionRecords, { immediate: true, flush: 'sync' })
+
 const sidebarSessions = computed(() => {
   const merged = new Map<string, Session>()
-  for (const session of globalRecentSessions.value) {
-    merged.set(session.id, session)
+  const include = (session: Session) => {
+    const previous = merged.get(session.id)
+    // Source objects identify freshness; directory PATCH deliberately preserves
+    // updated timestamps. A newly loaded provider must beat an older cached one.
+    if (!previous || sessionRecordOrder(session) > sessionRecordOrder(previous)) merged.set(session.id, session)
   }
-  for (const session of sessions.value) {
-    if (!merged.has(session.id)) {
-      merged.set(session.id, session)
-    }
-  }
-  if (currentSession.value && !merged.has(currentSession.value.id)) {
-    merged.set(currentSession.value.id, currentSession.value)
-  }
-  return Array.from(merged.values()).sort((a, b) => b.time.updated - a.time.updated)
+  for (const session of globalRecentSessions.value) include(session)
+  for (const session of sessions.value) include(session)
+  if (currentSession.value) include(currentSession.value)
+  return Array.from(merged.values()).map(resolveSessionDirectory).sort((a, b) => b.time.updated - a.time.updated)
 })
 
 const sidebarSessionsLoading = computed(() =>
@@ -523,12 +528,15 @@ function openCurrentExtensionSessionInMainWeb() {
   }, parentContext.origin)
 }
 
-function stopAuthenticatedRuntime() {
-  if (!authenticatedRuntimeStarted) return
+function stopAuthenticatedRuntime(preserveDrafts = false) {
+  if (!authenticatedRuntimeStarted) {
+    clearDrafts(undefined, preserveDrafts)
+    return
+  }
   authenticatedRuntimeStarted = false
   authenticatedRuntimeGeneration++
   unsubscribe()
-  clearDrafts()
+  clearDrafts(undefined, preserveDrafts)
   if (globalEventSource) {
     globalEventSource.close()
     globalEventSource = null
@@ -649,8 +657,8 @@ async function handleAccessLogout() {
   await logoutAccessAuth()
 }
 
-watch(accessAuthenticated, (value) => {
-  if (!value) stopAuthenticatedRuntime()
+watch([accessAuthenticated, accessStatus], ([authenticated, status]) => {
+  if (!authenticated || status !== 'authenticated') stopAuthenticatedRuntime(status !== 'unauthenticated')
 })
 
 function applySettingsDeepLink() {
@@ -669,13 +677,15 @@ onMounted(async () => {
   if (allowed) {
     await startAuthenticatedRuntime()
     if (!isBrowserExtension.value) applySettingsDeepLink()
+  } else {
+    stopAuthenticatedRuntime(accessStatus.value !== 'unauthenticated')
   }
 })
 
 onUnmounted(() => {
   window.removeEventListener('message', handleExtensionParentMessage)
   clearAccessTransportWarningTimer()
-  stopAuthenticatedRuntime()
+  stopAuthenticatedRuntime(true)
 })
 
 function openSearch() {
@@ -1096,6 +1106,7 @@ function handlePromptSelect(prompt: string) {
       />
       <InputBox
               :draftKey="composerKey"
+              :directory="currentDirectory"
               :modelError="settingsError"
               :savingModel="savingModel"
         :disabled="isLoading"
@@ -1284,6 +1295,7 @@ function handlePromptSelect(prompt: string) {
             <InputBox
               ref="mainInputBox"
               :draftKey="composerKey"
+              :directory="currentDirectory"
               :modelError="settingsError"
               :savingModel="savingModel"
               :disabled="isLoading"

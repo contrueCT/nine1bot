@@ -1,4 +1,5 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { beginSessionRead, acknowledgeSessionDirectory, ensureSessionSnapshot, markSessionSnapshot, sessionSnapshotOrder, deriveSessionSnapshot } from '../api/session-snapshot-authority'
 import { createInteractionResponder } from './interaction-state'
 import {
   api,
@@ -105,7 +106,24 @@ export function useSession() {
   let sessionEventGeneration = 0
   let sessionEventSubscriptionVersion = 0
   let selectionVersion = 0
-  let directoryVersion = 0
+  const directoryVersions = new Map<string, number>()
+  const draftDirectories = new Map<string, string>()
+  const successfulDirectoryVersions = new Map<string, number>()
+  // A read that started before an acknowledged mutation cannot undo it merely
+  // by returning late. A later-started read remains authoritative at equal time.
+  const committedDirectories = ref(new Map<string, { directory: string; cutoff: number }>())
+  function rememberSessionRecords(records: readonly Session[]) {
+    for (const session of records) sessionSnapshotOrder(session)
+  }
+  watch(sessions, rememberSessionRecords, { immediate: true, flush: 'sync' })
+  function sessionRecordOrder(session: Session): number { return sessionSnapshotOrder(session) }
+  function resolveSessionDirectory(session: Session): Session {
+    const order = sessionSnapshotOrder(session)
+    const committed = committedDirectories.value.get(session.id)
+    if (!committed || session.directory === committed.directory || order > committed.cutoff) return session
+    return deriveSessionSnapshot(session, { directory: committed.directory })
+  }
+  let pendingSessionReadiness: { sessionID: string; selection: number; promise: Promise<EventStreamSubscription> } | undefined
   let todoVersion = 0
   // Capture view ownership before awaiting work, including same-session reselection.
   function viewOwner() {
@@ -255,11 +273,12 @@ export function useSession() {
 
   async function loadSessions(directory?: string): Promise<boolean> {
     const requestVersion = ++sessionsLoadVersion
+    const readStarted = beginSessionRead()
     sessionsLoading.value = true
     try {
       const loaded = await api.getSessions(directory)
       if (requestVersion !== sessionsLoadVersion) return false
-      sessions.value = loaded
+      sessions.value = loaded.map(session => ensureSessionSnapshot(session, readStarted))
       sessionsLoadError.value = false
       return true
     } catch (error) {
@@ -326,21 +345,56 @@ export function useSession() {
     // Keep the request's owner even if a different session/directory is selected meanwhile.
     if (currentSession.value && messages.value.length === 0) {
       const sessionID = currentSession.value.id
+      const previousDirectory = currentSession.value.directory
+      rememberSessionRecords([currentSession.value, ...sessions.value])
       const isOwner = viewOwner()
-      const version = ++directoryVersion
+      const version = (directoryVersions.get(sessionID) || 0) + 1
+      directoryVersions.set(sessionID, version)
       try {
         const updated = await api.updateSession(sessionID, { directory })
-        if (!isOwner() || version !== directoryVersion) return
-        currentSession.value = updated
-        currentDirectory.value = updated.directory
+        if (version < (successfulDirectoryVersions.get(sessionID) || 0)) return
+        successfulDirectoryVersions.set(sessionID, version)
+        const directoryCutoff = acknowledgeSessionDirectory()
+        // Directory authority is session-owned, not selection-owned. Patch only
+        // this metadata so a late directory response cannot roll back a new title.
+        committedDirectories.value.set(sessionID, { directory: updated.directory, cutoff: directoryCutoff })
+        const index = sessions.value.findIndex(session => session.id === sessionID)
+        if (index !== -1) sessions.value[index] = resolveSessionDirectory(sessions.value[index]!)
+        // A committed update owns its draft even after navigation releases the view.
+        // Use the last migrated scope for repeated updates, not a stale selection.
+        moveComposerDraft(sessionID, sessionID, updated.directory, previousDirectory)
+        const migratedDirectory = draftDirectories.get(sessionID)
+        if (migratedDirectory && migratedDirectory !== previousDirectory) {
+          moveComposerDraft(sessionID, sessionID, updated.directory, migratedDirectory)
+        }
+        draftDirectories.set(sessionID, updated.directory)
+        if (currentSession.value?.id !== sessionID || version !== directoryVersions.get(sessionID)) return
+        const active = currentSession.value
+        if (active.directory === previousDirectory) {
+          const committed = deriveSessionSnapshot(active, { directory: updated.directory })
+          markSessionSnapshot(committed, directoryCutoff)
+          currentSession.value = committed
+        } else currentSession.value = resolveSessionDirectory(active)
+        currentDirectory.value = currentSession.value.directory
         setApiDirectory(currentDirectory.value)
-        reconnectEventsForDirectory()
-        const index = sessions.value.findIndex(s => s.id === updated.id)
-        if (index !== -1) sessions.value[index] = updated
-        unsubscribeSessionRuntimeEvents()
-        await openSessionEventStreamAndReconcile(updated.id)
+        const currentOwner = viewOwner()
+        const refreshDirectoryView = async () => {
+          if (!currentOwner() || currentDirectory.value !== updated.directory || version !== directoryVersions.get(sessionID)) return
+          reconnectEventsForDirectory()
+          unsubscribeSessionRuntimeEvents()
+          await openSessionEventStreamAndReconcile(updated.id)
+        }
+        // Durable migration and visible directory ownership must not wait on an
+        // obsolete history/status request. Only the stream refresh may wait, and
+        // it may not disturb a newer selection after that wait completes.
+        const pending = pendingSessionReadiness
+        if (pending?.sessionID === sessionID && pending.selection === selectionVersion) {
+          void pending.promise.catch(() => undefined).then(refreshDirectoryView).catch(error => {
+            if (currentOwner()) historyError.value = error instanceof Error ? error.message : '会话加载失败，请重试'
+          })
+        } else await refreshDirectoryView()
       } catch (error) {
-        if (isOwner() && version === directoryVersion) {
+        if (isOwner() && version === directoryVersions.get(sessionID)) {
           console.error('Failed to change directory:', error)
           pushSessionNotification({ sessionId: sessionID, message: error instanceof Error ? error.message : '修改目录失败', type: 'error' })
           throw error
@@ -427,6 +481,13 @@ export function useSession() {
   }
 
   async function openSessionEventStreamAndReconcile(sessionID: string) {
+    const operation = { sessionID, selection: selectionVersion, promise: openSessionReadiness(sessionID) }
+    pendingSessionReadiness = operation
+    try { return await operation.promise }
+    finally { if (pendingSessionReadiness === operation) pendingSessionReadiness = undefined }
+  }
+
+  async function openSessionReadiness(sessionID: string) {
     connectionState.value = 'connecting'
     const generation = sessionEventReconciler.begin(sessionID)
     sessionEventGeneration = generation
@@ -450,6 +511,13 @@ export function useSession() {
 
   async function reconcileCurrentSessionState(sessionID: string) {
     if (currentSession.value?.id !== sessionID) return false
+    const pending = pendingSessionReadiness
+    if (pending?.sessionID === sessionID && pending.selection === selectionVersion) {
+      // Receipt checks cannot supersede selection's SSE/history generation. The
+      // selection caller (including search navigation) must observe its snapshot.
+      try { await pending.promise } catch { return false }
+      return currentSession.value?.id === sessionID && pending.selection === selectionVersion && !historyError.value
+    }
     const generation = sessionEventReconciler.begin(sessionID)
     sessionEventGeneration = generation
     return reconcileSession(sessionID, generation)
@@ -469,7 +537,7 @@ export function useSession() {
       setApiDirectory(directory)
       reconnectEventsForDirectory()
       const session = await api.createSession(directory, pageContext)
-      moveComposerDraft(draftKey, session.id)
+      moveComposerDraft(draftKey, session.id, session.directory, directory)
       // 创建请求在途期间用户可能已选择其他会话：新会话照常加入列表，
       // 但不抢占 currentSession、不订阅其事件流
       const ownsDraft = !currentSession.value && isDraftSession.value && composerKey.value === draftKey
@@ -501,6 +569,7 @@ export function useSession() {
   }
 
   async function selectSession(session: Session) {
+    session = resolveSessionDirectory(session)
     cancelPreflight()
     const requestVersion = ++selectionVersion
     try {
@@ -558,10 +627,7 @@ export function useSession() {
       ...(update.profileSnapshotId ? { profileSnapshotId: update.profileSnapshotId } : {}),
       ...(update.currentModel ? { currentModel: update.currentModel } : {}),
     }
-    const updated = {
-      ...currentSession.value,
-      runtime,
-    }
+    const updated = resolveSessionDirectory(deriveSessionSnapshot(currentSession.value, { runtime }))
     currentSession.value = updated
 
     const index = sessions.value.findIndex(s => s.id === updated.id)
@@ -576,6 +642,29 @@ export function useSession() {
     files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
     attempt: MessageAttempt = { id: createRequestID() },
   ): Promise<boolean> {
+    // An uncertain original POST is only reconciled via its exact persisted receipt.
+    // Never turn a refresh, missing history, or a recovery click into another POST.
+    if (attempt.submitted) {
+      const sessionID = attempt.submission?.sessionID || attempt.recoverySessionID
+      if (!sessionID || sessionID !== currentSession.value?.id) return false
+      const directory = currentSession.value.directory
+      try {
+        const receipt = await api.getMessageReceipt(sessionID, attempt.id, directory)
+        if (receipt.state !== 'accepted') {
+          if (attempt.notificationId) dismissNotification(attempt.notificationId)
+          attempt.notificationId = pushSessionNotification({ sessionId: sessionID, type: 'error',
+            message: receipt.state === 'reserved' ? '原请求尚未完整确认，请核对会话记录；未重新发送' : '尚未找到原请求回执，请稍后再次检查；未重新发送' })
+          return false
+        }
+        await reconcileCurrentSessionState(sessionID)
+        if (attempt.notificationId) dismissNotification(attempt.notificationId)
+        return true
+      } catch (error: any) {
+        if (attempt.notificationId) dismissNotification(attempt.notificationId)
+        attempt.notificationId = pushSessionNotification({ sessionId: sessionID, type: 'error', message: `回执检查失败，原消息未重新发送: ${error.message || '网络错误'}` })
+        return false
+      }
+    }
     // Lock before the first await, and never reuse a cancelled local operation.
     if (localSends.value.some(send => !send.cancelled && ownsCurrentView(send))) return false
     if (attempt.submission && attempt.submission.sessionID !== currentSession.value?.id) return false
@@ -630,15 +719,14 @@ export function useSession() {
         applyCurrentSessionRuntime({ currentModel: modelResult.currentModel, profileSnapshotId: modelResult.profileSnapshotId })
       }
       if (!isCurrentSend()) return false
-      const replaying = Boolean(attempt.submitted)
       operation.posted = true
       attempt.submitted = true
       setSessionRunning(sessionId, true)
       const sendResult = await api.sendMessage(sessionId, attempt.submission.request)
+      if (sendResult.accepted !== true || sendResult.sessionId !== sessionId) throw new Error('发送回执响应格式无效')
       // Acceptance is authoritative even if display recovery is partial. Keep
       // historyError/retryHistory visible while independently reconciling idle;
       // restoring history must not require posting an accepted message again.
-      if (replaying) await reconcileCurrentSessionState(sessionId)
       if (attempt.notificationId) dismissNotification(attempt.notificationId)
       showContextEnrichmentNotice(sessionId, sendResult.contextEnrichment)
       return true
@@ -647,14 +735,14 @@ export function useSession() {
         await reconcileCurrentSessionState(sessionId)
         // A matching requestID identifies the persisted user message, but is not
         // proof that acceptance/receipt persistence completed. Keep the attempt
-        // until the same request receives a positive acknowledgement on replay.
+        // until its exact persisted receipt confirms acceptance.
         if (!operation.cancelled) {
           if (attempt.notificationId) dismissNotification(attempt.notificationId)
           attempt.notificationId = pushSessionNotification({
             sessionId,
             message: error instanceof SessionBusyError
               ? '该会话正在被其他客户端使用中，请稍后重试或创建新会话'
-              : attempt.submitted ? `发送结果待确认，可安全重试原消息: ${error.message || '网络错误'}` : `发送失败: ${error.message || '未知错误'}`,
+              : attempt.submitted ? `发送结果待确认，请检查原请求回执: ${error.message || '网络错误'}` : `发送失败: ${error.message || '未知错误'}`,
             type: 'error',
           })
         }
@@ -1254,7 +1342,7 @@ export function useSession() {
   // 重命名会话
   async function renameSession(sessionId: string, title: string) {
     try {
-      const updated = await api.updateSession(sessionId, { title })
+      const updated = resolveSessionDirectory(await api.updateSession(sessionId, { title }))
 
       // 更新本地状态
       const index = sessions.value.findIndex(s => s.id === sessionId)
@@ -1415,6 +1503,9 @@ export function useSession() {
     createSession,
     ensureSession,
     selectSession,
+    resolveSessionDirectory,
+    rememberSessionRecords,
+    sessionRecordOrder,
     viewOwner,
     sendMessage,
     abortSession,

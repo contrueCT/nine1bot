@@ -7,6 +7,7 @@ import type { Provider } from '../api/client'
 const props = defineProps<{
   disabled: boolean
   draftKey?: string
+  directory?: string
   modelError?: string
   savingModel?: boolean
   isStreaming: boolean
@@ -31,7 +32,7 @@ const emit = defineEmits<{
 }>()
 
 // Plan Mode 状态
-const draft = computed(() => getComposerDraft(props.draftKey || 'default', async () => await props.ensureSession?.() ?? null))
+const draft = computed(() => getComposerDraft(props.draftKey || 'default', async () => await props.ensureSession?.() ?? null, props.directory))
 const isPlanMode = computed({ get: () => draft.value.planMode, set: value => { draft.value.planMode = value } })
 const input = computed({ get: () => draft.value.text, set: value => { draft.value.text = value } })
 const textareaRef = ref<HTMLTextAreaElement>()
@@ -58,7 +59,7 @@ const canSend = computed(() => {
   const hasText = input.value.trim().length > 0
   const hasAttachments = attachments.value.length > 0
   const allAttachmentsReady = attachments.value.every(a => a.status === 'ready')
-  return (hasText || hasAttachments) && allAttachmentsReady && !props.disabled && !props.isStreaming && !isSending.value
+  return (hasText || hasAttachments) && allAttachmentsReady && !props.disabled && !props.isStreaming && !isSending.value && !draft.value.attachmentsLost
 })
 
 function getCurrentModelName(): string {
@@ -90,14 +91,31 @@ function handleSend() {
 }
 
 function performSend(owner: ComposerDraft, attempt: SendAttempt, initial = false) {
+  if (attempt.attachmentsLost && !attempt.submitted) return
   if ((!initial && attempt.status === 'sending') || owner.attempts.some(item => item !== attempt && item.status === 'sending')) return
   attempt.status = 'sending'
   const generation = ++attempt.generation
-  const complete = (success: boolean) => finishSend(owner, attempt, success, generation)
+  let done!: () => void
+  const completed = new Promise<void>(resolve => { done = resolve })
+  const complete = (success: boolean) => { finishSend(owner, attempt, success, generation); done() }
   attempt.onCancel = () => complete(false)
   const files = attempt.attachments.filter(file => file.url).map(file => ({ type: 'file' as const, mime: file.mime, filename: file.filename, url: file.url! }))
   emit('send', attempt.text, files, attempt.planMode, complete, attempt)
+  return completed
 }
+
+// Refresh recovery only checks receipts. It cannot dispatch a new original request.
+const checkedRecovery = new WeakSet<SendAttempt>()
+watch(draft, async owner => {
+  await nextTick()
+  for (const attempt of [...owner.attempts]) {
+    if (draft.value !== owner) return
+    if (attempt.submitted && attempt.recoverySessionID && !checkedRecovery.has(attempt)) {
+      checkedRecovery.add(attempt)
+      await performSend(owner, attempt)
+    }
+  }
+}, { immediate: true })
 
 function togglePlanMode() {
   isPlanMode.value = !isPlanMode.value
@@ -151,7 +169,7 @@ watch(textareaRef, (el) => {
 }, { flush: 'post' })
 
 watch(input, () => nextTick(adjustHeight), { flush: 'post' })
-watch(() => props.draftKey, () => {
+watch(() => [props.draftKey, props.directory], () => {
   showPlusMenu.value = false
   showModelDropdown.value = false
   void nextTick(adjustHeight)
@@ -252,12 +270,15 @@ function formatSize(bytes: number): string {
     @dragover="handleDragOver"
     @dragleave="handleDragLeave"
   >
+    <p v-if="draft.storageFailed" class="send-attempt" role="status">浏览器未能保存草稿，刷新前请复制文本</p>
+    <p v-if="draft.attachmentsLost" class="send-attempt" role="status">刷新后仅恢复文本，附件需要重新选择。<button type="button" class="btn btn-sm btn-ghost" @click="draft.attachmentsLost = false">已了解</button></p>
     <div v-for="attempt in draft.attempts" :key="attempt.id" class="send-attempt" :class="attempt.status" role="status">
       <div class="attempt-text">{{ attempt.text || attempt.attachments.map(file => file.filename).join('、') }}</div>
       <div class="attempt-actions">
-        <span>{{ attempt.status === 'sending' ? '正在发送…' : (attempt.submitted ? '发送结果待确认，重试不会重复执行' : '发送未完成，内容已保留') }}</span>
+        <span>{{ attempt.status === 'sending' ? '正在发送…' : (attempt.submitted ? '发送结果待确认，可检查原请求回执' : '发送未完成，内容已保留') }}</span>
         <template v-if="attempt.status === 'failed'">
-          <button class="btn btn-sm btn-ghost" :disabled="disabled || (isStreaming && !attempt.submitted) || isSending" @click="performSend(draft, attempt)">重试</button>
+          <button class="btn btn-sm btn-ghost" :disabled="disabled || (isStreaming && !attempt.submitted) || isSending || (attempt.attachmentsLost && !attempt.submitted)" @click="performSend(draft, attempt)">{{ attempt.submitted ? '检查回执' : '重试' }}</button>
+          <span v-if="attempt.attachmentsLost && !attempt.submitted">附件未恢复，请编辑后重新选择</span>
           <button v-if="!attempt.submitted && !input && !attachments.length" class="btn btn-sm btn-ghost" @click="restoreAttempt(draft, attempt)">编辑</button>
         </template>
       </div>
