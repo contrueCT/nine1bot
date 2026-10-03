@@ -92,3 +92,30 @@ test('persistence survives the component scope that first opened the draft', asy
   clearComposerDrafts(undefined, true)
   expect(getComposerDraft('A').text).toBe('after remount')
 })
+
+
+test('destination conflicts preserve both texts through refresh and late source completions use the migrated owner', () => {
+  const source = getComposerDraft('A'); source.text = 'original request'
+  const sent = beginSend(source)
+  sent.submitted = true; sent.recoverySessionID = 'A'
+  source.text = 'unsent source'
+  const destination = getComposerDraft('A', undefined, '/project/B'); destination.text = 'newer destination'
+  moveComposerDraft('A', 'A', '/project/B', '/project/A')
+  finishSend(source, sent, true)
+  expect(destination.attempts.map(item => item.text)).toEqual(['unsent source'])
+  clearComposerDrafts(undefined, true)
+  const restored = getComposerDraft('A', undefined, '/project/B')
+  expect(restored.text).toBe('newer destination')
+  expect(restored.attempts.map(item => item.text)).toEqual(['unsent source'])
+  expect(getComposerDraft('A', undefined, '/project/A').text).toBe('')
+})
+
+
+test('a committed background migration can move retained storage after runtime suspension', () => {
+  getComposerDraft('A', undefined, '/project/A').text = 'suspended source'
+  clearComposerDrafts(undefined, true)
+  moveComposerDraft('A', 'A', '/project/B', '/project/A')
+  clearComposerDrafts(undefined, true)
+  expect(getComposerDraft('A', undefined, '/project/B').text).toBe('suspended source')
+  expect(getComposerDraft('A', undefined, '/project/A').text).toBe('')
+})

@@ -105,7 +105,10 @@ export function useSession() {
   let sessionEventGeneration = 0
   let sessionEventSubscriptionVersion = 0
   let selectionVersion = 0
-  let directoryVersion = 0
+  const directoryVersions = new Map<string, number>()
+  const draftDirectories = new Map<string, string>()
+  const successfulDirectoryVersions = new Map<string, number>()
+  let pendingSessionReadiness: { sessionID: string; selection: number; promise: Promise<EventStreamSubscription> } | undefined
   let todoVersion = 0
   // Capture view ownership before awaiting work, including same-session reselection.
   function viewOwner() {
@@ -328,11 +331,21 @@ export function useSession() {
       const sessionID = currentSession.value.id
       const previousDirectory = currentSession.value.directory
       const isOwner = viewOwner()
-      const version = ++directoryVersion
+      const version = (directoryVersions.get(sessionID) || 0) + 1
+      directoryVersions.set(sessionID, version)
       try {
         const updated = await api.updateSession(sessionID, { directory })
-        if (!isOwner() || version !== directoryVersion) return
+        if (version < (successfulDirectoryVersions.get(sessionID) || 0)) return
+        successfulDirectoryVersions.set(sessionID, version)
+        // A committed update owns its draft even after navigation releases the view.
+        // Use the last migrated scope for repeated updates, not a stale selection.
         moveComposerDraft(sessionID, sessionID, updated.directory, previousDirectory)
+        const migratedDirectory = draftDirectories.get(sessionID)
+        if (migratedDirectory && migratedDirectory !== previousDirectory) {
+          moveComposerDraft(sessionID, sessionID, updated.directory, migratedDirectory)
+        }
+        draftDirectories.set(sessionID, updated.directory)
+        if (!isOwner() || version !== directoryVersions.get(sessionID)) return
         currentSession.value = updated
         currentDirectory.value = updated.directory
         setApiDirectory(currentDirectory.value)
@@ -342,7 +355,7 @@ export function useSession() {
         unsubscribeSessionRuntimeEvents()
         await openSessionEventStreamAndReconcile(updated.id)
       } catch (error) {
-        if (isOwner() && version === directoryVersion) {
+        if (isOwner() && version === directoryVersions.get(sessionID)) {
           console.error('Failed to change directory:', error)
           pushSessionNotification({ sessionId: sessionID, message: error instanceof Error ? error.message : '修改目录失败', type: 'error' })
           throw error
@@ -429,6 +442,13 @@ export function useSession() {
   }
 
   async function openSessionEventStreamAndReconcile(sessionID: string) {
+    const operation = { sessionID, selection: selectionVersion, promise: openSessionReadiness(sessionID) }
+    pendingSessionReadiness = operation
+    try { return await operation.promise }
+    finally { if (pendingSessionReadiness === operation) pendingSessionReadiness = undefined }
+  }
+
+  async function openSessionReadiness(sessionID: string) {
     connectionState.value = 'connecting'
     const generation = sessionEventReconciler.begin(sessionID)
     sessionEventGeneration = generation
@@ -452,6 +472,13 @@ export function useSession() {
 
   async function reconcileCurrentSessionState(sessionID: string) {
     if (currentSession.value?.id !== sessionID) return false
+    const pending = pendingSessionReadiness
+    if (pending?.sessionID === sessionID && pending.selection === selectionVersion) {
+      // Receipt checks cannot supersede selection's SSE/history generation. The
+      // selection caller (including search navigation) must observe its snapshot.
+      try { await pending.promise } catch { return false }
+      return currentSession.value?.id === sessionID && pending.selection === selectionVersion && !historyError.value
+    }
     const generation = sessionEventReconciler.begin(sessionID)
     sessionEventGeneration = generation
     return reconcileSession(sessionID, generation)

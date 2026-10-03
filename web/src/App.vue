@@ -148,6 +148,7 @@ const {
   loading: accessLoading,
   enabled: accessEnabled,
   authenticated: accessAuthenticated,
+  status: accessStatus,
   required: accessRequired,
   insecureTransport,
   initialize: initializeAccessAuth,
@@ -525,7 +526,7 @@ function openCurrentExtensionSessionInMainWeb() {
 
 function stopAuthenticatedRuntime(preserveDrafts = false) {
   if (!authenticatedRuntimeStarted) {
-    if (!preserveDrafts) clearDrafts()
+    clearDrafts(undefined, preserveDrafts)
     return
   }
   authenticatedRuntimeStarted = false
@@ -652,8 +653,8 @@ async function handleAccessLogout() {
   await logoutAccessAuth()
 }
 
-watch(accessAuthenticated, (value) => {
-  if (!value) stopAuthenticatedRuntime()
+watch([accessAuthenticated, accessStatus], ([authenticated, status]) => {
+  if (!authenticated || status !== 'authenticated') stopAuthenticatedRuntime(status !== 'unauthenticated')
 })
 
 function applySettingsDeepLink() {
@@ -673,7 +674,7 @@ onMounted(async () => {
     await startAuthenticatedRuntime()
     if (!isBrowserExtension.value) applySettingsDeepLink()
   } else {
-    clearDrafts()
+    stopAuthenticatedRuntime(accessStatus.value !== 'unauthenticated')
   }
 })
 

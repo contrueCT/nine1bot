@@ -135,6 +135,8 @@ function deferred<T>() {
 }
 const originalApi = {
   getMessages: api.getMessages,
+  getMessageReceipt: api.getMessageReceipt,
+  sendMessage: api.sendMessage,
   getSessionStatus: api.getSessionStatus,
   subscribeSessionRuntimeEvents: api.subscribeSessionRuntimeEvents,
 }
@@ -314,4 +316,37 @@ test('App still reports an unavailable message when the search owns the view', a
   await handler.select(result(session('same-session'), 'deleted-message'))
   expect(handler.notice.value).toBe('已打开会话，但匹配消息可能已更改或删除，未能定位')
   expect(scrolled?.dataset.searchMessage).toBeUndefined()
+})
+
+
+for (const timing of ['before-ready', 'during-history'] as const) test(`accepted receipt recovery joins search selection ${timing} without invalidating its snapshot`, async () => {
+  const model = createSessionModel()
+  await mountSession(model)
+  const handler = await searchHandler(model)
+  const ready = deferred<void>()
+  const loaded = deferred<Message[]>()
+  const historyStarted = deferred<void>()
+  let reads = 0, posts = 0
+  api.subscribeSessionRuntimeEvents = () => ({ ready: ready.promise, close() {}, connectionGeneration: () => 1 })
+  api.getMessages = async () => { reads++; historyStarted.resolve(); return loaded.promise }
+  api.getMessageReceipt = async (sessionID, requestID) => ({ sessionID, requestID, state: 'accepted', messageID: 'msg_original' })
+  api.sendMessage = async () => { posts++; throw new Error('unexpected POST') }
+  const selecting = handler.select(result(session('receipt-selection'), 'older'))
+  await Vue.nextTick()
+  if (timing === 'during-history') { ready.resolve(); await historyStarted.promise }
+  const recovering = model.sendMessage('original', undefined, undefined, { id: 'req_selection', submitted: true, recoverySessionID: 'receipt-selection' })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(reads).toBe(timing === 'before-ready' ? 0 : 1)
+  expect(model.isLoading.value).toBe(true)
+  if (timing === 'before-ready') ready.resolve()
+  await historyStarted.promise
+  expect(reads).toBe(1)
+  loaded.resolve([message('older')] as Message[])
+  await selecting
+  expect(await recovering).toBe(true)
+  expect(model.messages.value.map(item => item.info.id)).toEqual(['older'])
+  expect(model.connectionState.value).toBe('connected')
+  expect(handler.notice.value).toBe('')
+  expect(scrolled?.dataset.searchMessage).toBe('older')
+  expect(posts).toBe(0)
 })

@@ -410,3 +410,79 @@ it('refresh receipt recovery rejects a different active session', async () => {
   expect(await active.sendMessage('', undefined, undefined, { id: createRequestID(), submitted: true, recoverySessionID: 'A' })).toBe(false)
   expect(reads).toBe(0)
 })
+
+
+it('migrates a committed directory update after navigation and keeps the other view untouched', async () => {
+  await active.selectSession(session('A'))
+  getComposerDraft('A').text = 'A before move'
+  const changed = deferred<Session>()
+  api.updateSession = () => changed.promise
+  const pending = active.changeDirectory('/workspace/new-A')
+  await active.selectSession(session('B'))
+  getComposerDraft('B').text = 'B stays private'
+  changed.resolve({ ...session('A'), directory: '/workspace/new-A' })
+  await pending
+  expect(active.currentSession.value?.id).toBe('B')
+  expect(active.currentDirectory.value).toBe('/workspace/B')
+  expect(getComposerDraft('A', undefined, '/workspace/new-A').text).toBe('A before move')
+  expect(getComposerDraft('A', undefined, '/workspace/A').text).toBe('')
+  expect(getComposerDraft('B', undefined, '/workspace/B').text).toBe('B stays private')
+})
+
+it('guards repeated same-session updates independently of another session directory update', async () => {
+  await active.selectSession(session('A'))
+  getComposerDraft('A').text = 'original A'
+  const older = deferred<Session>(), newer = deferred<Session>()
+  let count = 0
+  api.updateSession = () => ++count === 1 ? older.promise : newer.promise
+  const first = active.changeDirectory('/workspace/A-old')
+  const second = active.changeDirectory('/workspace/A-new')
+  await active.selectSession(session('B'))
+  getComposerDraft('B').text = 'original B'
+  api.updateSession = async () => ({ ...session('B'), directory: '/workspace/B-new' })
+  await active.changeDirectory('/workspace/B-new')
+  newer.resolve({ ...session('A'), directory: '/workspace/A-new' }); await second
+  older.resolve({ ...session('A'), directory: '/workspace/A-old' }); await first
+  expect(getComposerDraft('A', undefined, '/workspace/A-new').text).toBe('original A')
+  expect(getComposerDraft('A', undefined, '/workspace/A-old').text).toBe('')
+  expect(getComposerDraft('B', undefined, '/workspace/B-new').text).toBe('original B')
+  expect(active.currentDirectory.value).toBe('/workspace/B-new')
+  await active.selectSession({ ...session('A'), directory: '/workspace/A-new' })
+  api.updateSession = async () => ({ ...session('A'), directory: '/workspace/A-final' })
+  await active.changeDirectory('/workspace/A-final')
+  expect(getComposerDraft('A', undefined, '/workspace/A-final').text).toBe('original A')
+  expect(getComposerDraft('A', undefined, '/workspace/A-new').text).toBe('')
+})
+
+it('preserves an edited destination draft when a delayed directory response finally arrives', async () => {
+  await active.selectSession(session('A'))
+  const source = getComposerDraft('A'); source.text = 'source draft'
+  const changed = deferred<Session>()
+  api.updateSession = () => changed.promise
+  const changing = active.changeDirectory('/workspace/A-new')
+  await active.selectSession({ ...session('A'), directory: '/workspace/A-new' })
+  const destination = getComposerDraft('A'); destination.text = 'newer destination draft'
+  changed.resolve({ ...session('A'), directory: '/workspace/A-new' }); await changing
+  expect(getComposerDraft('A')).toBe(destination)
+  expect(destination.text).toBe('newer destination draft')
+  expect(destination.attempts.map(item => item.text)).toEqual(['source draft'])
+  expect(destination.attempts[0]?.submitted).toBeUndefined()
+  expect(getComposerDraft('A', undefined, '/workspace/A').text).toBe('')
+})
+
+
+it('does not strand an acknowledged background update when a newer same-session request fails', async () => {
+  await active.selectSession(session('A'))
+  getComposerDraft('A').text = 'keep the committed draft'
+  const older = deferred<Session>(), newer = deferred<Session>()
+  let count = 0
+  api.updateSession = () => ++count === 1 ? older.promise : newer.promise
+  const first = active.changeDirectory('/workspace/A-committed')
+  const second = active.changeDirectory('/workspace/A-failed')
+  await active.selectSession(session('B'))
+  older.resolve({ ...session('A'), directory: '/workspace/A-committed' }); await first
+  newer.reject(new Error('new update failed')); await second
+  expect(active.currentSession.value?.id).toBe('B')
+  expect(getComposerDraft('A', undefined, '/workspace/A-committed').text).toBe('keep the committed draft')
+  expect(getComposerDraft('A', undefined, '/workspace/A-failed').text).toBe('')
+})

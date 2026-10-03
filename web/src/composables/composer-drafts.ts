@@ -25,6 +25,11 @@ export interface ComposerDraft {
 }
 
 const drafts = new Map<string, ComposerDraft>()
+const migratedOwners = new WeakMap<ComposerDraft, ComposerDraft>()
+function currentDraft(draft: ComposerDraft): ComposerDraft {
+  const next = migratedOwners.get(draft)
+  return next ? currentDraft(next) : draft
+}
 const persistence = new WeakMap<ComposerDraft, { key: string; stop: () => void; save: () => void }>()
 
 export function getComposerDraft(key: string, ensureSession: () => Promise<string | null> = async () => null, directory = getApiDirectory()): ComposerDraft {
@@ -60,8 +65,50 @@ export function getComposerDraft(key: string, ensureSession: () => Promise<strin
 export function moveComposerDraft(from: string, to: string, toDirectory = getApiDirectory(), fromDirectory = getApiDirectory()) {
   const fromKey = draftStorageKey(from, fromDirectory, getApiClientSurface())
   const toKey = draftStorageKey(to, toDirectory, getApiClientSurface())
-  const draft = drafts.get(fromKey)
+  const draft = drafts.get(fromKey) || (readStoredDraft(fromKey) ? getComposerDraft(from, undefined, fromDirectory) : undefined)
   if (!draft || fromKey === toKey) return
+  if (from === to && fromDirectory !== toDirectory) {
+    // Upload handles belong to the old directory. Only text/request identity can
+    // cross an existing-session directory change without revalidation.
+    if (draft.uploads.attachments.value.length) {
+      draft.attachmentsLost = true
+      draft.uploads.clearAll()
+    }
+    for (const attempt of draft.attempts) {
+      if (!attempt.attachments.length) continue
+      attempt.attachmentsLost = true
+      for (const file of attempt.attachments) {
+        file.controller?.abort()
+        if (file.preview) URL.revokeObjectURL(file.preview)
+      }
+      attempt.attachments = []
+    }
+  }
+  const destination = drafts.get(toKey) || (readStoredDraft(toKey) ? getComposerDraft(to, draft.ensureSession, toDirectory) : undefined)
+  if (destination && destination !== draft) {
+    // A user may already be editing the committed destination while the update
+    // response is delayed. Keep that live object/text; retain conflicting source
+    // text as an explicitly recoverable attempt rather than overwrite or combine.
+    const state = persistence.get(draft)
+    state?.stop()
+    for (const attempt of draft.attempts) if (!destination.attempts.some(item => item.id === attempt.id)) destination.attempts.push(attempt)
+    if (draft.text || draft.uploads.attachments.value.length || draft.attachmentsLost) {
+      if (!destination.text && !destination.uploads.attachments.value.length && !destination.attachmentsLost) {
+        destination.text = draft.text
+        destination.planMode = draft.planMode
+        destination.attachmentsLost = draft.attachmentsLost
+        destination.uploads = draft.uploads
+      } else {
+        destination.attempts.push({ id: createRequestID(), text: draft.text, planMode: draft.planMode,
+          attachments: [...draft.uploads.attachments.value], attachmentsLost: draft.attachmentsLost, status: 'failed', generation: 0 })
+      }
+    }
+    migratedOwners.set(draft, destination)
+    drafts.delete(fromKey)
+    removeStoredDraft(fromKey)
+    persistence.get(destination)?.save()
+    return
+  }
   drafts.set(toKey, draft)
   drafts.delete(fromKey)
   const state = persistence.get(draft)
@@ -73,6 +120,7 @@ export function moveComposerDraft(from: string, to: string, toDirectory = getApi
 }
 
 export function beginSend(draft: ComposerDraft): SendAttempt {
+  draft = currentDraft(draft)
   const attempt: SendAttempt = reactive({
     id: createRequestID(),
     text: draft.text.trim(),
@@ -91,6 +139,7 @@ export function beginSend(draft: ComposerDraft): SendAttempt {
 }
 
 export function finishSend(draft: ComposerDraft, attempt: SendAttempt, success: boolean, generation = attempt.generation) {
+  draft = currentDraft(draft)
   if (attempt.generation !== generation || !draft.attempts.includes(attempt)) return
   if (!success) {
     attempt.status = 'failed'
@@ -101,6 +150,7 @@ export function finishSend(draft: ComposerDraft, attempt: SendAttempt, success: 
 }
 
 export function restoreAttempt(draft: ComposerDraft, attempt: SendAttempt) {
+  draft = currentDraft(draft)
   // An uncertain POST may already be accepted. Do not turn it into a new send.
   if (attempt.submitted || draft.text || draft.uploads.attachments.value.length) return false
   attempt.generation++

@@ -19,6 +19,8 @@ type AccessStatus = {
 const loading = ref(true)
 const enabled = ref(false)
 const authenticated = ref(false)
+// A transport failure is not evidence that the user's authenticated session ended.
+const status = ref<'unknown' | 'authenticated' | 'unauthenticated'>('unknown')
 const error = ref('')
 const retryAfterSeconds = ref(0)
 const secureTransport = ref(window.location.protocol === 'https:')
@@ -32,6 +34,7 @@ const insecureTransport = computed(() =>
 
 function resetUnauthorizedState(): void {
   setAccessToken(undefined)
+  status.value = 'unauthenticated'
   authenticated.value = false
   error.value = '登录状态已失效，请重新输入访问密码。'
   if (surface.value === 'browser-extension') {
@@ -73,13 +76,16 @@ async function readStatus(): Promise<AccessStatus> {
     cache: 'no-store',
   })
   if (!response.ok) throw new Error(`无法读取访问认证状态（HTTP ${response.status}）`)
-  return response.json() as Promise<AccessStatus>
+  const result = await response.json()
+  if (typeof result?.enabled !== 'boolean' || typeof result?.authenticated !== 'boolean') throw new Error('访问认证状态响应无效')
+  return result as AccessStatus
 }
 
 export function useAccessAuth() {
   async function initialize(clientSurface: 'web' | 'browser-extension'): Promise<boolean> {
     surface.value = clientSurface
     loading.value = true
+    status.value = 'unknown'
     error.value = ''
     retryAfterSeconds.value = 0
     setAccessUnauthorizedHandler(resetUnauthorizedState)
@@ -88,11 +94,12 @@ export function useAccessAuth() {
       if (clientSurface === 'browser-extension') {
         setAccessToken(await requestExtensionAccessToken())
       }
-      const status = await readStatus()
-      enabled.value = status.enabled
-      authenticated.value = status.authenticated
-      secureTransport.value = status.secureTransport ?? window.location.protocol === 'https:'
-      return status.authenticated
+      const result = await readStatus()
+      enabled.value = result.enabled
+      authenticated.value = result.authenticated
+      status.value = result.authenticated ? 'authenticated' : 'unauthenticated'
+      secureTransport.value = result.secureTransport ?? window.location.protocol === 'https:'
+      return result.authenticated
     } catch (cause) {
       enabled.value = true
       authenticated.value = false
@@ -123,6 +130,10 @@ export function useAccessAuth() {
       error?: { message?: string }
     }
     if (!response.ok) {
+      if (response.status === 401) {
+        status.value = 'unauthenticated'
+        authenticated.value = false
+      }
       const retryAfter = Number(response.headers.get('Retry-After') || 0)
       retryAfterSeconds.value = Number.isFinite(retryAfter) ? retryAfter : 0
       error.value = response.status === 429
@@ -134,13 +145,16 @@ export function useAccessAuth() {
     }
     if (body.accessToken) setAccessToken(body.accessToken)
     authenticated.value = body.authenticated === true
+    status.value = typeof body.authenticated === 'boolean' ? (body.authenticated ? 'authenticated' : 'unauthenticated') : 'unknown'
     return authenticated.value
   }
 
   async function logout(): Promise<void> {
-    await fetch('/access-auth/logout', { method: 'POST' }).catch(() => undefined)
+    const request = fetch('/access-auth/logout', { method: 'POST' }).catch(() => undefined)
     setAccessToken(undefined)
+    status.value = 'unauthenticated'
     authenticated.value = false
+    await request
     if (surface.value === 'browser-extension') {
       const context = getTrustedExtensionParentContext()
       context?.parent.postMessage({ type: 'nine1bot.clearAccessToken' }, context.origin)
@@ -151,6 +165,7 @@ export function useAccessAuth() {
     loading,
     enabled,
     authenticated,
+    status,
     required,
     insecureTransport,
     error,
