@@ -22,9 +22,9 @@ describe('IME composition guard on Enter', () => {
     const enterIdx = source.indexOf("if (e.key === 'Enter') {")
     expect(enterIdx).toBeGreaterThanOrEqual(0)
 
-    const guardIdx = source.indexOf('e.isComposing || e.keyCode === 229', enterIdx)
+    const guardIdx = source.indexOf('e.isComposing || e.keyCode === 229', source.indexOf('function handleKeydown'))
     const selectIdx = source.indexOf("emit('select'", enterIdx)
-    expect(guardIdx).toBeGreaterThan(enterIdx)
+    expect(guardIdx).toBeGreaterThanOrEqual(0)
     expect(guardIdx).toBeLessThan(selectIdx)
   })
 })

@@ -207,7 +207,45 @@ async function loadEarlier() {
   lastTop = el.scrollTop
   requestAnimationFrame(() => { programmatic = false; savePosition() })
 }
+const searchMessageId = ref<string>()
+let revealVersion = 0
+async function revealMessage(messageId: string, isOwner: () => boolean = () => true) {
+  if (!isOwner()) return false
+  const version = ++revealVersion
+  const isCurrent = () => version === revealVersion && isOwner()
+  const groupIndex = displayGroups.value.findIndex(group => group.type === 'user'
+    ? group.message.info.id === messageId : group.messages.some(message => message.info.id === messageId))
+  if (groupIndex < 0) return false
+  initialPosition = false
+  following.value = false
+  programmatic = true
+  visibleCount.value = Math.max(visibleCount.value, displayGroups.value.length - groupIndex)
+  searchMessageId.value = messageId
+  try {
+    await nextTick()
+    if (!isCurrent()) return false
+    // Narration may live in a lazily mounted, animated assistant process group.
+    await new Promise(resolve => setTimeout(resolve, 250))
+    if (!isCurrent()) return false
+    const target = Array.from(scrollContainer.value?.querySelectorAll<HTMLElement>('[data-search-message]') || [])
+      .find(element => element.dataset.searchMessage === messageId)
+    if (!target) return false
+    target.scrollIntoView({ block: 'center' })
+    target.focus({ preventScroll: true })
+    if (scrollContainer.value) lastTop = scrollContainer.value.scrollTop
+    savePosition()
+    return true
+  } finally {
+    if (version === revealVersion) {
+      programmatic = false
+      if (!isOwner()) searchMessageId.value = undefined
+    }
+  }
+}
+defineExpose({ revealMessage })
 watch(() => props.sessionId, (id, oldId) => {
+  revealVersion++
+  searchMessageId.value = undefined
   savePosition(oldId)
   restored = readChatViewport(id)
   visibleCount.value = restored?.count ?? 40
@@ -228,6 +266,7 @@ watch(messageContent, element => {
 }, { flush: 'post' })
 onMounted(() => window.addEventListener('keydown', handleKeydown))
 onUnmounted(() => {
+  revealVersion++
   savePosition()
   window.removeEventListener('keydown', handleKeydown)
   resizeObserver?.disconnect()
@@ -297,16 +336,18 @@ onUnmounted(() => {
       <button v-if="hiddenCount" class="load-earlier btn btn-ghost btn-sm" @click="loadEarlier">加载更早的消息（还有 {{ hiddenCount }} 组）</button>
       <template v-for="group in visibleGroups" :key="group.key">
         <!-- User message -->
+        <div v-if="group.type === 'user'" :data-search-message="group.message.info.id" tabindex="-1">
         <MessageItem
-          v-if="group.type === 'user'"
           :message="group.message"
           @delete-part="(msgId, partId, done) => emit('deletePart', msgId, partId, done)"
           @update-part="(msgId, partId, updates, done) => emit('updatePart', msgId, partId, updates, done)"
         />
+        </div>
         <!-- Consecutive agent messages as one group -->
         <div v-else class="agent-message-row">
           <AgentMessageGroup
             :messages="group.messages"
+            :searchMessageId="searchMessageId"
             :isStreaming="isStreaming && group.isLast"
           />
         </div>
@@ -356,6 +397,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+:deep([data-search-message]:focus) {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
+}
+
 .chat-viewport { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; }
 .scroll-actions { position: absolute; bottom: 16px; right: 24px; display: flex; gap: 8px; z-index: var(--z-sticky); }
 .jump-latest, .pending-shortcut { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border-default); padding: 8px 12px; border-radius: var(--radius-full); background: var(--bg-elevated); color: var(--text-primary); box-shadow: var(--shadow-sm); cursor: pointer; font-size: var(--text-13); }

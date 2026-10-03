@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto"
 import { Log } from "../util/log"
 import path from "path"
 import fs from "fs/promises"
+import fsSync from "fs"
+import { SessionSearch } from "./session-search"
+import { SearchJournal } from "./search-journal"
 import { Global } from "../global"
 import { Filesystem } from "../util/filesystem"
 import { lazy } from "../util/lazy"
@@ -12,6 +15,131 @@ import z from "zod"
 
 export namespace Storage {
   const log = Log.create({ service: "storage" })
+
+  // This cache is rebuildable. Search failures must never prevent saving a conversation.
+  const searchFilename = path.join(Global.Path.cache, "session-search-v1.sqlite")
+  const journalFilename = path.join(Global.Path.data, "session-search-journal-v1.sqlite")
+  let searchJournal: SearchJournal | undefined
+  function journal() {
+    return (searchJournal ??= new SearchJournal(journalFilename))
+  }
+  let searchIndex: SessionSearch.Index | undefined
+  class SearchHistoryReadError extends Error {
+    constructor(cause: unknown) {
+      super("Session search could not read history", { cause })
+    }
+  }
+
+  function invalidateSearch(error?: unknown, owner?: SessionSearch.Index) {
+    journal().replaceCache(
+      () => {
+        searchIndex?.close()
+        searchIndex = undefined
+        for (const suffix of ["", "-wal", "-shm"]) fsSync.rmSync(searchFilename + suffix, { force: true })
+      },
+      () => !owner || owner.isCurrent(),
+    )
+    if (error) log.warn("rebuilding session search index", { error })
+  }
+
+  function index() {
+    if (searchIndex?.isCurrent()) return searchIndex
+    searchIndex?.close()
+    searchIndex = undefined
+    const source: SessionSearch.Source = {
+      list: async (prefix) => {
+        try {
+          return await listEntries(prefix, true)
+        } catch (error) {
+          throw new SearchHistoryReadError(error)
+        }
+      },
+      read: async (key) => {
+        try {
+          return await read(key, { preserveCorrupted: true })
+        } catch (error) {
+          if (NotFoundError.isInstance(error) || CorruptedError.isInstance(error)) return undefined
+          throw new SearchHistoryReadError(error)
+        }
+      },
+    }
+    try {
+      searchIndex = new SessionSearch.Index(searchFilename, source, journal())
+    } catch (error) {
+      invalidateSearch(error)
+      searchIndex = new SessionSearch.Index(searchFilename, source, journal())
+    }
+    return searchIndex
+  }
+
+  function searchChange(key: string[], phase: "begin" | "finish", value?: unknown, token?: string) {
+    if (!SessionSearch.relevant(key)) return
+    try {
+      if (phase === "begin") return journal().begin(key)
+      if (token?.startsWith("fallback-")) {
+        SearchJournal.fallbackFinish(journalFilename, token)
+        // Import the fallback before any eager deletion. The file remains durable
+        // if construction or import is still unavailable.
+        journal().pending()
+      } else journal().finish(key, token)
+      if (value === undefined) index().purge(key)
+    } catch (error) {
+      if (phase === "begin") {
+        try {
+          return SearchJournal.fallbackBegin(journalFilename, key)
+        } catch (fallbackError) {
+          log.error("failed to persist session search mutation fallback", { error: fallbackError })
+        }
+      }
+      if (error instanceof SessionSearch.StaleIndexError) {
+        searchIndex?.close()
+        searchIndex = undefined
+        return
+      }
+      try {
+        invalidateSearch(error)
+      } catch (cleanupError) {
+        log.error("failed to reset session search index", { error: cleanupError })
+      }
+    }
+  }
+
+  export async function searchSessions(input: SessionSearch.Query) {
+    await state()
+    for (let attempt = 0; ; attempt++) {
+      let current: SessionSearch.Index | undefined
+      try {
+        current = index()
+        return await current.search(input)
+      } catch (error) {
+        if (error instanceof SearchHistoryReadError) {
+          // A parent may already have been reconciled before its descendants
+          // failed to enumerate. Discard all derived completeness, never the
+          // journal, so the next query walks the canonical history again.
+          invalidateSearch(error, current)
+          throw error
+        }
+        if (error instanceof SessionSearch.StaleIndexError) {
+          // Never delete a replacement cache because an older awaited reader lost ownership.
+          if (searchIndex === current) {
+            searchIndex?.close()
+            searchIndex = undefined
+          }
+          if (attempt === 0) continue
+          throw error
+        }
+        const sqlite = error as { name?: string; errno?: number }
+        if (attempt !== 0 || sqlite.name !== "SQLiteError" || ![1, 11, 26].includes((sqlite.errno ?? 0) & 0xff))
+          throw error
+        invalidateSearch(error)
+      }
+    }
+  }
+
+  export async function rebuildSessionSearch() {
+    await state()
+    invalidateSearch()
+  }
 
   type Migration = (dir: string) => Promise<void>
 
@@ -171,7 +299,16 @@ export namespace Storage {
     const target = path.join(dir, ...key) + ".json"
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
-      await fs.unlink(target).catch((error) => { if (error.code !== "ENOENT") throw error })
+      const searchWrite = searchChange(key, "begin")
+      let removed = false
+      try {
+        await fs.unlink(target).catch((error) => {
+          if (error.code !== "ENOENT") throw error
+        })
+        removed = true
+      } finally {
+        searchChange(key, "finish", removed ? undefined : null, searchWrite)
+      }
     })
   }
 
@@ -186,7 +323,14 @@ export namespace Storage {
       } catch (e) {
         if (e instanceof SyntaxError) {
           log.warn("corrupted JSON file", { path: target, retained: Boolean(options.preserveCorrupted) })
-          if (!options.preserveCorrupted) await fs.unlink(target).catch(() => {})
+          if (!options.preserveCorrupted) {
+            const searchWrite = searchChange(key, "begin")
+            try {
+              await fs.unlink(target).catch(() => {})
+            } finally {
+              searchChange(key, "finish", undefined, searchWrite)
+            }
+          }
           throw new CorruptedError({ message: `Corrupted JSON file: ${target}` })
         }
         throw e
@@ -205,13 +349,23 @@ export namespace Storage {
       } catch (e) {
         if (e instanceof SyntaxError) {
           log.warn("corrupted JSON file, removing", { path: target })
-          await fs.unlink(target).catch(() => {})
+          const searchWrite = searchChange(key, "begin")
+          try {
+            await fs.unlink(target).catch(() => {})
+          } finally {
+            searchChange(key, "finish", undefined, searchWrite)
+          }
           throw new CorruptedError({ message: `Corrupted JSON file: ${target}` })
         }
         throw e
       }
       fn(content)
-      await Bun.write(target, JSON.stringify(content, null, 2))
+      const searchWrite = searchChange(key, "begin")
+      try {
+        await Bun.write(target, JSON.stringify(content, null, 2))
+      } finally {
+        searchChange(key, "finish", content, searchWrite)
+      }
       return content as T
     })
   }
@@ -221,7 +375,12 @@ export namespace Storage {
     const target = path.join(dir, ...key) + ".json"
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
-      await Bun.write(target, JSON.stringify(content, null, 2))
+      const searchWrite = searchChange(key, "begin")
+      try {
+        await Bun.write(target, JSON.stringify(content, null, 2))
+      } finally {
+        searchChange(key, "finish", content, searchWrite)
+      }
     })
   }
 
@@ -234,13 +393,19 @@ export namespace Storage {
       await fs.mkdir(path.dirname(target), { recursive: true })
       const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
       const bytes = Buffer.from(JSON.stringify(content, null, 2))
+      const searchWrite = searchChange(key, "begin")
       try {
         const written = await Bun.write(temporary, bytes)
         if (written !== bytes.length) throw new Error("Incomplete atomic storage write")
         const file = await fs.open(temporary, "r+")
-        try { await file.sync() } finally { await file.close() }
+        try {
+          await file.sync()
+        } finally {
+          await file.close()
+        }
         await fs.rename(temporary, target)
       } finally {
+        searchChange(key, "finish", content, searchWrite)
         await fs.unlink(temporary).catch(() => {})
       }
     })
@@ -259,6 +424,10 @@ export namespace Storage {
 
   const glob = new Bun.Glob("**/*")
   export async function list(prefix: string[]) {
+    return listEntries(prefix)
+  }
+
+  async function listEntries(prefix: string[], strict = false) {
     const dir = await state().then((x) => x.dir)
     try {
       const result = await Array.fromAsync(
@@ -269,7 +438,8 @@ export namespace Storage {
       ).then((results) => results.map((x) => [...prefix, ...x.slice(0, -5).split(path.sep)]))
       result.sort()
       return result
-    } catch {
+    } catch (error) {
+      if (strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error
       return []
     }
   }

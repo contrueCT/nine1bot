@@ -11,6 +11,7 @@ import type { ProcessItem } from '../utils/agent-timeline'
 
 const props = defineProps<{
   /** 按时间顺序排好的过程：工具、思考、过程中说的话 */
+  searchMessageId?: string
   items: ProcessItem[]
   isStreaming: boolean
   /** 这一轮的总用时，已格式化；生成中为空 */
@@ -35,6 +36,10 @@ watch(() => props.isStreaming, (streaming, wasStreaming) => {
     userToggled.value = false
     void set(false)
   }
+}, { immediate: true })
+
+watch(() => props.searchMessageId, id => {
+  if (id && props.items.some(item => item.kind === 'narration' && item.part.messageID === id)) void set(true)
 }, { immediate: true })
 
 const reasoningExpanded = ref<Record<string, boolean>>({})
@@ -124,7 +129,7 @@ function isLiveNarration(index: number): boolean {
       <div class="steps-body">
         <template v-for="(item, index) in items" :key="item.part.id">
           <!-- 过程中说的话：和工具按先后穿插，比最终回复淡一档 -->
-          <div v-if="item.kind === 'narration'" class="narration">
+          <div v-if="item.kind === 'narration'" class="narration" :data-search-message="item.part.messageID" tabindex="-1">
             <MarkdownText :text="item.part.text || ''" :streaming="isLiveNarration(index)" />
           </div>
 
