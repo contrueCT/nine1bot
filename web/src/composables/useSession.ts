@@ -1,5 +1,5 @@
 import { ref, computed, watch } from 'vue'
-import { beginSessionRead, acknowledgeSessionDirectory, ensureSessionSnapshot, markSessionSnapshot, sessionSnapshotOrder, copySessionSnapshot } from '../api/session-snapshot-authority'
+import { beginSessionRead, acknowledgeSessionDirectory, ensureSessionSnapshot, markSessionSnapshot, sessionSnapshotOrder, deriveSessionSnapshot } from '../api/session-snapshot-authority'
 import { createInteractionResponder } from './interaction-state'
 import {
   api,
@@ -121,7 +121,7 @@ export function useSession() {
     const order = sessionSnapshotOrder(session)
     const committed = committedDirectories.value.get(session.id)
     if (!committed || session.directory === committed.directory || order > committed.cutoff) return session
-    return copySessionSnapshot(session, { ...session, directory: committed.directory })
+    return deriveSessionSnapshot(session, { directory: committed.directory })
   }
   let pendingSessionReadiness: { sessionID: string; selection: number; promise: Promise<EventStreamSubscription> } | undefined
   let todoVersion = 0
@@ -371,7 +371,7 @@ export function useSession() {
         if (currentSession.value?.id !== sessionID || version !== directoryVersions.get(sessionID)) return
         const active = currentSession.value
         if (active.directory === previousDirectory) {
-          const committed = { ...active, directory: updated.directory }
+          const committed = deriveSessionSnapshot(active, { directory: updated.directory })
           markSessionSnapshot(committed, directoryCutoff)
           currentSession.value = committed
         } else currentSession.value = resolveSessionDirectory(active)
@@ -627,10 +627,7 @@ export function useSession() {
       ...(update.profileSnapshotId ? { profileSnapshotId: update.profileSnapshotId } : {}),
       ...(update.currentModel ? { currentModel: update.currentModel } : {}),
     }
-    const updated = {
-      ...currentSession.value,
-      runtime,
-    }
+    const updated = resolveSessionDirectory(deriveSessionSnapshot(currentSession.value, { runtime }))
     currentSession.value = updated
 
     const index = sessions.value.findIndex(s => s.id === updated.id)

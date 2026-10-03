@@ -1,4 +1,4 @@
-import { beginSessionRead, markSessionSnapshot } from './session-snapshot-authority'
+import { beginSessionRead, markSessionSnapshot, deriveSessionSnapshot } from './session-snapshot-authority'
 import {
   RUNTIME_EVENT_TYPES,
   normalizeRuntimeEventEnvelope,
@@ -235,10 +235,9 @@ function useFetchEventStream(): boolean {
 }
 
 function normalizeSession(session: Session): Session {
-  return {
-    ...session,
+  return deriveSessionSnapshot(session, {
     createdAt: session.time ? new Date(session.time.created).toISOString() : undefined
-  }
+  })
 }
 
 function webClientCapabilities(page?: RequestPagePayload) {
@@ -1189,6 +1188,7 @@ export const api = {
 
   // 创建会话
   async createSession(directory?: string, pageContext?: RequestPagePayload): Promise<Session> {
+    const readStarted = beginSessionRead()
     const res = await requireOk(await fetchWithTimeout(`${BASE_URL}/nine1bot/agent/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1202,7 +1202,7 @@ export const api = {
     const data = await res.json()
     const session = data.session || data.data || data
     if (!session?.id || typeof session.directory !== 'string') throw new Error('创建会话响应格式无效')
-    return normalizeSession(session)
+    return markSessionSnapshot(normalizeSession(session), readStarted)
   },
 
   // Read-only review of the session snapshot, pinned to its owning directory.

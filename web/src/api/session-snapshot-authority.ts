@@ -15,13 +15,10 @@ export function ensureSessionSnapshot<T extends object>(value: T, readStarted: n
   return value
 }
 export function sessionSnapshotOrder(value: object): number {
-  const raw = toRaw(value)
-  const known = reads.get(raw)
-  if (known !== undefined) return known
-  const order = ++sequence
-  reads.set(raw, order)
-  return order
+  // Observation is not authority. A lost/unmarked provenance must never become
+  // newer than an acknowledged mutation simply because the object was cloned.
+  return reads.get(toRaw(value)) ?? 0
 }
-export function copySessionSnapshot<T extends object>(source: object, result: T): T {
-  return markSessionSnapshot(result, sessionSnapshotOrder(source))
+export function deriveSessionSnapshot<T extends object, Changes extends object>(source: T, changes: Changes): T & Changes {
+  return markSessionSnapshot({ ...source, ...changes }, sessionSnapshotOrder(source))
 }

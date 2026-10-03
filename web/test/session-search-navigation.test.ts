@@ -4,6 +4,7 @@ import * as Icons from 'lucide-vue-next'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { api, permissionApi, questionApi, setApiDirectory, type Message, type Session, type SessionSearchResult } from '../src/api/client'
 import { getComposerDraft, clearComposerDrafts } from '../src/composables/composer-drafts'
+import { beginSessionRead, markSessionSnapshot, sessionSnapshotOrder } from '../src/api/session-snapshot-authority'
 import { useGlobalRecentSessions } from '../src/composables/useGlobalRecentSessions'
 import { useSession } from '../src/composables/useSession'
 
@@ -138,6 +139,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 const originalApi = {
+  changeSessionModel: api.changeSessionModel,
   updateSession: api.updateSession,
   getSessions: api.getSessions,
   getMessages: api.getMessages,
@@ -414,12 +416,12 @@ for (const returnBeforeAck of [false, true]) test(`actual App sidebar resolves a
   expect(getComposerDraft(a.id, undefined, model.currentDirectory.value).text).not.toBe('')
   // Directory PATCH uses touch:false. Equal timestamps do not make a newly
   // fetched server snapshot older than our previous local acknowledgement.
-  globalRecentSessions.value = [{ ...a, directory: '/project/A/server-new', time: { created: 1, updated: 1 } }, { ...b }]
+  globalRecentSessions.value = [markSessionSnapshot({ ...a, directory: '/project/A/server-new', time: { created: 1, updated: 1 } }, beginSessionRead()), { ...b }]
   const freshlyLoaded = actualApp.sidebarSessions.value.find((item: Session) => item.id === a.id)
   expect(freshlyLoaded.directory).toBe('/project/A/server-new')
   await actualApp.handleSidebarSelectSession(freshlyLoaded)
   expect(model.currentDirectory.value).toBe('/project/A/server-new')
-  model.sessions.value = [{ ...a, directory: '/project/A/list-new', time: { created: 1, updated: 1 } }, { ...b }]
+  model.sessions.value = [markSessionSnapshot({ ...a, directory: '/project/A/list-new', time: { created: 1, updated: 1 } }, beginSessionRead()), { ...b }]
   const freshList = actualApp.sidebarSessions.value.find((item: Session) => item.id === a.id)
   expect(freshList.directory).toBe('/project/A/list-new')
   await actualApp.handleSidebarSelectSession(freshList)
@@ -432,7 +434,7 @@ test('a fresh authoritative session record supersedes a local commit even with a
   await model.selectSession(session('directory-newer'))
   api.updateSession = async () => ({ ...session('directory-newer'), directory: '/committed', time: { created: 1, updated: 1 } })
   await model.changeDirectory('/committed')
-  await model.selectSession({ ...session('directory-newer'), directory: '/newer-external', title: 'newer metadata', time: { created: 1, updated: 1 } })
+  await model.selectSession(markSessionSnapshot({ ...session('directory-newer'), directory: '/newer-external', title: 'newer metadata', time: { created: 1, updated: 1 } }, beginSessionRead()))
   expect(model.currentDirectory.value).toBe('/newer-external')
   expect(model.currentSession.value?.title).toBe('newer metadata')
 })
@@ -518,6 +520,80 @@ for (const provider of ['local', 'recents', 'both'] as const) {
         for (const response of responses) response.resolve(Response.json([a]))
         globalThis.fetch = originalFetch
         recents.resetGlobalRecentSessions()
+      }
+    })
+  }
+}
+
+
+for (const bodyOrder of ['runtime-first', 'directory-first'] as const) {
+  for (const runtimeFields of ['model', 'profile-config', 'model-and-profile'] as const) {
+    test(`real streamed API ${runtimeFields} derivation preserves directory authority with ${bodyOrder}`, async () => {
+      const model = createSessionModel()
+      api.getMessages = async () => []
+      api.updateSession = originalApi.updateSession
+      api.changeSessionModel = originalApi.changeSessionModel
+      const a = markSessionSnapshot({ ...session('runtime-A'), directory: '/project/runtime-A' }, beginSessionRead())
+      const b = markSessionSnapshot({ ...session('runtime-B'), directory: '/project/runtime-B' }, beginSessionRead())
+      model.sessions.value = [a, b]
+      await model.selectSession(a)
+      const actual = await actualSidebar(model, Vue.ref([]))
+      let rendered: Session[] = []
+      const stopRender = Vue.watchEffect(() => { rendered = actual.sidebarSessions.value })
+      getComposerDraft(a.id, undefined, a.directory).text = 'draft survives model/config updates'
+      const requestsStarted = deferred<void>()
+      let requests = 0
+      let runtimeController!: ReadableStreamDefaultController<Uint8Array>
+      let directoryController!: ReadableStreamDefaultController<Uint8Array>
+      const runtimeResponse = new Response(new ReadableStream<Uint8Array>({ start(controller) { runtimeController = controller } }), { headers: { 'Content-Type': 'application/json' } })
+      const directoryResponse = new Response(new ReadableStream<Uint8Array>({ start(controller) { directoryController = controller } }), { headers: { 'Content-Type': 'application/json' } })
+      const originalFetch = globalThis.fetch
+      const posted = deferred<void>(), postResult = deferred<any>()
+      globalThis.fetch = async (input, options) => {
+        if (++requests === 2) requestsStarted.resolve()
+        if (options?.method === 'PATCH') return directoryResponse
+        if (String(input).includes('/model')) return runtimeResponse
+        throw new Error(`Unexpected request: ${String(input)}`)
+      }
+      api.sendMessage = () => { posted.resolve(); return postResult.promise }
+      const changing = model.changeDirectory('/project/runtime-committed')
+      const sending = model.sendMessage('send', { providerID: 'p', modelID: 'new' })
+      try {
+        await requestsStarted.promise
+        await Promise.resolve(); await Promise.resolve()
+        const runtime = { sessionId: a.id,
+          ...(runtimeFields !== 'profile-config' ? { currentModel: { providerID: 'p', modelID: 'new' } } : {}),
+          ...(runtimeFields !== 'model' ? { profileSnapshotId: 'profile-new' } : {}),
+        }
+        const completeRuntime = () => { runtimeController.enqueue(new TextEncoder().encode(JSON.stringify(runtime))); runtimeController.close() }
+        const completeDirectory = () => { directoryController.enqueue(new TextEncoder().encode(JSON.stringify({ ...a, directory: '/project/runtime-committed' }))); directoryController.close() }
+        if (bodyOrder === 'runtime-first') { completeRuntime(); completeDirectory() }
+        else { completeDirectory(); completeRuntime() }
+        await changing; await posted.promise; await Vue.nextTick()
+        const sidebarA = rendered.find(item => item.id === a.id)!
+        expect(model.currentDirectory.value).toBe('/project/runtime-committed')
+        expect(model.sessions.value.find(item => item.id === a.id)?.directory).toBe('/project/runtime-committed')
+        expect(sidebarA.directory).toBe('/project/runtime-committed')
+        const inherited = sessionSnapshotOrder(model.currentSession.value!)
+        expect(inherited).toBeGreaterThan(0)
+        if (runtimeFields !== 'profile-config') expect(model.currentSession.value?.runtime?.currentModel?.modelID).toBe('new')
+        if (runtimeFields !== 'model') expect(model.currentSession.value?.runtime?.profileSnapshotId).toBe('profile-new')
+        // Metadata-only live updates and history reconciliation cannot manufacture
+        // new directory provenance either; they retain the existing Session.
+        model.applySessionTitle({ id: a.id, title: 'live title' })
+        await model.retryHistory()
+        await Vue.nextTick()
+        expect(sessionSnapshotOrder(model.currentSession.value!)).toBe(inherited)
+        expect(model.currentSession.value?.title).toBe('live title')
+        await model.selectSession(b)
+        await actual.handleSidebarSelectSession(sidebarA)
+        expect(model.currentDirectory.value).toBe('/project/runtime-committed')
+        expect(getComposerDraft(a.id, undefined, model.currentDirectory.value).text).toBe('draft survives model/config updates')
+      } finally {
+        postResult.resolve({ accepted: true, sessionId: a.id })
+        await sending
+        stopRender()
+        globalThis.fetch = originalFetch
       }
     })
   }

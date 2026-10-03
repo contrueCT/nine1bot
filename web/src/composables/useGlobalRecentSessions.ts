@@ -1,4 +1,4 @@
-import { beginSessionRead, ensureSessionSnapshot, copySessionSnapshot } from '../api/session-snapshot-authority'
+import { beginSessionRead, ensureSessionSnapshot, deriveSessionSnapshot } from '../api/session-snapshot-authority'
 import { computed, ref } from 'vue'
 import { projectApi, type Project, type Session } from '../api/client'
 
@@ -32,8 +32,7 @@ function toProjectDisplayName(project: RecentSessionProject): string {
 function mapProjectSessions(project: RecentSessionProject, sessions: Session[], readStarted: number): GlobalRecentSessionItem[] {
   const displayName = toProjectDisplayName(project)
   const displayPath = project.rootDirectory || project.worktree
-  return sessions.map((session) => copySessionSnapshot(ensureSessionSnapshot(session, readStarted), {
-    ...session,
+  return sessions.map((session) => deriveSessionSnapshot(ensureSessionSnapshot(session, readStarted), {
     projectID: session.projectID || project.id,
     projectDisplayName: displayName,
     projectDisplayPath: displayPath,
