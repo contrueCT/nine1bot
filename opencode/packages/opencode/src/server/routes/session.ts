@@ -12,6 +12,7 @@ import { pathToFileURL } from "url"
 import Busboy from "@fastify/busboy"
 import z from "zod"
 import { Session } from "../../session"
+import { Storage } from "../../storage/storage"
 import { MessageV2 } from "../../session/message-v2"
 import { SessionPrompt } from "../../session/prompt"
 import { SessionCompaction } from "../../session/compaction"
@@ -326,6 +327,52 @@ export const SessionRoutes = lazy(() =>
         }
         return c.json(sessions)
       },
+    )
+    .get(
+      "/search",
+      describeRoute({
+        summary: "Search conversation history",
+        description:
+          "Search root session titles and visible user/assistant text in the current project using a case-insensitive literal substring.",
+        operationId: "session.search",
+        responses: {
+          200: {
+            description: "Matching sessions with a message excerpt when available",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    results: z.array(
+                      z.object({
+                        session: Session.Info,
+                        messageID: z.string().optional(),
+                        snippet: z.string(),
+                      }),
+                    ),
+                    hasMore: z.boolean(),
+                  }),
+                ),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          q: z.string().trim().min(1).max(500),
+          limit: z.coerce.number().int().min(1).max(100).default(50),
+          clientSource: Session.Client.shape.source,
+        }),
+      ),
+      async (c) =>
+        c.json(
+          await Storage.searchSessions({
+            ...c.req.valid("query"),
+            projectID: Instance.project.id,
+          }),
+        ),
     )
     .get(
       "/status",
