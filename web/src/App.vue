@@ -69,6 +69,8 @@ const {
   ensureSession,
   selectSession,
   resolveSessionDirectory,
+  rememberSessionRecords,
+  sessionRecordOrder,
   viewOwner,
   sendMessage,
   abortSession,
@@ -251,19 +253,20 @@ const extensionRelayStatus = ref({
   message: '',
 })
 
+// Register concrete list snapshots when received, not when a later PATCH ends.
+watch(globalRecentSessions, rememberSessionRecords, { immediate: true, flush: 'sync' })
+
 const sidebarSessions = computed(() => {
   const merged = new Map<string, Session>()
-  for (const session of globalRecentSessions.value) {
-    merged.set(session.id, session)
+  const include = (session: Session) => {
+    const previous = merged.get(session.id)
+    // Source objects identify freshness; directory PATCH deliberately preserves
+    // updated timestamps. A newly loaded provider must beat an older cached one.
+    if (!previous || sessionRecordOrder(session) > sessionRecordOrder(previous)) merged.set(session.id, session)
   }
-  for (const session of sessions.value) {
-    if (!merged.has(session.id)) {
-      merged.set(session.id, session)
-    }
-  }
-  if (currentSession.value && !merged.has(currentSession.value.id)) {
-    merged.set(currentSession.value.id, currentSession.value)
-  }
+  for (const session of globalRecentSessions.value) include(session)
+  for (const session of sessions.value) include(session)
+  if (currentSession.value) include(currentSession.value)
   return Array.from(merged.values()).map(resolveSessionDirectory).sort((a, b) => b.time.updated - a.time.updated)
 })
 

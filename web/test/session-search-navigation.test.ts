@@ -90,6 +90,7 @@ async function mount(props: () => any) {
 async function settle() { await Promise.resolve(); await Vue.nextTick(); await Promise.resolve(); await Vue.nextTick() }
 afterEach(() => {
   app?.unmount(); app = undefined
+  for (const stop of sidebarWatcherStops.splice(0)) stop()
   sessionModel?.unsubscribe(); sessionModel = undefined
   clearComposerDrafts()
   Object.assign(api, originalApi)
@@ -145,6 +146,7 @@ const originalApi = {
 }
 const originalQuestionList = questionApi.list
 const originalPermissionList = permissionApi.list
+const sidebarWatcherStops: (() => void)[] = []
 let sessionModel: ReturnType<typeof useSession> | undefined
 function createSessionModel() {
   api.getMessages = async () => [message('older'), message('newer')] as Message[]
@@ -362,6 +364,22 @@ for (const returnBeforeAck of [false, true]) test(`actual App sidebar resolves a
   const b = { ...session('directory-B'), directory: '/project/B' }
   model.sessions.value = [{ ...a }, { ...b }]
   const globalRecentSessions = Vue.ref([{ ...a }, { ...b }])
+  const { descriptor } = parse(await Bun.file(new URL('../src/App.vue', import.meta.url)).text())
+  const compiled = compileScript(descriptor, { id: 'sidebar-directory-commit' })
+  const source = (node: any) => descriptor.scriptSetup!.content.slice(node.start!, node.end!)
+  const sidebar = compiled.scriptSetupAst!.find((node: any) => node.type === 'VariableDeclaration' && node.declarations.some((item: any) => item.id?.name === 'sidebarSessions'))!
+  const tracking = compiled.scriptSetupAst!.find((node: any) => node.type === 'ExpressionStatement' && node.expression?.callee?.name === 'watch' && source(node).includes('watch(globalRecentSessions, rememberSessionRecords'))!
+  const handler = compiled.scriptSetupAst!.find((node: any) => node.type === 'FunctionDeclaration' && node.id?.name === 'handleSidebarSelectSession')!
+  const scope = { ...model, globalRecentSessions, sidebarMobileOpen: Vue.ref(true), showProjectsPage: Vue.ref(false), showMetricsPage: Vue.ref(false), showAutomationsPage: Vue.ref(false) }
+  const actualApp = new Function('scope', 'computed', 'watch', `
+    const { sessions, currentSession, globalRecentSessions, resolveSessionDirectory, rememberSessionRecords, sessionRecordOrder, selectSession,
+      sidebarMobileOpen, showProjectsPage, showMetricsPage, showAutomationsPage } = scope;
+    const stop = ${new Bun.Transpiler({ loader: 'ts' }).transformSync(source(tracking))}
+    ${new Bun.Transpiler({ loader: 'ts' }).transformSync(source(sidebar))}
+    ${new Bun.Transpiler({ loader: 'ts' }).transformSync(source(handler))}
+    return { sidebarSessions, handleSidebarSelectSession, stop };
+  `)(scope, Vue.computed, Vue.watch)
+  sidebarWatcherStops.push(actualApp.stop)
   await model.selectSession(a)
   getComposerDraft(a.id, undefined, a.directory).text = 'original draft'
   const changed = deferred<Session>()
@@ -374,20 +392,7 @@ for (const returnBeforeAck of [false, true]) test(`actual App sidebar resolves a
     model.applySessionTitle({ id: a.id, title: 'newer title' })
     globalRecentSessions.value[0]!.title = 'newer title'
   }
-  const { descriptor } = parse(await Bun.file(new URL('../src/App.vue', import.meta.url)).text())
-  const compiled = compileScript(descriptor, { id: 'sidebar-directory-commit' })
-  const source = (node: any) => descriptor.scriptSetup!.content.slice(node.start!, node.end!)
-  const sidebar = compiled.scriptSetupAst!.find((node: any) => node.type === 'VariableDeclaration' && node.declarations.some((item: any) => item.id?.name === 'sidebarSessions'))!
-  const handler = compiled.scriptSetupAst!.find((node: any) => node.type === 'FunctionDeclaration' && node.id?.name === 'handleSidebarSelectSession')!
-  const scope = { ...model, globalRecentSessions, sidebarMobileOpen: Vue.ref(true), showProjectsPage: Vue.ref(false), showMetricsPage: Vue.ref(false), showAutomationsPage: Vue.ref(false) }
-  const actualApp = new Function('scope', 'computed', `
-    const { sessions, currentSession, globalRecentSessions, resolveSessionDirectory, selectSession,
-      sidebarMobileOpen, showProjectsPage, showMetricsPage, showAutomationsPage } = scope;
-    ${new Bun.Transpiler({ loader: 'ts' }).transformSync(source(sidebar))}
-    ${new Bun.Transpiler({ loader: 'ts' }).transformSync(source(handler))}
-    return { sidebarSessions, handleSidebarSelectSession };
-  `)(scope, Vue.computed)
-  changed.resolve({ ...a, directory: '/project/A/new', time: { created: 1, updated: 2 } })
+  changed.resolve({ ...a, directory: '/project/A/new', time: { created: 1, updated: 1 } })
   await changing
   expect(model.sessions.value.find(item => item.id === a.id)?.directory).toBe('/project/A/new')
   expect(globalRecentSessions.value[0]?.directory).toBe('/project/A') // deliberately stale provider
@@ -405,15 +410,27 @@ for (const returnBeforeAck of [false, true]) test(`actual App sidebar resolves a
   await actualApp.handleSidebarSelectSession(globalRecentSessions.value[0])
   expect(model.currentDirectory.value).toBe('/project/A/new')
   expect(getComposerDraft(a.id, undefined, model.currentDirectory.value).text).not.toBe('')
+  // Directory PATCH uses touch:false. Equal timestamps do not make a newly
+  // fetched server snapshot older than our previous local acknowledgement.
+  globalRecentSessions.value = [{ ...a, directory: '/project/A/server-new', time: { created: 1, updated: 1 } }, { ...b }]
+  const freshlyLoaded = actualApp.sidebarSessions.value.find((item: Session) => item.id === a.id)
+  expect(freshlyLoaded.directory).toBe('/project/A/server-new')
+  await actualApp.handleSidebarSelectSession(freshlyLoaded)
+  expect(model.currentDirectory.value).toBe('/project/A/server-new')
+  model.sessions.value = [{ ...a, directory: '/project/A/list-new', time: { created: 1, updated: 1 } }, { ...b }]
+  const freshList = actualApp.sidebarSessions.value.find((item: Session) => item.id === a.id)
+  expect(freshList.directory).toBe('/project/A/list-new')
+  await actualApp.handleSidebarSelectSession(freshList)
+  expect(model.currentDirectory.value).toBe('/project/A/list-new')
 })
 
-test('a newer authoritative session record can supersede a prior local directory commit', async () => {
+test('a fresh authoritative session record supersedes a local commit even with an equal touch:false timestamp', async () => {
   const model = createSessionModel()
   api.getMessages = async () => []
   await model.selectSession(session('directory-newer'))
-  api.updateSession = async () => ({ ...session('directory-newer'), directory: '/committed', time: { created: 1, updated: 2 } })
+  api.updateSession = async () => ({ ...session('directory-newer'), directory: '/committed', time: { created: 1, updated: 1 } })
   await model.changeDirectory('/committed')
-  await model.selectSession({ ...session('directory-newer'), directory: '/newer-external', title: 'newer metadata', time: { created: 1, updated: 3 } })
+  await model.selectSession({ ...session('directory-newer'), directory: '/newer-external', title: 'newer metadata', time: { created: 1, updated: 1 } })
   expect(model.currentDirectory.value).toBe('/newer-external')
   expect(model.currentSession.value?.title).toBe('newer metadata')
 })

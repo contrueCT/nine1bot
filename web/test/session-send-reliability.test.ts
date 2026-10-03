@@ -486,3 +486,41 @@ it('does not strand an acknowledged background update when a newer same-session 
   expect(getComposerDraft('A', undefined, '/workspace/A-committed').text).toBe('keep the committed draft')
   expect(getComposerDraft('A', undefined, '/workspace/A-failed').text).toBe('')
 })
+
+
+it('commits draft migration without waiting for obsolete same-session status IO', async () => {
+  const a = session('A'), b = session('B')
+  active.sessions.value = [a, b]
+  await active.selectSession(a)
+  getComposerDraft('A').text = 'draft must move immediately'
+  const update = deferred<Session>()
+  api.updateSession = () => update.promise
+  const changing = active.changeDirectory('/workspace/A-new')
+  await active.selectSession(b)
+  const obsoleteStatus = deferred<Record<string, any>>()
+  const statusStarted = deferred<void>()
+  let hold = true
+  api.getSessionStatus = async () => { if (hold) { hold = false; statusStarted.resolve(); return obsoleteStatus.promise } return {} }
+  const oldSelection = active.selectSession(a)
+  await statusStarted.promise
+  try {
+    getComposerDraft('A', undefined, '/workspace/A').text = 'edited during old readiness'
+    update.resolve({ ...a, directory: '/workspace/A-new' })
+    const completed = await Promise.race([changing.then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 200))])
+    expect(completed).toBe(true)
+    expect(getComposerDraft('A', undefined, '/workspace/A-new').text).toBe('edited during old readiness')
+    expect(getComposerDraft('A', undefined, '/workspace/A').text).toBe('')
+    await active.selectSession(b)
+    await active.selectSession(active.sessions.value.find(item => item.id === 'A')!)
+    expect(active.currentDirectory.value).toBe('/workspace/A-new')
+    expect(getComposerDraft('A', undefined, active.currentDirectory.value).text).toBe('edited during old readiness')
+    expect(active.connectionState.value).toBe('connected')
+  } finally {
+    obsoleteStatus.resolve({})
+    await oldSelection
+    await changing
+  }
+  await tick()
+  expect(active.currentDirectory.value).toBe('/workspace/A-new')
+  expect(active.connectionState.value).toBe('connected')
+})

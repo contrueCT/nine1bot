@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch, toRaw } from 'vue'
 import { createInteractionResponder } from './interaction-state'
 import {
   api,
@@ -108,11 +108,29 @@ export function useSession() {
   const directoryVersions = new Map<string, number>()
   const draftDirectories = new Map<string, string>()
   const successfulDirectoryVersions = new Map<string, number>()
-  const committedDirectories = ref(new Map<string, { directory: string; updatedAt: number }>())
+  // Overrides are limited to snapshot objects already known when a PATCH began.
+  // A fresh server record is authoritative even when touch:false kept its timestamp.
+  let directoryRecordEpoch = 0
+  const directoryRecords = new WeakMap<Session, number>()
+  const committedDirectories = ref(new Map<string, { directory: string; cutoff: number }>())
+  function rememberSessionRecords(records: readonly Session[]) {
+    for (const session of records) {
+      const raw = toRaw(session)
+      if (!directoryRecords.has(raw)) directoryRecords.set(raw, ++directoryRecordEpoch)
+    }
+  }
+  watch(sessions, rememberSessionRecords, { immediate: true, flush: 'sync' })
+  function sessionRecordOrder(session: Session): number {
+    rememberSessionRecords([session])
+    return directoryRecords.get(toRaw(session))!
+  }
   function resolveSessionDirectory(session: Session): Session {
+    const epoch = sessionRecordOrder(session)
     const committed = committedDirectories.value.get(session.id)
-    if (!committed || session.directory === committed.directory || session.time.updated > committed.updatedAt) return session
-    return { ...session, directory: committed.directory, time: { ...session.time, updated: Math.max(session.time.updated, committed.updatedAt) } }
+    if (!committed || session.directory === committed.directory || epoch > committed.cutoff) return session
+    const resolved = { ...session, directory: committed.directory }
+    directoryRecords.set(resolved, epoch)
+    return resolved
   }
   let pendingSessionReadiness: { sessionID: string; selection: number; promise: Promise<EventStreamSubscription> } | undefined
   let todoVersion = 0
@@ -336,6 +354,8 @@ export function useSession() {
     if (currentSession.value && messages.value.length === 0) {
       const sessionID = currentSession.value.id
       const previousDirectory = currentSession.value.directory
+      rememberSessionRecords([currentSession.value, ...sessions.value])
+      const directoryCutoff = directoryRecordEpoch
       const isOwner = viewOwner()
       const version = (directoryVersions.get(sessionID) || 0) + 1
       directoryVersions.set(sessionID, version)
@@ -345,15 +365,9 @@ export function useSession() {
         successfulDirectoryVersions.set(sessionID, version)
         // Directory authority is session-owned, not selection-owned. Patch only
         // this metadata so a late directory response cannot roll back a new title.
-        committedDirectories.value.set(sessionID, { directory: updated.directory, updatedAt: updated.time.updated })
+        committedDirectories.value.set(sessionID, { directory: updated.directory, cutoff: directoryCutoff })
         const index = sessions.value.findIndex(session => session.id === sessionID)
         if (index !== -1) sessions.value[index] = resolveSessionDirectory(sessions.value[index]!)
-        // Do not invalidate a same-session re-selection's in-flight snapshot.
-        const pending = pendingSessionReadiness
-        if (pending?.sessionID === sessionID && pending.selection === selectionVersion) {
-          await pending.promise.catch(() => undefined)
-          if (version < (successfulDirectoryVersions.get(sessionID) || 0)) return
-        }
         // A committed update owns its draft even after navigation releases the view.
         // Use the last migrated scope for repeated updates, not a stale selection.
         moveComposerDraft(sessionID, sessionID, updated.directory, previousDirectory)
@@ -363,12 +377,30 @@ export function useSession() {
         }
         draftDirectories.set(sessionID, updated.directory)
         if (currentSession.value?.id !== sessionID || version !== directoryVersions.get(sessionID)) return
-        currentSession.value = resolveSessionDirectory(currentSession.value)
+        const active = currentSession.value
+        if (active.directory === previousDirectory) {
+          const committed = { ...active, directory: updated.directory }
+          directoryRecords.set(committed, directoryCutoff)
+          currentSession.value = committed
+        } else currentSession.value = resolveSessionDirectory(active)
         currentDirectory.value = currentSession.value.directory
         setApiDirectory(currentDirectory.value)
-        reconnectEventsForDirectory()
-        unsubscribeSessionRuntimeEvents()
-        await openSessionEventStreamAndReconcile(updated.id)
+        const currentOwner = viewOwner()
+        const refreshDirectoryView = async () => {
+          if (!currentOwner() || currentDirectory.value !== updated.directory || version !== directoryVersions.get(sessionID)) return
+          reconnectEventsForDirectory()
+          unsubscribeSessionRuntimeEvents()
+          await openSessionEventStreamAndReconcile(updated.id)
+        }
+        // Durable migration and visible directory ownership must not wait on an
+        // obsolete history/status request. Only the stream refresh may wait, and
+        // it may not disturb a newer selection after that wait completes.
+        const pending = pendingSessionReadiness
+        if (pending?.sessionID === sessionID && pending.selection === selectionVersion) {
+          void pending.promise.catch(() => undefined).then(refreshDirectoryView).catch(error => {
+            if (currentOwner()) historyError.value = error instanceof Error ? error.message : '会话加载失败，请重试'
+          })
+        } else await refreshDirectoryView()
       } catch (error) {
         if (isOwner() && version === directoryVersions.get(sessionID)) {
           console.error('Failed to change directory:', error)
@@ -1483,6 +1515,8 @@ export function useSession() {
     ensureSession,
     selectSession,
     resolveSessionDirectory,
+    rememberSessionRecords,
+    sessionRecordOrder,
     viewOwner,
     sendMessage,
     abortSession,
