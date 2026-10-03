@@ -209,8 +209,10 @@ async function loadEarlier() {
 }
 const searchMessageId = ref<string>()
 let revealVersion = 0
-async function revealMessage(messageId: string) {
+async function revealMessage(messageId: string, isOwner: () => boolean = () => true) {
+  if (!isOwner()) return false
   const version = ++revealVersion
+  const isCurrent = () => version === revealVersion && isOwner()
   const groupIndex = displayGroups.value.findIndex(group => group.type === 'user'
     ? group.message.info.id === messageId : group.messages.some(message => message.info.id === messageId))
   if (groupIndex < 0) return false
@@ -219,19 +221,26 @@ async function revealMessage(messageId: string) {
   programmatic = true
   visibleCount.value = Math.max(visibleCount.value, displayGroups.value.length - groupIndex)
   searchMessageId.value = messageId
-  await nextTick()
-  // Narration may live in a lazily mounted, animated assistant process group.
-  await new Promise(resolve => setTimeout(resolve, 250))
-  if (version !== revealVersion) return false
-  const target = Array.from(scrollContainer.value?.querySelectorAll<HTMLElement>('[data-search-message]') || [])
-    .find(element => element.dataset.searchMessage === messageId)
-  if (!target) { programmatic = false; return false }
-  target.scrollIntoView({ block: 'center' })
-  target.focus({ preventScroll: true })
-  if (scrollContainer.value) lastTop = scrollContainer.value.scrollTop
-  programmatic = false
-  savePosition()
-  return true
+  try {
+    await nextTick()
+    if (!isCurrent()) return false
+    // Narration may live in a lazily mounted, animated assistant process group.
+    await new Promise(resolve => setTimeout(resolve, 250))
+    if (!isCurrent()) return false
+    const target = Array.from(scrollContainer.value?.querySelectorAll<HTMLElement>('[data-search-message]') || [])
+      .find(element => element.dataset.searchMessage === messageId)
+    if (!target) return false
+    target.scrollIntoView({ block: 'center' })
+    target.focus({ preventScroll: true })
+    if (scrollContainer.value) lastTop = scrollContainer.value.scrollTop
+    savePosition()
+    return true
+  } finally {
+    if (version === revealVersion) {
+      programmatic = false
+      if (!isOwner()) searchMessageId.value = undefined
+    }
+  }
 }
 defineExpose({ revealMessage })
 watch(() => props.sessionId, (id, oldId) => {

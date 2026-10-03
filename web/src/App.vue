@@ -68,6 +68,7 @@ const {
   createSession,
   ensureSession,
   selectSession,
+  viewOwner,
   sendMessage,
   abortSession,
   abortCurrentSession,
@@ -873,11 +874,15 @@ async function handleSearchSelect(result: SessionSearchResult) {
   showMetricsPage.value = false
   showAutomationsPage.value = false
   searchNavigationNotice.value = ''
-  await selectSession(result.session)
+  // selectSession claims the view synchronously, before its history load awaits.
+  const selecting = selectSession(result.session)
+  const isOwner = viewOwner()
+  await selecting
+  if (!isOwner()) return
   await nextTick()
-  if (currentSession.value?.id !== result.session.id || historyError.value || !result.messageID) return
-  if (!await searchChatPanel.value?.revealMessage(result.messageID)) {
-    if (currentSession.value?.id === result.session.id) searchNavigationNotice.value = '已打开会话，但匹配消息可能已更改或删除，未能定位'
+  if (!isOwner() || historyError.value || !result.messageID) return
+  if (!await searchChatPanel.value?.revealMessage(result.messageID, isOwner)) {
+    if (isOwner()) searchNavigationNotice.value = '已打开会话，但匹配消息可能已更改或删除，未能定位'
   }
 }
 

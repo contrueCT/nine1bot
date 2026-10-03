@@ -107,6 +107,7 @@ export function useSession() {
   let selectionVersion = 0
   let directoryVersion = 0
   let todoVersion = 0
+  // Capture view ownership before awaiting work, including same-session reselection.
   function viewOwner() {
     const version = selectionVersion
     const sessionID = currentSession.value?.id
@@ -1414,6 +1415,7 @@ export function useSession() {
     createSession,
     ensureSession,
     selectSession,
+    viewOwner,
     sendMessage,
     abortSession,
     abortCurrentSession,

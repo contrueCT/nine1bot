@@ -2,6 +2,8 @@ import { afterEach, expect, test } from 'bun:test'
 import * as Vue from 'vue'
 import * as Icons from 'lucide-vue-next'
 import { compileScript, parse } from 'vue/compiler-sfc'
+import { api, permissionApi, questionApi, setApiDirectory, type Message, type Session, type SessionSearchResult } from '../src/api/client'
+import { useSession } from '../src/composables/useSession'
 
 
 
@@ -64,6 +66,7 @@ const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
 let app: ReturnType<typeof renderer.createApp> | undefined
 let restoredFocus = false
 async function mount(props: () => any) {
+  scrolled = undefined
   Object.defineProperty(globalThis, 'Document', { configurable: true, value: class Document {} })
   Object.defineProperty(globalThis, 'ShadowRoot', { configurable: true, value: class ShadowRoot {} })
   restoredFocus = false
@@ -86,6 +89,11 @@ async function mount(props: () => any) {
 async function settle() { await Promise.resolve(); await Vue.nextTick(); await Promise.resolve(); await Vue.nextTick() }
 afterEach(() => {
   app?.unmount(); app = undefined
+  sessionModel?.unsubscribe(); sessionModel = undefined
+  Object.assign(api, originalApi)
+  questionApi.list = originalQuestionList
+  permissionApi.list = originalPermissionList
+  setApiDirectory('')
   listeners.clear()
   for (const [key, descriptor] of environment) {
     if (descriptor) Object.defineProperty(globalThis, key, descriptor)
@@ -118,4 +126,192 @@ test('real chat reveal aborts after session switch instead of jumping to another
   session.value = 'session-two'
   await settle()
   expect(await revealing).toBe(false)
+})
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+const originalApi = {
+  getMessages: api.getMessages,
+  getSessionStatus: api.getSessionStatus,
+  subscribeSessionRuntimeEvents: api.subscribeSessionRuntimeEvents,
+}
+const originalQuestionList = questionApi.list
+const originalPermissionList = permissionApi.list
+let sessionModel: ReturnType<typeof useSession> | undefined
+function createSessionModel() {
+  api.getMessages = async () => [message('older'), message('newer')] as Message[]
+  api.getSessionStatus = async () => ({})
+  questionApi.list = async () => []
+  permissionApi.list = async () => []
+  api.subscribeSessionRuntimeEvents = () => ({ ready: Promise.resolve(), close() {}, connectionGeneration: () => 1 })
+  return sessionModel = useSession()
+}
+function session(id: string): Session {
+  return { id, title: id, directory: '/project', time: { created: 1, updated: 1 } }
+}
+function result(session: Session, messageID = 'older'): SessionSearchResult {
+  return { session, messageID, snippet: messageID }
+}
+
+let searchHandlerFactory: ((scope: any) => (result: SessionSearchResult) => Promise<void>) | undefined
+async function searchHandler(model: ReturnType<typeof useSession>, options: {
+  nextTick?: () => Promise<unknown>
+  revealMessage?: (messageID: string, isOwner: () => boolean) => Promise<boolean>
+} = {}) {
+  if (!searchHandlerFactory) {
+    // Execute App's actual handler, rather than a copied navigation implementation.
+    // The real session composable and mounted ChatPanel own the async boundaries.
+    const { descriptor } = parse(await Bun.file(new URL('../src/App.vue', import.meta.url)).text())
+    const compiled = compileScript(descriptor, { id: 'search-navigation' })
+    const handler = compiled.scriptSetupAst!.find(node => node.type === 'FunctionDeclaration' && node.id?.name === 'handleSearchSelect')!
+    const source = descriptor.scriptSetup!.content.slice(handler.start!, handler.end!)
+    searchHandlerFactory = new Function('scope', `
+      const { sidebarMobileOpen, showSearch, showProjectsPage, showMetricsPage, showAutomationsPage,
+        searchNavigationNotice, selectSession, viewOwner, currentSession, historyError, nextTick, searchChatPanel } = scope;
+      ${new Bun.Transpiler({ loader: 'ts' }).transformSync(source)}
+      return handleSearchSelect;
+    `) as typeof searchHandlerFactory
+  }
+  const revealStarted = deferred<void>()
+  const scope = {
+    ...model,
+    sidebarMobileOpen: Vue.ref(true),
+    showSearch: Vue.ref(true),
+    showProjectsPage: Vue.ref(true),
+    showMetricsPage: Vue.ref(true),
+    showAutomationsPage: Vue.ref(true),
+    searchNavigationNotice: Vue.ref(''),
+    nextTick: options.nextTick ?? Vue.nextTick,
+    searchChatPanel: { value: { revealMessage(messageID: string, isOwner: () => boolean) {
+      revealStarted.resolve()
+      return options.revealMessage ? options.revealMessage(messageID, isOwner) : exposed.revealMessage(messageID, isOwner)
+    } } },
+  }
+  return { select: searchHandlerFactory!(scope), notice: scope.searchNavigationNotice, revealStarted: revealStarted.promise }
+}
+async function mountSession(model: ReturnType<typeof useSession>) {
+  return mount(() => ({
+    sessionId: model.currentSession.value?.id,
+    messages: model.messages.value,
+    isLoading: model.isLoading.value,
+    isStreaming: false,
+  }))
+}
+
+test('App ignores an older history completion after a newer search selects another message in the same session', async () => {
+  const model = createSessionModel()
+  await mountSession(model)
+  const handler = await searchHandler(model)
+  const selected = session('same-session')
+  const oldMessages = deferred<Message[]>()
+  const oldLoadStarted = deferred<void>()
+  let loads = 0
+  api.getMessages = async () => {
+    if (++loads === 1) { oldLoadStarted.resolve(); return oldMessages.promise }
+    return [message('older'), message('newer')] as Message[]
+  }
+  const older = handler.select(result(selected))
+  await oldLoadStarted.promise
+  await handler.select(result(selected, 'newer'))
+  expect(scrolled?.dataset.searchMessage).toBe('newer')
+  const newerFocus = active
+  oldMessages.resolve([message('older')] as Message[])
+  await older
+  expect(scrolled?.dataset.searchMessage).toBe('newer')
+  expect(active === newerFocus).toBe(true)
+  expect(handler.notice.value).toBe('')
+})
+
+test('App rechecks ownership after nextTick before revealing an older same-session result', async () => {
+  const model = createSessionModel()
+  await mountSession(model)
+  const tickEntered = deferred<void>()
+  const tickRelease = deferred<void>()
+  let ticks = 0
+  const handler = await searchHandler(model, { nextTick: async () => {
+    if (++ticks === 1) { tickEntered.resolve(); await tickRelease.promise }
+    await Vue.nextTick()
+  } })
+  const selected = session('same-session')
+  const older = handler.select(result(selected))
+  await tickEntered.promise
+  await handler.select(result(selected, 'newer'))
+  const newerFocus = active
+  tickRelease.resolve()
+  await older
+  expect(scrolled?.dataset.searchMessage).toBe('newer')
+  expect(active === newerFocus).toBe(true)
+  expect(handler.notice.value).toBe('')
+})
+
+test('ChatPanel cancels the delayed reveal while a newer same-session search is still loading', async () => {
+  const model = createSessionModel()
+  await mountSession(model)
+  const handler = await searchHandler(model)
+  const selected = session('same-session')
+  const older = handler.select(result(selected))
+  await handler.revealStarted
+  await settle()
+  const originalFocus = active
+  const newerMessages = deferred<Message[]>()
+  api.getMessages = async () => newerMessages.promise
+  const newer = handler.select(result(selected, 'newer'))
+  await older
+  expect(model.isLoading.value).toBe(true)
+  expect(scrolled?.dataset.searchMessage).toBeUndefined()
+  expect(active === originalFocus).toBe(true)
+  expect(handler.notice.value).toBe('')
+  newerMessages.resolve([message('older'), message('newer')] as Message[])
+  await newer
+  expect(scrolled?.dataset.searchMessage).toBe('newer')
+})
+
+test.each(['same-session', 'A-to-B-to-A', 'new-draft'])('ordinary %s navigation cancels a search during ChatPanel’s animation wait', async navigation => {
+  const model = createSessionModel()
+  await mountSession(model)
+  const handler = await searchHandler(model)
+  const selected = session('A')
+  const older = handler.select(result(selected))
+  await handler.revealStarted
+  await settle()
+  const originalFocus = active
+  if (navigation === 'new-draft') {
+    model.createSession('/project')
+  } else if (navigation === 'A-to-B-to-A') {
+    // Vue may batch away B, so a session-ID watcher alone cannot cancel this.
+    const toB = model.selectSession(session('B'))
+    const backToA = model.selectSession(selected)
+    await Promise.all([toB, backToA])
+  } else {
+    await model.selectSession(selected)
+  }
+  await older
+  expect(scrolled?.dataset.searchMessage).toBeUndefined()
+  expect(active === originalFocus).toBe(true)
+  expect(handler.notice.value).toBe('')
+})
+
+test('App does not publish a stale failed-reveal notice after ordinary same-session navigation', async () => {
+  const model = createSessionModel()
+  const failedReveal = deferred<boolean>()
+  const handler = await searchHandler(model, { revealMessage: () => failedReveal.promise })
+  const selected = session('same-session')
+  const older = handler.select(result(selected))
+  await handler.revealStarted
+  await model.selectSession(selected)
+  failedReveal.resolve(false)
+  await older
+  expect(handler.notice.value).toBe('')
+})
+
+test('App still reports an unavailable message when the search owns the view', async () => {
+  const model = createSessionModel()
+  await mountSession(model)
+  const handler = await searchHandler(model)
+  await handler.select(result(session('same-session'), 'deleted-message'))
+  expect(handler.notice.value).toBe('已打开会话，但匹配消息可能已更改或删除，未能定位')
+  expect(scrolled?.dataset.searchMessage).toBeUndefined()
 })
