@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { Pencil, Trash2, X, Check, File } from 'lucide-vue-next'
 import type { Message, MessagePart } from '../api/client'
 import { useUserProfile } from '../composables/useUserProfile'
+import { createMessageMutation, type MessageMutationDone } from '../composables/message-mutation'
 import { formatMessageTime } from '../utils/time-format'
 
 const { profile } = useUserProfile()
@@ -14,14 +15,23 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'delete-part': [messageId: string, partId: string]
-  'update-part': [messageId: string, partId: string, updates: { text?: string }]
+  'delete-part': [messageId: string, partId: string, done: MessageMutationDone]
+  'update-part': [messageId: string, partId: string, updates: { text?: string }, done: MessageMutationDone]
 }>()
 
 // 编辑状态
 const editingPartId = ref<string | null>(null)
 const editText = ref('')
 const deleteConfirmPartId = ref<string | null>(null)
+const mutation = createMessageMutation()
+const mutationState = mutation.state
+watch(() => props.message.info.id, () => {
+  mutation.reset()
+  editingPartId.value = null
+  deleteConfirmPartId.value = null
+  editText.value = ''
+})
+onUnmounted(mutation.reset)
 
 // 用户消息的第一个文本 part（纯附件消息没有，编辑/删除按钮据此隐藏）
 const firstTextPart = computed(() => props.message.parts.find(p => p.type === 'text'))
@@ -32,35 +42,41 @@ const sentTime = computed(() => {
 })
 
 function startEdit(part?: MessagePart) {
+  if (mutationState.pending) return
+  mutation.reset()
   if (!part || part.type !== 'text' || !part.text) return
   editingPartId.value = part.id
   editText.value = part.text
 }
 
 function cancelEdit() {
+  if (mutationState.pending) return
+  mutation.reset()
   editingPartId.value = null
   editText.value = ''
 }
 
 function confirmEdit(partId: string) {
-  if (editText.value.trim()) {
-    emit('update-part', props.message.info.id, partId, { text: editText.value.trim() })
-  }
-  cancelEdit()
+  if (!editText.value.trim()) return
+  const done = mutation.begin(cancelEdit)
+  if (done) emit('update-part', props.message.info.id, partId, { text: editText.value.trim() }, done)
 }
 
 function startDelete(part?: MessagePart) {
-  if (!part || part.type !== 'text') return
+  if (mutationState.pending || !part || part.type !== 'text') return
+  mutation.reset()
   deleteConfirmPartId.value = part.id
 }
 
 function cancelDelete() {
+  if (mutationState.pending) return
+  mutation.reset()
   deleteConfirmPartId.value = null
 }
 
 function confirmDelete(partId: string) {
-  emit('delete-part', props.message.info.id, partId)
-  cancelDelete()
+  const done = mutation.begin(cancelDelete)
+  if (done) emit('delete-part', props.message.info.id, partId, done)
 }
 
 // Configure marked
@@ -172,11 +188,12 @@ onUnmounted(() => {
             </div>
             <!-- Text -->
             <div v-else-if="item.part.type === 'text'" class="text-part" :class="{ editing: editingPartId === item.part.id }">
-              <div v-if="editingPartId === item.part.id" class="edit-mode">
-                <textarea v-model="editText" class="edit-textarea" rows="4" @keyup.escape="cancelEdit"></textarea>
+              <div v-if="editingPartId === item.part.id" class="edit-mode" :aria-busy="mutationState.pending">
+                <textarea v-model="editText" :disabled="mutationState.pending" class="edit-textarea" rows="4" @keyup.escape="cancelEdit"></textarea>
+                <p v-if="mutationState.error" class="mutation-error" role="alert">{{ mutationState.error }}</p>
                 <div class="edit-actions">
-                  <button class="btn btn-ghost btn-sm" @click="cancelEdit"><X :size="14" /> 取消</button>
-                  <button class="btn btn-primary btn-sm" @click="confirmEdit(item.part.id)" :disabled="!editText.trim()"><Check :size="14" /> 保存</button>
+                  <button class="btn btn-ghost btn-sm" :disabled="mutationState.pending" @click="cancelEdit"><X :size="14" /> 取消</button>
+                  <button class="btn btn-primary btn-sm" @click="confirmEdit(item.part.id)" :disabled="!editText.trim() || mutationState.pending"><Check :size="14" /> {{ mutationState.pending ? '保存中…' : '保存' }}</button>
                 </div>
               </div>
               <template v-else>
@@ -211,21 +228,22 @@ onUnmounted(() => {
   <!-- 删除确认对话框 - 使用 Teleport 移到 body 避免 transform 影响 -->
   <Teleport to="body">
     <div v-if="deleteConfirmPartId" class="dialog-overlay" @click="cancelDelete">
-      <div class="dialog" @click.stop>
+      <div class="dialog" role="alertdialog" aria-modal="true" aria-label="删除消息内容" :aria-busy="mutationState.pending" @click.stop>
         <div class="dialog-header">
           <span>删除消息内容</span>
-          <button class="action-btn" @click="cancelDelete">
+          <button class="action-btn" :disabled="mutationState.pending" @click="cancelDelete">
             <X :size="16" />
           </button>
         </div>
         <div class="dialog-body">
           <p class="dialog-message">确定要删除这部分内容吗？</p>
+          <p v-if="mutationState.error" class="mutation-error" role="alert">{{ mutationState.error }}</p>
           <p class="dialog-warning">此操作不可撤销。</p>
         </div>
         <div class="dialog-footer">
-          <button class="btn btn-ghost btn-sm" @click="cancelDelete">取消</button>
-          <button class="btn btn-danger btn-sm" @click="confirmDelete(deleteConfirmPartId!)">
-            <Trash2 :size="14" /> 删除
+          <button class="btn btn-ghost btn-sm" :disabled="mutationState.pending" @click="cancelDelete">取消</button>
+          <button class="btn btn-danger btn-sm" :disabled="mutationState.pending" @click="confirmDelete(deleteConfirmPartId!)">
+            <Trash2 :size="14" /> {{ mutationState.pending ? '删除中…' : '删除' }}
           </button>
         </div>
       </div>
@@ -234,6 +252,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.mutation-error { color: var(--error); font-size: 0.8125rem; }
 .message-row {
   display: flex;
   gap: 10px;

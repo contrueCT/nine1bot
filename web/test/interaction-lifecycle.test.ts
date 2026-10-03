@@ -17,8 +17,8 @@ async function component(name: string) {
     .replace('export default', 'return')
   return new Function('Vue', 'visiblePreferenceText', compiled)(Vue, visiblePreferenceText)
 }
-type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent?: Node }
-const node = (type: string, text = ''): Node => ({ type, text, props: {}, children: [] })
+type Node = { type: string; text: string; props: Record<string, any>; children: Node[]; parent?: Node; addEventListener: (event: string, handler: (...args: any[]) => void) => void }
+const node = (type: string, text = ''): Node => ({ type, text, props: {}, children: [], addEventListener() {} })
 const renderer = Vue.createRenderer<Node, Node>({
   createElement: type => node(type), createText: text => node('text', text), createComment: text => node('comment', text),
   setText: (node, text) => { node.text = text }, setElementText: (node, text) => { node.text = text; node.children = [] },
@@ -157,6 +157,25 @@ describe('parent-owned interaction cards', () => {
     expect(text(root)).not.toContain('已允许一次')
     expect(button(root, '允许一次').props.disabled).toBe(false)
   })
+  it('does not submit a custom answer during IME Enter confirmation', async () => {
+    const responses: string[][][] = []
+    const root = await mount('AgentQuestion', () => ({
+      request: { id: 'ime', sessionID: 'A', questions: [{ question: 'Choose', options: [{ label: 'yes' }] }] },
+      onAnswered(_id: string, answers: string[][]) { responses.push(answers) },
+    }))
+    button(root, 'yes').props.onClick()
+    await Vue.nextTick()
+    const input = descendants(root).find(node => node.type === 'input')!
+    let prevented = 0
+    const event = { key: 'Enter', isComposing: true, keyCode: 13, preventDefault() { prevented++ } }
+    input.props.onKeydown(event)
+    input.props.onKeydown({ ...event, isComposing: false, keyCode: 229 })
+    expect(responses).toHaveLength(0)
+    expect(prevented).toBe(0)
+    input.props.onKeydown({ ...event, isComposing: false })
+    expect(responses).toEqual([[['yes']]])
+    expect(prevented).toBe(1)
+  })
   it('resets question input when a component is reused for a different request', async () => {
     const request = Vue.ref({ id: 'q1', sessionID: 'A', questions: [{ question: 'Choose', options: [{ label: 'yes' }], custom: false }] })
     const root = await mount('AgentQuestion', () => ({ request: request.value }))
@@ -166,6 +185,32 @@ describe('parent-owned interaction cards', () => {
     request.value = { ...request.value, id: 'q2' }
     await Vue.nextTick()
     expect(button(root, '提交').props.disabled).toBe(true)
+  })
+  it('does not apply late message edits or deletes to a newer session', async () => {
+    const state = useSession()
+    const session = (id: string) => ({ id, title: id, directory: '/', time: { created: 1, updated: 1 } })
+    const message = (sessionID: string) => ({ info: { id: 'shared', sessionID, role: 'user' as const, time: { created: 1 } }, parts: [{ id: 'part', type: 'text' as const, text: 'original' }] })
+    state.currentSession.value = session('A')
+    state.messages.value = [message('A')]
+    const update = deferred()
+    api.updateMessagePart = async () => { await update.promise; return { id: 'part', type: 'text', text: 'edited' } }
+    const pendingUpdate = state.updateMessagePart('shared', 'part', { text: 'edited' })
+    state.currentSession.value = session('B')
+    state.messages.value = [message('B')]
+    update.resolve()
+    await pendingUpdate
+    expect(state.messages.value[0].parts[0].text).toBe('original')
+    const remove = deferred()
+    api.deleteMessagePart = async () => { await remove.promise; return true }
+    const pendingDelete = state.deleteMessagePart('shared', 'part')
+    state.currentSession.value = session('C')
+    state.messages.value = [message('C')]
+    remove.resolve()
+    await pendingDelete
+    expect(state.messages.value[0].parts).toHaveLength(1)
+    state.currentSession.value = null
+    await expect(state.updateMessagePart('shared', 'part', { text: 'x' })).rejects.toThrow('No active session')
+    await expect(state.deleteMessagePart('shared', 'part')).rejects.toThrow('No active session')
   })
   it('sends one API request per interaction, allows retry after failure, and preserves another session on late completion', async () => {
     const state = useSession()
