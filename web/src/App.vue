@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { MessageMutationDone } from './composables/message-mutation'
-import type { MessageAttempt } from './api/client'
-import { ref, computed, onMounted, onUnmounted, watch, defineAsyncComponent } from 'vue'
+import type { MessageAttempt, SessionSearchResult } from './api/client'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick, defineAsyncComponent } from 'vue'
 import { useSession } from './composables/useSession'
 import { useSidebarLayout } from './composables/useSidebarLayout'
 import { useFiles } from './composables/useFiles'
@@ -862,16 +862,22 @@ async function handleUpdateProject(projectId: string, updates: { name?: string; 
   }
 }
 
-// Handle search result selection
-function handleSearchSelect(sessionId: string) {
+// Search carries the owning session, including results outside the loaded recents.
+const searchChatPanel = ref<InstanceType<typeof ChatPanel>>()
+const searchNavigationNotice = ref('')
+watch(() => currentSession.value?.id, () => { searchNavigationNotice.value = '' })
+async function handleSearchSelect(result: SessionSearchResult) {
   sidebarMobileOpen.value = false
   showSearch.value = false
   showProjectsPage.value = false
   showMetricsPage.value = false
   showAutomationsPage.value = false
-  const session = searchRecentSessions.value.find(s => s.id === sessionId) || sessions.value.find(s => s.id === sessionId)
-  if (session) {
-    selectSession(session)
+  searchNavigationNotice.value = ''
+  await selectSession(result.session)
+  await nextTick()
+  if (currentSession.value?.id !== result.session.id || historyError.value || !result.messageID) return
+  if (!await searchChatPanel.value?.revealMessage(result.messageID)) {
+    if (currentSession.value?.id === result.session.id) searchNavigationNotice.value = '已打开会话，但匹配消息可能已更改或删除，未能定位'
   }
 }
 
@@ -1060,6 +1066,7 @@ function handlePromptSelect(prompt: string) {
       </div>
 
       <ChatPanel
+        ref="searchChatPanel"
               :loadError="historyError"
               @retry="retryHistory"
         :messages="messages"
@@ -1246,6 +1253,7 @@ function handlePromptSelect(prompt: string) {
         <template v-else>
           <div class="conversation-content" :class="{ 'empty-center-wrapper': isEmptyState }">
             <ChatPanel
+        ref="searchChatPanel"
               :loadError="historyError"
               @retry="retryHistory"
               :messages="messages"
@@ -1341,10 +1349,16 @@ function handlePromptSelect(prompt: string) {
     <!-- Right Panel (Terminal + Preview) -->
     <RightPanel />
 
+    <div v-if="searchNavigationNotice" class="search-navigation-notice" role="status">
+      {{ searchNavigationNotice }}
+      <button aria-label="关闭定位提示" @click="searchNavigationNotice = ''">关闭</button>
+    </div>
+
     <!-- Search Overlay -->
     <SearchOverlay
       v-if="showSearch"
       :recentSessions="searchRecentSessions"
+      :directory="currentDirectory"
       @close="showSearch = false"
       @select="handleSearchSelect"
     />
@@ -1693,4 +1707,15 @@ function handlePromptSelect(prompt: string) {
   margin: 0 auto;
 }
 
+.search-navigation-notice {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-overlay);
+  padding: 12px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
 </style>

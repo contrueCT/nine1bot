@@ -9,6 +9,7 @@ import { formatDuration, formatMessageTime } from '../utils/time-format'
 import { buildAgentTimeline } from '../utils/agent-timeline'
 
 const props = defineProps<{
+  searchMessageId?: string
   messages: Message[]
   isStreaming: boolean
 }>()
@@ -132,6 +133,7 @@ async function openPreview(meta: PreviewMeta, idx: number) {
     <AgentSteps
       v-if="isStreaming || processItems.length > 0"
       :items="processItems"
+      :searchMessageId="searchMessageId"
       :isStreaming="isStreaming"
       :duration="totalDuration"
     />
@@ -143,6 +145,7 @@ async function openPreview(meta: PreviewMeta, idx: number) {
         <MarkdownText
           v-if="item.kind === 'text'"
           :text="item.part.text || ''"
+          :data-search-message="item.part.messageID" tabindex="-1"
           :streaming="isStreaming && index === replyItems.length - 1"
         />
         <div v-else class="file-attachment">

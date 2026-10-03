@@ -6,6 +6,16 @@ import {
 import type { RequestPagePayload } from './page-context'
 
 const BASE_URL = ''  // 使用相对路径，由 vite proxy 或同源处理
+export interface SessionSearchResult {
+  session: Session
+  messageID?: string
+  snippet: string
+}
+export interface SessionSearchResponse {
+  results: SessionSearchResult[]
+  hasMore: boolean
+}
+
 export type ClientSurface = 'web' | 'browser-extension'
 
 let clientSurface: ClientSurface = 'web'
@@ -1135,6 +1145,21 @@ export const api = {
     return res.json()
   },
 
+  async searchSessions(query: string, directory: string): Promise<SessionSearchResponse> {
+    const params = new URLSearchParams({ q: query, limit: '50', directory })
+    if (clientSurface === 'browser-extension') params.set('clientSource', 'browser-extension')
+    const response = await requireOk(await fetchWithTimeout(`${BASE_URL}/session/search?${params}`, {
+      headers: { 'x-opencode-directory': encodeURIComponent(directory) },
+    }, DEFAULT_TIMEOUT, false))
+    const data = await response.json()
+    if (!Array.isArray(data?.results) || typeof data.hasMore !== 'boolean') {
+      throw new Error('搜索响应格式无效')
+    }
+    return { ...data, results: data.results.map((result: SessionSearchResult) => ({
+      ...result, session: normalizeSession(result.session),
+    })) }
+  },
+
   // 获取会话列表
   async getSessions(directory?: string): Promise<Session[]> {
     const params = new URLSearchParams()
@@ -1479,19 +1504,6 @@ export const api = {
     }
     const data = await res.json()
     return Array.isArray(data) ? data : (data.data || [])
-  },
-
-  // 搜索会话
-  async searchSessions(query: string, limit: number = 20): Promise<Session[]> {
-    const params = new URLSearchParams({
-      search: query,
-      roots: 'true',
-      limit: String(limit)
-    })
-    const res = await fetchWithTimeout(`${BASE_URL}/session?${params}`)
-    const data = await res.json()
-    const sessions = Array.isArray(data) ? data : (data.data || [])
-    return sessions.map((s: Session) => normalizeSession(s))
   },
 
   // 浏览目录（用于目录选择器）

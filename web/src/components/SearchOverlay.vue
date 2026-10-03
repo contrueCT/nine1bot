@@ -1,176 +1,79 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, watch, nextTick, toRef } from 'vue'
 import { Search, X, MessageSquare, Clock } from 'lucide-vue-next'
-import type { Session } from '../api/client'
+import type { Session, SessionSearchResult } from '../api/client'
 import { highlightMatch } from '../utils/highlight'
+import { useModalFocus } from '../composables/useModalFocus'
+import { useSessionSearch } from '../composables/useSessionSearch'
 
-const props = defineProps<{
-  recentSessions?: Session[]
-}>()
-
-const emit = defineEmits<{
-  close: []
-  select: [sessionId: string]
-}>()
-
+const props = defineProps<{ recentSessions?: Session[]; directory: string }>()
+const emit = defineEmits<{ close: []; select: [result: SessionSearchResult] }>()
 const query = ref('')
 const selectedIndex = ref(0)
+const modalRef = ref<HTMLElement>()
 const inputRef = ref<HTMLInputElement>()
 const resultsRef = ref<HTMLElement>()
-
-// 键盘导航后确保选中项滚入可视区域
-function scrollSelectedIntoView() {
-  void nextTick(() => {
-    resultsRef.value
-      ?.querySelector('.search-result-item.selected')
-      ?.scrollIntoView({ block: 'nearest' })
-  })
-}
-
-// Display list: recent sessions when no query, search results when query exists
-const displayList = computed(() => {
-  const source = props.recentSessions || []
-  const term = query.value.trim().toLowerCase()
-  if (!term) {
-    return source
-  }
-  return source.filter((session) => getSessionTitle(session).toLowerCase().includes(term))
-})
-
-const displayLabel = computed(() => {
-  return query.value.trim() ? `${displayList.value.length} 个结果` : '最近会话'
-})
-
-watch([query, () => props.recentSessions], () => {
-  selectedIndex.value = 0
-})
-
+const { results, loading, error, hasMore, retry } = useSessionSearch(query, toRef(props, 'directory'))
+useModalFocus(modalRef, () => emit('close'))
+const displayList = computed<SessionSearchResult[]>(() => query.value.trim() ? results.value :
+  (props.recentSessions || []).map(session => ({ session, snippet: '' })))
+const displayLabel = computed(() => !query.value.trim() ? '最近会话（所有项目）' :
+  loading.value ? '正在搜索当前项目…' : error.value ? '搜索未完成' :
+  `${displayList.value.length} 个匹配${hasMore.value ? '（仅显示前 50 个，请缩小关键词范围）' : ''}`)
+watch(displayList, () => { selectedIndex.value = 0 })
 function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') {
-    emit('close')
-    return
-  }
-
-  if (e.key === 'ArrowDown') {
-    e.preventDefault()
-    selectedIndex.value = Math.min(selectedIndex.value + 1, displayList.value.length - 1)
-    scrollSelectedIntoView()
-    return
-  }
-
-  if (e.key === 'ArrowUp') {
-    e.preventDefault()
-    selectedIndex.value = Math.max(selectedIndex.value - 1, 0)
-    scrollSelectedIntoView()
-    return
-  }
-
+  if (e.isComposing || e.keyCode === 229) return
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return
+  // Keep close/retry buttons' native keyboard activation intact.
+  if (e.target !== inputRef.value) return
+  e.preventDefault()
   if (e.key === 'Enter') {
-    if (e.isComposing || e.keyCode === 229) return
-    e.preventDefault()
-    const session = displayList.value[selectedIndex.value]
-    if (session) {
-      emit('select', session.id)
-    }
+    const result = displayList.value[selectedIndex.value]
+    if (result) emit('select', result)
     return
   }
+  selectedIndex.value = Math.max(0, Math.min(selectedIndex.value + (e.key === 'ArrowDown' ? 1 : -1), displayList.value.length - 1))
+  void nextTick(() => resultsRef.value?.querySelector('.selected')?.scrollIntoView({ block: 'nearest' }))
 }
-
-function selectSession(session: Session) {
-  emit('select', session.id)
-}
-
-function handleOverlayClick(e: MouseEvent) {
-  if (e.target === e.currentTarget) {
-    emit('close')
-  }
-}
-
-function formatTime(timestamp: number): string {
-  const now = Date.now()
-  const diff = now - timestamp
-  const minutes = Math.floor(diff / 60000)
-  const hours = Math.floor(diff / 3600000)
-  const days = Math.floor(diff / 86400000)
-
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes} 分钟前`
-  if (hours < 24) return `${hours} 小时前`
-  if (days < 7) return `${days} 天前`
-  return new Date(timestamp).toLocaleDateString()
-}
-
-function getSessionTitle(session: Session): string {
-  return session.title || `会话 ${session.id.slice(0, 6)}`
-}
-
-onMounted(async () => {
-  await nextTick()
-  inputRef.value?.focus()
-  document.addEventListener('keydown', handleKeydown)
-})
-
-onUnmounted(() => {
-  document.removeEventListener('keydown', handleKeydown)
-})
+function title(session: Session) { return session.title || `会话 ${session.id.slice(0, 6)}` }
+function formatTime(timestamp: number) { return new Date(timestamp).toLocaleDateString() }
+onMounted(async () => { await nextTick(); inputRef.value?.focus() })
 </script>
 
 <template>
-  <div class="search-overlay" @click="handleOverlayClick">
-    <div class="search-modal">
-      <!-- Search Input -->
+  <div class="search-overlay" @click.self="emit('close')">
+    <div ref="modalRef" class="search-modal" role="dialog" aria-modal="true" aria-label="搜索会话" tabindex="-1" @keydown="handleKeydown">
       <div class="search-input-wrapper">
         <Search :size="18" class="search-input-icon" />
-        <input
-          ref="inputRef"
-          v-model="query"
-          type="text"
-          class="search-input"
-          placeholder="搜索会话..."
-          autocomplete="off"
-        />
-        <button class="search-close-btn" @click="emit('close')">
-          <X :size="16" />
-        </button>
+        <input ref="inputRef" v-model="query" type="text" class="search-input"
+          placeholder="搜索当前项目的标题和消息…" aria-label="搜索当前项目的标题和消息"
+          role="combobox" aria-autocomplete="list" aria-controls="session-search-results" :aria-expanded="displayList.length > 0"
+          :aria-activedescendant="displayList.length ? `session-search-result-${selectedIndex}` : undefined" autocomplete="off" maxlength="500" />
+        <button class="search-close-btn" aria-label="关闭搜索" @click="emit('close')"><X :size="16" /></button>
       </div>
-
-      <!-- Results -->
-      <div class="search-results">
-        <div class="search-results-label">{{ displayLabel }}</div>
-        <div class="search-results-list" ref="resultsRef">
-          <button
-            v-for="(session, index) in displayList"
-            :key="session.id"
-            class="search-result-item"
-            :class="{ selected: index === selectedIndex }"
-            @click="selectSession(session)"
-            @mouseenter="selectedIndex = index"
-          >
+      <p class="search-scope">输入关键词搜索当前项目全部历史会话的标题和用户、助手正文；不搜索工具输出、附件和思考过程</p>
+      <div class="search-results" :aria-busy="loading">
+        <div class="search-results-label" role="status" aria-live="polite">{{ displayLabel }}</div>
+        <div v-if="error" class="search-empty" role="alert">{{ error }} <button @click="retry">重试</button></div>
+        <div id="session-search-results" ref="resultsRef" class="search-results-list" role="listbox" aria-label="搜索结果">
+          <button v-for="(result, index) in displayList" :id="`session-search-result-${index}`"
+            :key="`${result.session.id}:${result.messageID || 'title'}`" class="search-result-item" role="option"
+            :aria-selected="index === selectedIndex" :class="{ selected: index === selectedIndex }"
+            @click="emit('select', result)" @mouseenter="selectedIndex = index" @focus="selectedIndex = index">
             <MessageSquare :size="14" class="result-icon" />
-            <span
-              class="result-title"
-              v-html="highlightMatch(getSessionTitle(session), query)"
-            ></span>
-            <span class="result-time">
-              <Clock :size="12" />
-              {{ formatTime(session.time.updated) }}
+            <span class="result-title">
+              <span v-html="highlightMatch(title(result.session), query.trim())"></span>
+              <span v-if="result.snippet" class="result-snippet" v-html="highlightMatch(result.snippet, query.trim())"></span>
+              <span v-if="query.trim()" class="result-kind">{{ result.messageID ? '消息匹配 · 点击定位' : '标题匹配' }}</span>
             </span>
+            <span class="result-time"><Clock :size="12" />{{ formatTime(result.session.time.updated) }}</span>
           </button>
-
-          <div v-if="displayList.length === 0" class="search-empty">
-            {{ query.trim() ? '未找到匹配的会话' : '暂无最近会话' }}
-          </div>
+        </div>
+        <div v-if="!loading && !error && !displayList.length" class="search-empty">
+          {{ query.trim() ? '当前项目中没有匹配的标题或消息' : '暂无最近会话' }}
         </div>
       </div>
-
-      <!-- Footer hint -->
-      <div class="search-footer">
-        <span class="search-hint">
-          <kbd>↑</kbd><kbd>↓</kbd> 切换
-          <kbd>↵</kbd> 选择
-          <kbd>esc</kbd> 关闭
-        </span>
-      </div>
+      <div class="search-footer"><span class="search-hint"><kbd>↑</kbd><kbd>↓</kbd> 切换 <kbd>↵</kbd> 选择 <kbd>esc</kbd> 关闭</span></div>
     </div>
   </div>
 </template>
@@ -328,6 +231,9 @@ onUnmounted(() => {
   color: var(--text-muted);
 }
 
+.search-scope { margin: 0; padding: 8px 16px; color: var(--text-muted); font-size: var(--text-xs); }
+.result-snippet, .result-kind { display: block; white-space: normal; overflow-wrap: anywhere; margin-top: 4px; font-size: var(--text-xs); color: var(--text-muted); }
+.result-snippet { max-height: 4.5em; overflow: hidden; }
 .result-title {
   flex: 1;
   overflow: hidden;
