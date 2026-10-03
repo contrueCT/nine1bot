@@ -29,7 +29,6 @@ jobs:
     timeout-minutes: 15
     env:
       RUN_REAL_CHROME: '1'
-      REAL_CHROME_ARTIFACTS: ${{ runner.temp }}/nine1bot-real-chrome-artifacts
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,6 +50,7 @@ jobs:
       - name: Run real bot CDP and installed-extension regression
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          REAL_CHROME_ARTIFACTS: ${{ runner.temp }}/nine1bot-real-chrome-artifacts
         run: |
           set -o pipefail
           mkdir -p "$REAL_CHROME_ARTIFACTS"
