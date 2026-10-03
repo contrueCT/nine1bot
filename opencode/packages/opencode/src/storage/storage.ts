@@ -59,11 +59,11 @@ export namespace Storage {
     return searchIndex
   }
 
-  function searchChange(key: string[], phase: "begin" | "finish", value?: unknown) {
+  function searchChange(key: string[], phase: "begin" | "finish", value?: unknown, token?: string) {
     if (!SessionSearch.relevant(key)) return
     try {
-      if (phase === "begin") index().begin(key)
-      else index().finish(key, value)
+      if (phase === "begin") return index().begin(key)
+      else index().finish(key, value, token)
     } catch (error) {
       try {
         invalidateSearch(error)
@@ -249,11 +249,11 @@ export namespace Storage {
     const target = path.join(dir, ...key) + ".json"
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
-      searchChange(key, "begin")
+      const searchWrite = searchChange(key, "begin")
       await fs.unlink(target).catch((error) => {
         if (error.code !== "ENOENT") throw error
       })
-      searchChange(key, "finish")
+      searchChange(key, "finish", undefined, searchWrite)
     })
   }
 
@@ -269,9 +269,9 @@ export namespace Storage {
         if (e instanceof SyntaxError) {
           log.warn("corrupted JSON file", { path: target, retained: Boolean(options.preserveCorrupted) })
           if (!options.preserveCorrupted) {
-            searchChange(key, "begin")
+            const searchWrite = searchChange(key, "begin")
             await fs.unlink(target).catch(() => {})
-            searchChange(key, "finish")
+            searchChange(key, "finish", undefined, searchWrite)
           }
           throw new CorruptedError({ message: `Corrupted JSON file: ${target}` })
         }
@@ -291,17 +291,17 @@ export namespace Storage {
       } catch (e) {
         if (e instanceof SyntaxError) {
           log.warn("corrupted JSON file, removing", { path: target })
-          searchChange(key, "begin")
+          const searchWrite = searchChange(key, "begin")
           await fs.unlink(target).catch(() => {})
-          searchChange(key, "finish")
+          searchChange(key, "finish", undefined, searchWrite)
           throw new CorruptedError({ message: `Corrupted JSON file: ${target}` })
         }
         throw e
       }
       fn(content)
-      searchChange(key, "begin")
+      const searchWrite = searchChange(key, "begin")
       await Bun.write(target, JSON.stringify(content, null, 2))
-      searchChange(key, "finish", content)
+      searchChange(key, "finish", content, searchWrite)
       return content as T
     })
   }
@@ -311,9 +311,9 @@ export namespace Storage {
     const target = path.join(dir, ...key) + ".json"
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
-      searchChange(key, "begin")
+      const searchWrite = searchChange(key, "begin")
       await Bun.write(target, JSON.stringify(content, null, 2))
-      searchChange(key, "finish", content)
+      searchChange(key, "finish", content, searchWrite)
     })
   }
 
@@ -327,7 +327,7 @@ export namespace Storage {
       const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
       const bytes = Buffer.from(JSON.stringify(content, null, 2))
       try {
-        searchChange(key, "begin")
+        const searchWrite = searchChange(key, "begin")
         const written = await Bun.write(temporary, bytes)
         if (written !== bytes.length) throw new Error("Incomplete atomic storage write")
         const file = await fs.open(temporary, "r+")
@@ -337,7 +337,7 @@ export namespace Storage {
           await file.close()
         }
         await fs.rename(temporary, target)
-        searchChange(key, "finish", content)
+        searchChange(key, "finish", content, searchWrite)
       } finally {
         await fs.unlink(temporary).catch(() => {})
       }

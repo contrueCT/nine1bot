@@ -192,6 +192,11 @@ describe("session full-text index", () => {
     expect(f.reads()).toBe(reads)
     f.index.begin(partKey)
     f.records.set(JSON.stringify(partKey), { ...part, text: "Recovered text" })
+    // Simulate the journal owner having exited, rather than a live same-process writer.
+    const { Database } = await import("bun:sqlite")
+    const journal = new Database(filename)
+    journal.query("UPDATE writers SET pid = 2147483647").run()
+    journal.close()
     f.index.close()
     indexes.splice(indexes.indexOf(f.index), 1)
     const reopened = new SessionSearch.Index(filename, f.source)
@@ -227,11 +232,13 @@ test("purges derived text when a message or session is removed", async () => {
   const f = fixture(filename)
   f.session("session-1")
   f.message("session-1", "msg-1", "private body")
+  expect((await f.search("private body")).results).toHaveLength(1)
   f.write(["message", "session-1", "msg-1"], undefined)
   const { Database } = await import("bun:sqlite")
   const inspect = new Database(filename)
   expect(inspect.query("SELECT * FROM documents WHERE message_id = 'msg-1'").all()).toEqual([])
   f.message("session-1", "msg-2", "other private body")
+  expect((await f.search("other private body")).results).toHaveLength(1)
   f.write(["session", "project", "session-1"], undefined)
   expect(inspect.query("SELECT * FROM documents WHERE session_id = 'session-1'").all()).toEqual([])
   expect(inspect.query("SELECT * FROM messages WHERE session_id = 'session-1'").all()).toEqual([])
@@ -248,12 +255,82 @@ test("a second connection cannot backfill stale data over another writer", async
   const second = new SessionSearch.Index(filename, f.source)
   indexes.push(second)
   const read = f.source.read
+  let once = true
   f.source.read = async (input) => {
     const value = await read(input)
-    second.begin(key)
-    second.finish(key, { id: "session-1", title: "after", time: { updated: 1 } })
+    if (once) {
+      once = false
+      second.begin(key)
+      const canonical = { id: "session-1", title: "after", time: { updated: 1 } }
+      f.records.set(JSON.stringify(key), canonical)
+      second.finish(key, canonical)
+    }
     return value
   }
   expect((await f.search("after")).results).toHaveLength(1)
+  expect((await f.search("before")).results).toEqual([])
+})
+
+test("ordinary metadata updates only reread their dirty keys", async () => {
+  const f = fixture()
+  f.session("session-1")
+  for (let i = 0; i < 30; i++) f.message("session-1", `msg-${i}`, `needle ${i}`)
+  await f.search("needle")
+  const before = f.reads()
+  f.session("session-1", "renamed")
+  await f.search("needle")
+  expect(f.reads() - before).toBe(1)
+  const metadata = f.reads()
+  f.write(["message", "session-1", "msg-1"], {
+    id: "msg-1",
+    sessionID: "session-1",
+    role: "user",
+    time: { completed: 2 },
+  })
+  await f.search("needle")
+  expect(f.reads() - metadata).toBe(1)
+  const stable = f.reads()
+  await f.search("needle")
+  expect(f.reads()).toBe(stable)
+})
+
+test("canonical JSON wins when an earlier-begun writer actually writes last", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "search-write-order-"))
+  directories.push(dir)
+  const filename = path.join(dir, "search.sqlite")
+  const f = fixture(filename)
+  f.session("session-1", "initial")
+  await f.search("initial")
+  const second = new SessionSearch.Index(filename, f.source)
+  indexes.push(second)
+  const key = ["session", "project", "session-1"]
+  const a = f.index.begin(key)
+  const b = second.begin(key)
+  const beta = { id: "session-1", title: "beta", time: { updated: 1 } }
+  f.records.set(JSON.stringify(key), beta)
+  second.finish(key, beta, b)
+  const alpha = { ...beta, title: "alpha actually wrote last" }
+  f.records.set(JSON.stringify(key), alpha)
+  f.index.finish(key, alpha, a)
+  expect((await f.search("alpha")).results).toHaveLength(1)
+  expect((await f.search("beta")).results).toEqual([])
+})
+
+test("a query during an unfinished write cannot consume its crash-recovery marker", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "search-live-journal-"))
+  directories.push(dir)
+  const filename = path.join(dir, "search.sqlite")
+  const f = fixture(filename)
+  f.session("session-1", "before")
+  await f.search("before")
+  const key = ["session", "project", "session-1"]
+  f.index.begin(key)
+  expect((await f.search("before")).results).toHaveLength(1)
+  f.records.set(JSON.stringify(key), { id: "session-1", title: "after crash", time: { updated: 1 } })
+  const { Database } = await import("bun:sqlite")
+  const journal = new Database(filename)
+  journal.query("UPDATE writers SET pid = 2147483647").run()
+  journal.close()
+  expect((await f.search("after crash")).results).toHaveLength(1)
   expect((await f.search("before")).results).toEqual([])
 })

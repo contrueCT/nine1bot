@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { Database } from "bun:sqlite"
 import type { Session } from "../session"
 
@@ -29,6 +30,7 @@ export namespace SessionSearch {
     private db: Database
     private backfills = new Map<string, Promise<void>>()
     private recovering?: Promise<void>
+    private writers = new Map<string, string[]>()
 
     constructor(
       filename: string,
@@ -65,6 +67,8 @@ export namespace SessionSearch {
         END;
         CREATE TABLE IF NOT EXISTS ready (project_id TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS pending (key TEXT PRIMARY KEY, pid INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS writers (id TEXT PRIMARY KEY, key TEXT NOT NULL, pid INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS writer_key ON writers(key);
         CREATE TABLE IF NOT EXISTS versions (key TEXT PRIMARY KEY, revision INTEGER NOT NULL);
       `)
       } catch (error) {
@@ -81,22 +85,61 @@ export namespace SessionSearch {
     begin(key: string[]) {
       if (!relevant(key)) return
       const serialized = JSON.stringify(key)
+      const token = randomUUID()
       this.db.transaction(() => {
-        this.db
-          .query("INSERT INTO versions VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET revision = revision + 1")
-          .run(serialized)
-        this.db
-          .query("INSERT INTO pending VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET pid = excluded.pid")
-          .run(serialized, process.pid)
+        this.dirty(serialized)
+        this.db.query("INSERT INTO writers VALUES (?, ?, ?)").run(token, serialized, process.pid)
+      })()
+      const tokens = this.writers.get(serialized) ?? []
+      tokens.push(token)
+      this.writers.set(serialized, tokens)
+      return token
+    }
+
+    private dirty(serialized: string) {
+      this.db
+        .query("INSERT INTO versions VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET revision = revision + 1")
+        .run(serialized)
+      this.db
+        .query("INSERT INTO pending VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET pid = excluded.pid")
+        .run(serialized, process.pid)
+    }
+
+    finish(key: string[], value?: unknown, token?: string) {
+      if (!relevant(key)) return
+      const serialized = JSON.stringify(key)
+      const tokens = this.writers.get(serialized) ?? []
+      const completed = token ?? tokens[0]
+      const remaining = tokens.filter((value) => value !== completed)
+      if (remaining.length) this.writers.set(serialized, remaining)
+      else this.writers.delete(serialized)
+      // Completion order is not JSON write order. Never publish the caller's snapshot.
+      // Fence readers again, including when begin() belonged to a replaced cache.
+      this.db.transaction(() => {
+        this.dirty(serialized)
+        if (completed) this.db.query("DELETE FROM writers WHERE id = ? AND key = ?").run(completed, serialized)
+        // Eagerly purge deleted text, but retain the dirty marker: a later writer may
+        // already have recreated the source, which canonical reconciliation restores.
+        if (value === undefined) this.apply(key, undefined)
       })()
     }
 
-    finish(key: string[], value?: unknown) {
-      if (!relevant(key)) return
-      this.db.transaction(() => {
-        this.apply(key, value)
-        this.db.query("DELETE FROM pending WHERE key = ?").run(JSON.stringify(key))
-      })()
+    private hasLiveWriter(serialized: string) {
+      const writers = this.db
+        .query<{ id: string; pid: number }, [string]>("SELECT id, pid FROM writers WHERE key = ?")
+        .all(serialized)
+      let live = false
+      for (const writer of writers) {
+        try {
+          process.kill(writer.pid, 0)
+          live = true
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ESRCH")
+            this.db.query("DELETE FROM writers WHERE id = ?").run(writer.id)
+          else live = true
+        }
+      }
+      return live
     }
 
     private apply(key: string[], value?: unknown) {
@@ -202,36 +245,52 @@ export namespace SessionSearch {
       )
     }
 
-    private otherWriter(key: string) {
-      const row = this.db.query<{ pid: number }, [string]>("SELECT pid FROM pending WHERE key = ?").get(key)
-      if (!row || row.pid === process.pid) return false
-      try {
-        process.kill(row.pid, 0)
-        return true
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code !== "ESRCH"
-      }
-    }
-
-    private async load(key: string[]) {
+    private async load(key: string[], refreshChildren = false) {
       const serialized = JSON.stringify(key)
-      if (this.otherWriter(serialized)) return
-      const revision = this.version(serialized)
-      const value = await this.source.read(key)
-      this.db.transaction(() => {
-        // Persistent revisions also protect against a different server process updating shared storage.
-        if (this.version(serialized) !== revision || this.otherWriter(serialized)) return
-        this.apply(key, value)
-        this.db.query("DELETE FROM pending WHERE key = ?").run(serialized)
-      })()
+      for (;;) {
+        const revision = this.version(serialized)
+        const value = await this.source.read(key)
+        const applied = this.db.transaction(() => {
+          // A begin OR finish after our read invalidates this snapshot. Retrying
+          // canonical JSON also handles late finish payloads and cache replacement.
+          if (this.version(serialized) !== revision) return undefined
+          const existed =
+            key[0] === "session"
+              ? this.db.query("SELECT 1 FROM sessions WHERE project_id = ? AND id = ?").get(key[1], key[2])
+              : key[0] === "message"
+                ? this.db.query("SELECT 1 FROM messages WHERE session_id = ? AND id = ?").get(key[1], key[2])
+                : true
+          this.apply(key, value)
+          // Keep the journal while any writer is still active. A reader may run
+          // between that writer's begin and actual JSON write, followed by a crash.
+          if (!this.hasLiveWriter(serialized)) this.db.query("DELETE FROM pending WHERE key = ?").run(serialized)
+          return { children: refreshChildren || !existed }
+        })()
+        if (!applied) continue
+        // A parent first seen during an active write must not permanently lose
+        // already existing descendants merely because they were visited too early.
+        if (applied.children && key[0] !== "part") {
+          const prefix = key[0] === "session" ? ["message", key[2]] : ["part", key[2]]
+          for (const child of await this.source.list(prefix)) {
+            if (relevant(child)) await this.load(child, true)
+          }
+        }
+        return
+      }
     }
 
     private async recover() {
       if (this.recovering) return this.recovering
       this.recovering = (async () => {
-        const pending = this.db.query<{ key: string }, []>("SELECT key FROM pending").all()
-        // load() leaves a live cross-process writer alone until its JSON write has finished.
-        for (const row of pending) await this.load(JSON.parse(row.key))
+        const pending = this.db
+          .query<{ key: string }, []>(
+            `SELECT key FROM pending
+          ORDER BY CASE json_extract(key, '$[0]') WHEN 'session' THEN 0 WHEN 'message' THEN 1 ELSE 2 END`,
+          )
+          .all()
+        for (const row of pending) {
+          if (this.db.query("SELECT 1 FROM pending WHERE key = ?").get(row.key)) await this.load(JSON.parse(row.key))
+        }
       })().finally(() => {
         this.recovering = undefined
       })
@@ -245,14 +304,7 @@ export namespace SessionSearch {
       const backfill = (async () => {
         for (const session of await this.source.list(["session", projectID])) {
           if (!relevant(session)) continue
-          await this.load(session)
-          for (const message of await this.source.list(["message", session[2]])) {
-            if (!relevant(message)) continue
-            await this.load(message)
-            for (const part of await this.source.list(["part", message[2]])) {
-              if (relevant(part)) await this.load(part)
-            }
-          }
+          await this.load(session, true)
         }
         this.db.query("INSERT OR IGNORE INTO ready VALUES (?)").run(projectID)
       })().finally(() => {
@@ -268,6 +320,7 @@ export namespace SessionSearch {
       const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 50)))
       await this.recover()
       await this.ensureProject(input.projectID)
+      await this.recover()
       // Trigrams retain punctuation and CJK. One/two-character searches use a literal substring
       // scan of the local index; they never deserialize the conversation history per keystroke.
       const trigram = Array.from(q).length >= 3 && !q.includes("\0")

@@ -53,3 +53,28 @@ describe("session search cache recovery", () => {
     expect((await search()).results[0].session.title).toBe("updated needle")
   })
 })
+
+for (const scenario of ["backfill-live-writer", "writer-finishes-late", "cache-replacement-storage"]) {
+  test(`canonical reconciliation across processes: ${scenario}`, async () => {
+    const root = await fs.mkdtemp(path.join((await import("node:os")).tmpdir(), "search-race-"))
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures", `${scenario}.ts`)], {
+      cwd: path.resolve(import.meta.dir, "../.."),
+      env: { ...process.env, SEARCH_RACE_DIR: root },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 15000)
+    try {
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      expect({ code, errors: code === 0 ? "" : stdout + stderr }).toEqual({ code: 0, errors: "" })
+    } finally {
+      clearTimeout(timer)
+      child.kill()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  }, 20000)
+}
