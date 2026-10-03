@@ -1,14 +1,28 @@
 import { describe, expect, test } from 'bun:test'
-import { chromeArguments, eventually, parseDebuggingPort, within } from './harness'
+import { assertChromeForTestingVersion, chromeArguments, eventually, parseDebuggingPort, within } from './harness'
 
 describe('real-Chrome harness unit checks (synthetic; do not launch Chrome)', () => {
+  test('requires the actual Chrome for Testing brand, not a branded Chrome channel or CDP version', () => {
+    expect(() => assertChromeForTestingVersion('Google Chrome for Testing 154.0.8037.97 \n')).not.toThrow()
+    for (const invalid of [
+      'Google Chrome 154.0.8037.97 \n',
+      'Google Chrome for Testing',
+      'Chromium 154.0.8037.97',
+      'Chrome/154.0.8037.97',
+      'HeadlessChrome/154.0.8037.97',
+      'Chrome Headless Shell 154.0.8037.97',
+      '',
+    ]) {
+      expect(() => assertChromeForTestingVersion(invalid)).toThrow('Expected the full Chrome for Testing binary')
+    }
+  })
   test('launch arguments use isolated profiles without disabling browser security', () => {
     const args = chromeArguments('/tmp/disposable profile', '/tmp/built extension')
     expect(args).toContain('--user-data-dir=/tmp/disposable profile')
     expect(args).toContain('--remote-debugging-port=0')
     expect(args).toContain('--remote-debugging-address=127.0.0.1')
     expect(args).toContain('--load-extension=/tmp/built extension')
-    expect(args.some(arg => /no-sandbox|disable-.*security|ignore-certificate|disable-extensions|disable-site-isolation/.test(arg))).toBe(false)
+    expect(args.some(arg => /no-sandbox|disable-.*security|ignore-certificate|disable-extensions|disable-site-isolation|enable-unsafe/.test(arg))).toBe(false)
     expect(chromeArguments('/tmp/bot').some(arg => arg.startsWith('--load-extension'))).toBe(false)
   })
   test('accepts only valid owned-profile debugging ports', () => {
