@@ -7,7 +7,7 @@ import { BridgeServer } from '../../src/bridge/server'
 import { getExtensionRelay } from '../../src/bridge/relay-routes'
 import { evaluateScript, listCdpTargets } from '../../src/core/cdp'
 import type { BrowserTarget } from '../../src/core/types'
-import { artifactDirectory, eventually, FIXTURE_ORIGIN, startChrome, within, type OwnedChrome } from './harness'
+import { artifactDirectory, eventually, FIXTURE_ORIGIN, startChrome, verifyChromeForTesting, within, type OwnedChrome } from './harness'
 
 type Step = { name: string; status: 'passed' | 'failed'; durationMs: number; error?: string }
 
@@ -46,6 +46,7 @@ export async function runRealChromeRegression(): Promise<void> {
   let bridge: BridgeServer | undefined
   let server: ReturnType<typeof Bun.serve> | undefined
   try {
+    await step('verify full Chrome for Testing binary', () => verifyChromeForTesting(executable, artifacts))
     const extensionDir = resolve(import.meta.dir, '../../../browser-extension/dist')
     const manifest = JSON.parse(await readFile(resolve(extensionDir, 'manifest.json'), 'utf8'))
     assert.equal(manifest.name, 'Nine1Bot Browser Control', 'Build the actual repository extension before running')
@@ -127,7 +128,7 @@ export async function runRealChromeRegression(): Promise<void> {
       assert.equal(await activeBridge.evaluate(botTab, '2 + 3', 'bot'), 5)
     })
 
-    user = await step('install built MV3 extension in a second isolated Chrome', () => startChrome('extension', executable, artifacts, extensionDir))
+    user = await step('launch a second isolated Chrome with the built MV3 extension', () => startChrome('extension', executable, artifacts, extensionDir))
     const extensionChrome = user
     const worker = await step('extension service worker loads and pairs with the real relay', async () => {
       const target = await eventually('installed extension service worker', async () =>

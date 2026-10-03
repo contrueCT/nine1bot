@@ -112,11 +112,20 @@ page interaction implementation counts as real-browser evidence.
 
 `.github/workflows/browser-real-chrome.yml` runs on pull requests touching its
 browser/config/launcher path filters, and can also be dispatched manually. PR
-runs check out the exact PR head SHA, with `github.sha` used for manual dispatch. It installs Chrome for Testing stable, builds the extension, typechecks
-the harness, and runs the opt-in test. It is not a required check by default and
+runs check out the exact PR head SHA, with `github.sha` used for manual dispatch.
+It installs Chrome for Testing stable using `browser-actions/setup-chrome@v2`,
+builds the extension, typechecks the harness, and runs the opt-in test. It is not a required check by default and
 does not run on every pull request. Chrome stable is intentionally a moving
 compatibility target; each run records the exact browser version and GitHub
 artifact name contains the tested commit SHA.
+
+The action's v1 `stable` channel installs branded Chrome, despite the workflow
+step's name. The [v2 migration](https://github.com/browser-actions/setup-chrome/releases/tag/v2.0.0)
+changes channel installs to Chrome for Testing. Before opening the fixture or
+launching either browser, the runner records `CHROME_PATH --version` and requires
+the full `Google Chrome for Testing` brand. A regular Chrome installation fails
+with a prerequisite diagnostic rather than timing out waiting for an extension
+that its command-line interface cannot load.
 
 Artifacts include `evidence.json` with each completed step's pass/fail status,
 browser version responses, extension hello, final runtime status, fixture-only
