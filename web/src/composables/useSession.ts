@@ -326,11 +326,13 @@ export function useSession() {
     // Keep the request's owner even if a different session/directory is selected meanwhile.
     if (currentSession.value && messages.value.length === 0) {
       const sessionID = currentSession.value.id
+      const previousDirectory = currentSession.value.directory
       const isOwner = viewOwner()
       const version = ++directoryVersion
       try {
         const updated = await api.updateSession(sessionID, { directory })
         if (!isOwner() || version !== directoryVersion) return
+        moveComposerDraft(sessionID, sessionID, updated.directory, previousDirectory)
         currentSession.value = updated
         currentDirectory.value = updated.directory
         setApiDirectory(currentDirectory.value)

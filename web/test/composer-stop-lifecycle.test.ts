@@ -4,6 +4,7 @@ import { compileScript, parse } from 'vue/compiler-sfc'
 import { api, permissionApi, questionApi, type MessageSubmission } from '../src/api/client'
 import { useSession } from '../src/composables/useSession'
 import * as drafts from '../src/composables/composer-drafts'
+import { draftStorageKey } from '../src/composables/draft-storage'
 import { useParallelSessions } from '../src/composables/useParallelSessions'
 
 const originals = [api, permissionApi, questionApi].map(object => [object, { ...object }] as const)
@@ -63,7 +64,7 @@ async function mountComposer() {
   let aborting: Promise<void> | undefined
   const root = node('root')
   app = renderer.createApp({ render: () => Vue.h(InputBox, {
-    disabled: false, draftKey: active.composerKey.value, isStreaming: active.isStreaming.value,
+    disabled: false, draftKey: active.composerKey.value, directory: active.currentDirectory.value, isStreaming: active.isStreaming.value,
     onSend(content: string, files: any, _plan: boolean, onResult: (success: boolean) => void, attempt: drafts.SendAttempt) {
       const sending = active.sendMessage(content, { providerID: 'p', modelID: 'slow' }, files, attempt)
       sends.push(sending)
@@ -221,4 +222,40 @@ test('mounted composer leaves an unknown refreshed send pending and exposes a re
   expect(receipts).toBe(2)
   expect(posts).toBe(0)
   expect(draft.attempts).toHaveLength(1)
+})
+
+
+test('mounted empty-session composer migrates same-key directory ownership before typing and refresh', async () => {
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'sessionStorage')
+  const values = new Map<string, string>()
+  Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, value: {
+    get length() { return values.size }, key: (i: number) => [...values.keys()][i] || null,
+    getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key),
+  } })
+  try {
+    const other = drafts.getComposerDraft('other', undefined, '/workspace/A'); other.text = 'unrelated session'
+    const draft = drafts.getComposerDraft('A', undefined, '/workspace/A'); draft.text = 'before directory change'
+    const { root } = await mountComposer()
+    api.updateSession = async (id, updates) => ({ id, directory: updates.directory!, title: 'A', time: { created: 1, updated: 1 } })
+    await active.changeDirectory('/workspace/B'); await Vue.nextTick()
+    expect(active.composerKey.value).toBe('A')
+    expect(drafts.getComposerDraft('A', undefined, '/workspace/B')).toBe(draft)
+    const textarea = descendants(root).find(item => item.type === 'textarea')!
+    textarea.props['onUpdate:modelValue']('typed after directory change')
+    await Vue.nextTick()
+    expect(values.has(draftStorageKey('A', '/workspace/A', 'web'))).toBe(false)
+    expect(JSON.parse(values.get(draftStorageKey('A', '/workspace/B', 'web'))!).text).toBe('typed after directory change')
+    app!.unmount(); app = undefined
+    drafts.clearComposerDrafts(undefined, true)
+    expect(drafts.getComposerDraft('A', undefined, '/workspace/B').text).toBe('typed after directory change')
+    expect(drafts.getComposerDraft('A', undefined, '/workspace/A').text).toBe('')
+    expect(drafts.getComposerDraft('other', undefined, '/workspace/A').text).toBe('unrelated session')
+    const refreshed = await mountComposer(); await Vue.nextTick()
+    expect(descendants(refreshed.root).find(item => item.type === 'textarea')?.value).toBe('typed after directory change')
+  } finally {
+    app?.unmount(); app = undefined
+    drafts.clearComposerDrafts()
+    if (originalStorage) Object.defineProperty(globalThis, 'sessionStorage', originalStorage)
+    else delete (globalThis as any).sessionStorage
+  }
 })

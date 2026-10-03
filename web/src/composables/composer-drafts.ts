@@ -27,8 +27,8 @@ export interface ComposerDraft {
 const drafts = new Map<string, ComposerDraft>()
 const persistence = new WeakMap<ComposerDraft, { key: string; stop: () => void; save: () => void }>()
 
-export function getComposerDraft(key: string, ensureSession: () => Promise<string | null> = async () => null): ComposerDraft {
-  const storageKey = draftStorageKey(key, getApiDirectory(), getApiClientSurface())
+export function getComposerDraft(key: string, ensureSession: () => Promise<string | null> = async () => null, directory = getApiDirectory()): ComposerDraft {
+  const storageKey = draftStorageKey(key, directory, getApiClientSurface())
   let draft = drafts.get(storageKey)
   if (!draft) {
     const uploads = markRaw(useFileUpload({ ensureSessionId: () => draft!.ensureSession() }))
@@ -61,7 +61,7 @@ export function moveComposerDraft(from: string, to: string, toDirectory = getApi
   const fromKey = draftStorageKey(from, fromDirectory, getApiClientSurface())
   const toKey = draftStorageKey(to, toDirectory, getApiClientSurface())
   const draft = drafts.get(fromKey)
-  if (!draft || from === to) return
+  if (!draft || fromKey === toKey) return
   drafts.set(toKey, draft)
   drafts.delete(fromKey)
   const state = persistence.get(draft)

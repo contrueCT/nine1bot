@@ -1101,6 +1101,7 @@ function handlePromptSelect(prompt: string) {
       />
       <InputBox
               :draftKey="composerKey"
+              :directory="currentDirectory"
               :modelError="settingsError"
               :savingModel="savingModel"
         :disabled="isLoading"
@@ -1289,6 +1290,7 @@ function handlePromptSelect(prompt: string) {
             <InputBox
               ref="mainInputBox"
               :draftKey="composerKey"
+              :directory="currentDirectory"
               :modelError="settingsError"
               :savingModel="savingModel"
               :disabled="isLoading"

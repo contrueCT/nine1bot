@@ -7,6 +7,7 @@ import type { Provider } from '../api/client'
 const props = defineProps<{
   disabled: boolean
   draftKey?: string
+  directory?: string
   modelError?: string
   savingModel?: boolean
   isStreaming: boolean
@@ -31,7 +32,7 @@ const emit = defineEmits<{
 }>()
 
 // Plan Mode 状态
-const draft = computed(() => getComposerDraft(props.draftKey || 'default', async () => await props.ensureSession?.() ?? null))
+const draft = computed(() => getComposerDraft(props.draftKey || 'default', async () => await props.ensureSession?.() ?? null, props.directory))
 const isPlanMode = computed({ get: () => draft.value.planMode, set: value => { draft.value.planMode = value } })
 const input = computed({ get: () => draft.value.text, set: value => { draft.value.text = value } })
 const textareaRef = ref<HTMLTextAreaElement>()
@@ -168,7 +169,7 @@ watch(textareaRef, (el) => {
 }, { flush: 'post' })
 
 watch(input, () => nextTick(adjustHeight), { flush: 'post' })
-watch(() => props.draftKey, () => {
+watch(() => [props.draftKey, props.directory], () => {
   showPlusMenu.value = false
   showModelDropdown.value = false
   void nextTick(adjustHeight)
