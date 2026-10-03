@@ -19,7 +19,7 @@ const displayList = computed<SessionSearchResult[]>(() => query.value.trim() ? r
   (props.recentSessions || []).map(session => ({ session, snippet: '' })))
 const displayLabel = computed(() => !query.value.trim() ? '最近会话（所有项目）' :
   loading.value ? '正在搜索当前项目…' : error.value ? '搜索未完成' :
-  `${displayList.value.length} 个匹配${hasMore.value ? '（仅显示前 50 个，请缩小关键词范围）' : ''}`)
+  `${displayList.value.length} 个会话${hasMore.value ? '（仅显示前 50 个，请缩小关键词范围）' : ''}`)
 watch(displayList, () => { selectedIndex.value = 0 })
 function handleKeydown(e: KeyboardEvent) {
   if (e.isComposing || e.keyCode === 229) return
@@ -51,7 +51,7 @@ onMounted(async () => { await nextTick(); inputRef.value?.focus() })
           :aria-activedescendant="displayList.length ? `session-search-result-${selectedIndex}` : undefined" autocomplete="off" maxlength="500" />
         <button class="search-close-btn" aria-label="关闭搜索" @click="emit('close')"><X :size="16" /></button>
       </div>
-      <p class="search-scope">输入关键词搜索当前项目全部历史会话的标题和用户、助手正文；不搜索工具输出、附件和思考过程</p>
+      <p class="search-scope">搜索当前项目主会话历史的标题和用户、助手正文；不含自动化会话、子会话、工具输出、附件和思考过程</p>
       <div class="search-results" :aria-busy="loading">
         <div class="search-results-label" role="status" aria-live="polite">{{ displayLabel }}</div>
         <div v-if="error" class="search-empty" role="alert">{{ error }} <button @click="retry">重试</button></div>
