@@ -62,9 +62,21 @@ export namespace Storage {
     if (!SessionSearch.relevant(key)) return
     try {
       if (phase === "begin") return journal().begin(key)
-      journal().finish(key, token)
+      if (token?.startsWith("fallback-")) {
+        SearchJournal.fallbackFinish(journalFilename, token)
+        // Import the fallback before any eager deletion. The file remains durable
+        // if construction or import is still unavailable.
+        journal().pending()
+      } else journal().finish(key, token)
       if (value === undefined) index().purge(key)
     } catch (error) {
+      if (phase === "begin") {
+        try {
+          return SearchJournal.fallbackBegin(journalFilename, key)
+        } catch (fallbackError) {
+          log.error("failed to persist session search mutation fallback", { error: fallbackError })
+        }
+      }
       if (error instanceof SessionSearch.StaleIndexError) {
         searchIndex?.close()
         searchIndex = undefined

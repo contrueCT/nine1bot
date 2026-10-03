@@ -32,7 +32,8 @@ Bun.file = ((...args: any[]) => {
 }) as typeof Bun.file
 assert.equal((await search()).results.length, 1)
 const recovered = reads
-assert.equal(recovered, 1)
+// One canonical dirty-key reconciliation plus the first project backfill.
+assert.equal(recovered, 2)
 assert.equal((await search()).results.length, 1)
 assert.equal(reads, recovered)
 Bun.file = file

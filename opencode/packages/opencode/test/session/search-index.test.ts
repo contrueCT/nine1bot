@@ -423,3 +423,48 @@ test("an index closed while awaiting canonical IO reports stale ownership and le
   indexes.push(replacement)
   expect((await replacement.search({ projectID: "project", q: "new" })).results).toHaveLength(1)
 })
+
+test("fallback provenance keeps live writers and retries a temporarily failed completion", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "search-fallback-"))
+  directories.push(directory)
+  const filename = path.join(directory, "journal.sqlite")
+  const journal = new SearchJournal(filename)
+  const key = ["session", "project", "session"]
+  const serialized = JSON.stringify(key)
+  const first = SearchJournal.fallbackBegin(filename, key)
+  const second = SearchJournal.fallbackBegin(filename, key)
+  try {
+    expect(journal.pending()).toEqual([{ key: serialized }])
+    const revision = journal.version(serialized)
+    journal.pending()
+    expect(journal.version(serialized)).toBe(revision)
+    journal.reconcile(serialized, revision, () => {})
+    expect(journal.pending()).toHaveLength(1)
+    const original = fsSync.writeFileSync
+    fsSync.writeFileSync = ((...args: Parameters<typeof original>) => {
+      if (String(args[0]).endsWith(`${first}.done`))
+        throw Object.assign(new Error("temporary fallback completion IO error"), { code: "EIO" })
+      return original(...args)
+    }) as typeof original
+    try {
+      expect(() => SearchJournal.fallbackFinish(filename, first)).toThrow("temporary fallback")
+    } finally {
+      fsSync.writeFileSync = original
+    }
+    const deadline = Date.now() + 2000
+    while (!fsSync.existsSync(path.join(`${filename}.fallback`, `${first}.done`))) {
+      if (Date.now() > deadline) throw new Error("Fallback completion was not retried")
+      await Bun.sleep(20)
+    }
+    journal.pending()
+    journal.reconcile(serialized, journal.version(serialized), () => {})
+    expect(journal.pending()).toHaveLength(1) // The other live writer is preserved.
+    SearchJournal.fallbackFinish(filename, second)
+    journal.pending()
+    journal.reconcile(serialized, journal.version(serialized), () => {})
+    expect(journal.pending()).toEqual([])
+    expect(await fs.readdir(`${filename}.fallback`)).toEqual([])
+  } finally {
+    journal.close()
+  }
+})

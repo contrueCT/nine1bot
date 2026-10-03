@@ -62,6 +62,7 @@ for (const scenario of [
   "cache-rebuild-writer-crash",
   "journal-unavailable-storage",
   "inflight-cache-replacement",
+  "journal-initialization-failure",
 ]) {
   test(`canonical reconciliation across processes: ${scenario}`, async () => {
     const root = await fs.mkdtemp(path.join((await import("node:os")).tmpdir(), "search-race-"))

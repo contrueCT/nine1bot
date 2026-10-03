@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Database } from "bun:sqlite"
+import fs from "node:fs"
+import path from "node:path"
 
 /** Durable mutation provenance. Never discard this file when rebuilding derived search data. */
 export class SearchJournal {
@@ -10,7 +12,55 @@ export class SearchJournal {
   private retryDelay = 50
   private closed = false
 
-  constructor(filename: string) {
+  // A SQLite setup failure must not lose provenance for an otherwise successful
+  // JSON write. Immutable fallback records survive the writer and are consumed
+  // by any process once the journal is usable again.
+  static fallbackBegin(filename: string, key: string[]) {
+    const token = `fallback-${randomUUID()}`
+    const directory = `${filename}.fallback`
+    fs.mkdirSync(directory, { recursive: true })
+    const target = path.join(directory, token)
+    fs.writeFileSync(`${target}.tmp`, JSON.stringify({ key, pid: process.pid }))
+    fs.renameSync(`${target}.tmp`, `${target}.json`)
+    return token
+  }
+
+  private static fallbackCompletions = new Set<string>()
+  private static fallbackRetry?: ReturnType<typeof setTimeout>
+  private static fallbackDelay = 50
+
+  static fallbackFinish(filename: string, token: string) {
+    this.fallbackCompletions.add(path.join(`${filename}.fallback`, `${token}.done`))
+    this.flushFallbackCompletions()
+  }
+
+  private static flushFallbackCompletions() {
+    try {
+      for (const target of this.fallbackCompletions) {
+        fs.writeFileSync(target, "")
+        this.fallbackCompletions.delete(target)
+      }
+    } catch (error) {
+      if (!this.fallbackRetry) {
+        this.fallbackRetry = setTimeout(() => {
+          this.fallbackRetry = undefined
+          try {
+            this.flushFallbackCompletions()
+          } catch {
+            /* retry remains scheduled; the active fallback record stays durable */
+          }
+        }, this.fallbackDelay)
+        this.fallbackRetry.unref?.()
+        this.fallbackDelay = Math.min(5000, this.fallbackDelay * 2)
+      }
+      throw error
+    }
+    if (this.fallbackRetry) clearTimeout(this.fallbackRetry)
+    this.fallbackRetry = undefined
+    this.fallbackDelay = 50
+  }
+
+  constructor(private filename: string) {
     this.db = new Database(filename, { create: true })
     try {
       this.db.exec(`
@@ -65,7 +115,65 @@ export class SearchJournal {
     this.flushCompleted()
   }
 
+  private recoverFallback() {
+    SearchJournal.flushFallbackCompletions()
+    const directory = `${this.filename}.fallback`
+    let files: string[]
+    try {
+      files = fs.readdirSync(directory).filter((name) => name.endsWith(".json"))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return
+      throw error // Never answer from a cache whose provenance cannot be read.
+    }
+    if (!files.length) return
+    const retired: string[] = []
+    this.db
+      .transaction(() => {
+        for (const file of files) {
+          const target = path.join(directory, file)
+          let record: { key: string[]; pid: number }
+          try {
+            record = JSON.parse(fs.readFileSync(target, "utf8"))
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") continue
+            throw error
+          }
+          const token = file.slice(0, -5)
+          const key = JSON.stringify(record.key)
+          let complete = fs.existsSync(path.join(directory, `${token}.done`))
+          if (!complete) {
+            try {
+              process.kill(record.pid, 0)
+            } catch (error) {
+              complete = (error as NodeJS.ErrnoException).code === "ESRCH"
+            }
+          }
+          if (complete) {
+            this.dirty(key)
+            this.db.query("DELETE FROM writers WHERE id = ? AND key = ?").run(token, key)
+            retired.push(token)
+          } else {
+            const inserted = this.db.query("INSERT OR IGNORE INTO writers VALUES (?, ?, ?)").run(token, key, record.pid)
+            if (inserted.changes) this.dirty(key)
+          }
+        }
+      })
+      .immediate()
+    // Remove only after commit: a crash/rollback cannot erase the sole evidence.
+    // Cleanup takes the same lock, so an importer cannot observe a begin record
+    // and then lose its completion file before checking it. Replays are harmless.
+    this.db
+      .transaction(() => {
+        for (const token of retired) {
+          fs.rmSync(path.join(directory, `${token}.json`), { force: true })
+          fs.rmSync(path.join(directory, `${token}.done`), { force: true })
+        }
+      })
+      .immediate()
+  }
+
   private flushCompleted() {
+    this.recoverFallback()
     if (!this.completed.size) return
     const batch = [...this.completed]
     try {
