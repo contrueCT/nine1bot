@@ -11,6 +11,7 @@ const McpManager = defineAsyncComponent(() => import('./McpManager.vue'))
 const SkillsList = defineAsyncComponent(() => import('./SkillsList.vue'))
 import ModelSelector from './ModelSelector.vue'
 const AuthManager = defineAsyncComponent(() => import('./AuthManager.vue'))
+const BrowserSettingsPanel = defineAsyncComponent(() => import('./BrowserSettingsPanel.vue'))
 const PreferencesPanel = defineAsyncComponent(() => import('./PreferencesPanel.vue'))
 const PlatformManager = defineAsyncComponent(() => import('./PlatformManager.vue'))
 
@@ -122,6 +123,7 @@ function handleBotAvatarUpload(e: Event) {
 type SettingsTab = typeof activeTab.value
 const navigation: { id: SettingsTab; label: string; description: string }[] = [
   { id: 'models', label: '模型与供应商', description: '选择模型、管理连接' },
+  { id: 'browser', label: '浏览器与就绪检查', description: 'Chrome 路径与首次使用检查' },
   { id: 'mcp', label: '工具与 MCP', description: '连接外部工具' },
   { id: 'skills', label: '技能', description: '扩展助手能力' },
   { id: 'platforms', label: '平台集成', description: '飞书、GitLab 等' },
@@ -136,9 +138,10 @@ const visited = ref(new Set<SettingsTab>([activeTab.value]))
 const modalRef = ref<HTMLElement>()
 const authRef = ref<{ hasUnsavedChanges: boolean; isSaving: boolean }>()
 const mcpRef = ref<{ hasUnsavedChanges: boolean; isSaving: boolean }>()
+const browserRef = ref<{ hasUnsavedChanges: boolean; isSaving: boolean }>()
 const platformRef = ref<{ hasUnsavedChanges: boolean }>()
 const settingsNotice = ref('')
-const hasUnsavedChanges = computed(() => Boolean(authRef.value?.hasUnsavedChanges || mcpRef.value?.hasUnsavedChanges || platformRef.value?.hasUnsavedChanges || editingName.value.trim() !== (profile.value.name || '')))
+const hasUnsavedChanges = computed(() => Boolean(browserRef.value?.hasUnsavedChanges || authRef.value?.hasUnsavedChanges || mcpRef.value?.hasUnsavedChanges || platformRef.value?.hasUnsavedChanges || editingName.value.trim() !== (profile.value.name || '')))
 watch(activeTab, tab => {
   visited.value.add(tab)
   settingsNotice.value = ''
@@ -147,7 +150,7 @@ watch(activeTab, tab => {
 }, { immediate: true })
 function chooseSection(tab: SettingsTab) { activeTab.value = tab; mobileDetail.value = true }
 function requestClose() {
-  if (savingModel.value || savingPlatform.value || authRef.value?.isSaving || mcpRef.value?.isSaving) { settingsNotice.value = '正在保存，请稍候…'; return }
+  if (browserRef.value?.isSaving || savingModel.value || savingPlatform.value || authRef.value?.isSaving || mcpRef.value?.isSaving) { settingsNotice.value = '正在保存，请稍候…'; return }
   if (hasUnsavedChanges.value && !window.confirm('有未保存的修改，确定关闭并丢弃吗？')) return
   emit('close')
 }
@@ -203,6 +206,7 @@ function handleOverlayClick(e: MouseEvent) {
           <button :class="{ active: activeTab === 'auth' }" @click="activeTab = 'auth'">供应商连接</button>
         </div>
         <div v-if="settingsError" class="settings-error" role="alert">{{ settingsError }}</div>
+        <BrowserSettingsPanel v-if="visited.has('browser')" v-show="activeTab === 'browser'" ref="browserRef" @open-models="chooseSection('models')" />
         <!-- Models Tab -->
         <ModelSelector
           v-if="visited.has('models')" v-show="activeTab === 'models'"

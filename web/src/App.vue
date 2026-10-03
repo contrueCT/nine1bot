@@ -999,6 +999,11 @@ function handleOpenSkills() {
 }
 
 // 起手任务只填进输入框，让用户补充要求后再发送
+function handleChatOpenSettings(tab?: 'browser') {
+  if (tab) settingsTab.value = tab
+  openSettings()
+}
+
 function handlePromptSelect(prompt: string) {
   mainInputBox.value?.fillDraft(prompt)
 }
@@ -1253,11 +1258,12 @@ function handlePromptSelect(prompt: string) {
               :sessionError="sessionError"
               :currentDirectory="currentDirectory"
               :canChangeDirectory="canChangeDirectory()"
+              :showReadiness="true"
               @question-answered="(id, answers) => answerQuestion(id, answers)"
               @question-rejected="rejectQuestion"
               @permission-responded="respondPermission"
               @clear-error="clearSessionError"
-              @open-settings="openSettings"
+              @open-settings="handleChatOpenSettings"
               @delete-part="handleDeletePart"
               @update-part="handleUpdatePart"
               @change-directory="changeDirectory"

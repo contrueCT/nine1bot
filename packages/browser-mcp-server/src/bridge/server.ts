@@ -56,6 +56,7 @@ import {
 
 export interface BridgeServerOptions {
   cdpPort?: number
+  executablePath?: string
   autoLaunch?: boolean
   headless?: boolean
   serverOrigin?: string
@@ -143,7 +144,7 @@ async function isLocalPortListening(host: string, port: number): Promise<boolean
  * Class-based, supports multiple instances, exposes direct methods for AI tools
  */
 export class BridgeServer {
-  private options: Required<BridgeServerOptions>
+  private options: Required<Omit<BridgeServerOptions, 'executablePath'>> & Pick<BridgeServerOptions, 'executablePath'>
   private chromeInstance: ChromeInstance | null = null
   private relay: ExtensionRelay | null = null
   private started = false
@@ -151,6 +152,7 @@ export class BridgeServer {
   constructor(options: BridgeServerOptions = {}) {
     this.options = {
       cdpPort: options.cdpPort ?? 9222,
+      executablePath: options.executablePath,
       autoLaunch: options.autoLaunch ?? true,
       headless: options.headless ?? false,
       serverOrigin: normalizeServerOrigin(options.serverOrigin ?? DEFAULT_SERVER_ORIGIN),
@@ -351,6 +353,7 @@ export class BridgeServer {
     }
 
     return {
+      configuration: { cdpPort: this.options.cdpPort, autoLaunch: this.options.autoLaunch, headless: this.options.headless, executablePath: this.options.executablePath },
       mode: 'embedded',
       serverOrigin: this.options.serverOrigin,
       instanceId: this.options.instanceId,
@@ -403,6 +406,7 @@ export class BridgeServer {
 
     const instance = await launchChrome({
       cdpPort: this.options.cdpPort,
+      executablePath: this.options.executablePath,
       headless: options?.headless ?? this.options.headless,
     })
     this.chromeInstance = instance
@@ -1120,6 +1124,7 @@ export class BridgeServer {
       console.log('[Browser Bridge] Launching Chrome...')
       const instance = await launchChrome({
         cdpPort: this.options.cdpPort,
+        executablePath: this.options.executablePath,
         headless: this.options.headless,
       })
       this.chromeInstance = instance

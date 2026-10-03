@@ -324,13 +324,16 @@ function validateDeprecatedBrowserConfig(config: Partial<Nine1BotConfig>): void 
  * 2. Nine1Bot 项目配置（nine1bot.config.jsonc）
  *
  * @param customConfigPath 可选的自定义配置文件路径
+ * @param sourceOverride Pending source edit validated with startup merge/env semantics.
  */
-export async function loadConfig(customConfigPath?: string): Promise<Nine1BotConfig> {
+export async function loadConfig(customConfigPath?: string, sourceOverride?: Record<string, unknown>): Promise<Nine1BotConfig> {
   let result: Partial<Nine1BotConfig> = {}
   const projectConfigPath = customConfigPath || await findConfigPath()
   let projectConfig: Partial<Nine1BotConfig> = {}
 
-  if (projectConfigPath && await fileExists(projectConfigPath)) {
+  if (sourceOverride !== undefined) {
+    projectConfig = processEnvVars(sourceOverride)
+  } else if (projectConfigPath && await fileExists(projectConfigPath)) {
     try {
       projectConfig = await loadConfigFile(projectConfigPath)
     } catch (error) {

@@ -1,0 +1,73 @@
+name: Real Chrome browser regression (fixture-only)
+
+# Runs only fixture-based browser checks, without model credentials or inference.
+on:
+  pull_request:
+    paths:
+      - 'packages/browser-mcp-server/**'
+      - 'packages/browser-extension/**'
+      - 'packages/nine1bot/src/config/**'
+      - 'packages/nine1bot/src/launcher/**'
+      - 'opencode/packages/opencode/src/browser/**'
+      - 'opencode/packages/opencode/src/server/nine1bot-browser*.ts'
+      - 'opencode/packages/opencode/src/server/routes/browser.ts'
+      - '.github/workflows/browser-real-chrome.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-chrome-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-chrome:
+    # Ubuntu 22.04 avoids the newer AppArmor restriction on unprivileged user
+    # namespaces for custom browser paths. The Chrome sandbox remains enabled.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      RUN_REAL_CHROME: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Bun 1.3.14 never resolves server.stop() after a server-side WS close
+          # (oven-sh/bun#36223). Keep this pin local to the real-browser fixture.
+          bun-version: 1.4.2
+      - name: Install workspace dependencies
+        run: bun install
+      - name: Build actual MV3 extension
+        run: bun run --cwd packages/browser-extension build
+      - name: Typecheck regression harness and imported browser runtime
+        run: packages/browser-mcp-server/node_modules/.bin/tsc --project packages/browser-mcp-server/test/real-chrome/tsconfig.json
+      - name: Verify fixture runtime drains server-closed WebSockets
+        env:
+          RUN_BROWSER_RUNTIME_CHECKS: '1'
+        run: bun test packages/browser-mcp-server/test/real-chrome/server-cleanup.test.ts
+      - name: Install Chrome for Testing
+        id: chrome
+        # v1 channel installs use branded Chrome, which no longer supports
+        # --load-extension. v2 channel installs use official Chrome for Testing.
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+      - name: Run real bot CDP and installed-extension regression
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          REAL_CHROME_ARTIFACTS: ${{ runner.temp }}/nine1bot-real-chrome-artifacts
+        run: |
+          set -o pipefail
+          mkdir -p "$REAL_CHROME_ARTIFACTS"
+          bun test packages/browser-mcp-server/test/real-chrome/real-chrome.test.ts 2>&1 | tee "$REAL_CHROME_ARTIFACTS/test.log"
+      - name: Preserve fixture-only screenshots, versions, step evidence and errors
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-chrome-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/nine1bot-real-chrome-artifacts
+          if-no-files-found: warn
+          retention-days: 7
