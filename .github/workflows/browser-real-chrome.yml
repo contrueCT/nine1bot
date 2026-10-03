@@ -44,7 +44,9 @@ jobs:
         run: packages/browser-mcp-server/node_modules/.bin/tsc --project packages/browser-mcp-server/test/real-chrome/tsconfig.json
       - name: Install Chrome for Testing
         id: chrome
-        uses: browser-actions/setup-chrome@v1
+        # v1 channel installs use branded Chrome, which no longer supports
+        # --load-extension. v2 channel installs use official Chrome for Testing.
+        uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: stable
       - name: Run real bot CDP and installed-extension regression
@@ -54,7 +56,6 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$REAL_CHROME_ARTIFACTS"
-          "$CHROME_PATH" --version | tee "$REAL_CHROME_ARTIFACTS/chrome-version.txt"
           bun test packages/browser-mcp-server/test/real-chrome/real-chrome.test.ts 2>&1 | tee "$REAL_CHROME_ARTIFACTS/test.log"
       - name: Preserve fixture-only screenshots, versions, step evidence and errors
         if: always()

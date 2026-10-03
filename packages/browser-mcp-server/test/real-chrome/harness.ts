@@ -1,12 +1,30 @@
 /** Test infrastructure only. No browser mocks and no changes to Chrome security settings. */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
+import { promisify } from 'node:util'
 
 export const ENABLED = process.env.RUN_REAL_CHROME === '1'
 export const FIXTURE_ORIGIN = 'http://127.0.0.1:4096'
+
+export function assertChromeForTestingVersion(version: string): void {
+  if (!/^Google Chrome for Testing \d+\.\d+\.\d+\.\d+\s*$/.test(version.trim())) {
+    throw new Error(`Expected the full Chrome for Testing binary; got ${JSON.stringify(version.trim())}. Branded Chrome 137+ does not support --load-extension. Set CHROME_PATH to Chrome for Testing; do not bypass extension policy or disable browser security.`)
+  }
+}
+
+/** Check the actual executable before binding the fixture or launching either browser. */
+export async function verifyChromeForTesting(executable: string, artifacts: string): Promise<void> {
+  if (!ENABLED) throw new Error('Probing real Chrome requires RUN_REAL_CHROME=1')
+  if (!isAbsolute(executable)) throw new Error('CHROME_PATH must be an absolute path to Chrome for Testing')
+  const { stdout, stderr } = await promisify(execFile)(executable, ['--version'], { timeout: 5000, maxBuffer: 16384 })
+  await writeFile(join(artifacts, 'chrome-version.txt'), stdout)
+  await writeFile(join(artifacts, 'chrome-version.stderr.log'), stderr)
+  console.info(`[real-chrome] Browser: ${stdout.trim()}`)
+  assertChromeForTestingVersion(stdout)
+}
 
 export function chromeArguments(profile: string, extensionDir?: string): string[] {
   return [
