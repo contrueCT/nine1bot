@@ -1,3 +1,4 @@
+import { beginSessionRead, ensureSessionSnapshot, copySessionSnapshot } from '../api/session-snapshot-authority'
 import { computed, ref } from 'vue'
 import { projectApi, type Project, type Session } from '../api/client'
 
@@ -28,10 +29,10 @@ function toProjectDisplayName(project: RecentSessionProject): string {
   return project.name || fallbackName
 }
 
-function mapProjectSessions(project: RecentSessionProject, sessions: Session[]): GlobalRecentSessionItem[] {
+function mapProjectSessions(project: RecentSessionProject, sessions: Session[], readStarted: number): GlobalRecentSessionItem[] {
   const displayName = toProjectDisplayName(project)
   const displayPath = project.rootDirectory || project.worktree
-  return sessions.map((session) => ({
+  return sessions.map((session) => copySessionSnapshot(ensureSessionSnapshot(session, readStarted), {
     ...session,
     projectID: session.projectID || project.id,
     projectDisplayName: displayName,
@@ -84,11 +85,12 @@ async function loadGlobalRecentSessions(knownProjects?: RecentSessionProject[]):
       (project, index) => async (): Promise<GlobalRecentSessionItem[]> => {
         let group: GlobalRecentSessionItem[] = []
         try {
+          const readStarted = beginSessionRead()
           const sessions = await projectApi.sessions(project.id, {
             roots: true,
             limit: MAX_SESSIONS_PER_PROJECT,
           })
-          group = mapProjectSessions(project, sessions)
+          group = mapProjectSessions(project, sessions, readStarted)
         } catch (error) {
           failedProjects++
           group = recentSessionsState.value.filter((session) => session.projectID === project.id)

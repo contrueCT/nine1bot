@@ -1,4 +1,5 @@
-import { ref, computed, watch, toRaw } from 'vue'
+import { ref, computed, watch } from 'vue'
+import { beginSessionRead, acknowledgeSessionDirectory, ensureSessionSnapshot, markSessionSnapshot, sessionSnapshotOrder, copySessionSnapshot } from '../api/session-snapshot-authority'
 import { createInteractionResponder } from './interaction-state'
 import {
   api,
@@ -108,29 +109,19 @@ export function useSession() {
   const directoryVersions = new Map<string, number>()
   const draftDirectories = new Map<string, string>()
   const successfulDirectoryVersions = new Map<string, number>()
-  // Overrides are limited to snapshot objects already known when a PATCH began.
-  // A fresh server record is authoritative even when touch:false kept its timestamp.
-  let directoryRecordEpoch = 0
-  const directoryRecords = new WeakMap<Session, number>()
+  // A read that started before an acknowledged mutation cannot undo it merely
+  // by returning late. A later-started read remains authoritative at equal time.
   const committedDirectories = ref(new Map<string, { directory: string; cutoff: number }>())
   function rememberSessionRecords(records: readonly Session[]) {
-    for (const session of records) {
-      const raw = toRaw(session)
-      if (!directoryRecords.has(raw)) directoryRecords.set(raw, ++directoryRecordEpoch)
-    }
+    for (const session of records) sessionSnapshotOrder(session)
   }
   watch(sessions, rememberSessionRecords, { immediate: true, flush: 'sync' })
-  function sessionRecordOrder(session: Session): number {
-    rememberSessionRecords([session])
-    return directoryRecords.get(toRaw(session))!
-  }
+  function sessionRecordOrder(session: Session): number { return sessionSnapshotOrder(session) }
   function resolveSessionDirectory(session: Session): Session {
-    const epoch = sessionRecordOrder(session)
+    const order = sessionSnapshotOrder(session)
     const committed = committedDirectories.value.get(session.id)
-    if (!committed || session.directory === committed.directory || epoch > committed.cutoff) return session
-    const resolved = { ...session, directory: committed.directory }
-    directoryRecords.set(resolved, epoch)
-    return resolved
+    if (!committed || session.directory === committed.directory || order > committed.cutoff) return session
+    return copySessionSnapshot(session, { ...session, directory: committed.directory })
   }
   let pendingSessionReadiness: { sessionID: string; selection: number; promise: Promise<EventStreamSubscription> } | undefined
   let todoVersion = 0
@@ -282,11 +273,12 @@ export function useSession() {
 
   async function loadSessions(directory?: string): Promise<boolean> {
     const requestVersion = ++sessionsLoadVersion
+    const readStarted = beginSessionRead()
     sessionsLoading.value = true
     try {
       const loaded = await api.getSessions(directory)
       if (requestVersion !== sessionsLoadVersion) return false
-      sessions.value = loaded
+      sessions.value = loaded.map(session => ensureSessionSnapshot(session, readStarted))
       sessionsLoadError.value = false
       return true
     } catch (error) {
@@ -355,7 +347,6 @@ export function useSession() {
       const sessionID = currentSession.value.id
       const previousDirectory = currentSession.value.directory
       rememberSessionRecords([currentSession.value, ...sessions.value])
-      const directoryCutoff = directoryRecordEpoch
       const isOwner = viewOwner()
       const version = (directoryVersions.get(sessionID) || 0) + 1
       directoryVersions.set(sessionID, version)
@@ -363,6 +354,7 @@ export function useSession() {
         const updated = await api.updateSession(sessionID, { directory })
         if (version < (successfulDirectoryVersions.get(sessionID) || 0)) return
         successfulDirectoryVersions.set(sessionID, version)
+        const directoryCutoff = acknowledgeSessionDirectory()
         // Directory authority is session-owned, not selection-owned. Patch only
         // this metadata so a late directory response cannot roll back a new title.
         committedDirectories.value.set(sessionID, { directory: updated.directory, cutoff: directoryCutoff })
@@ -380,7 +372,7 @@ export function useSession() {
         const active = currentSession.value
         if (active.directory === previousDirectory) {
           const committed = { ...active, directory: updated.directory }
-          directoryRecords.set(committed, directoryCutoff)
+          markSessionSnapshot(committed, directoryCutoff)
           currentSession.value = committed
         } else currentSession.value = resolveSessionDirectory(active)
         currentDirectory.value = currentSession.value.directory
@@ -1353,7 +1345,7 @@ export function useSession() {
   // 重命名会话
   async function renameSession(sessionId: string, title: string) {
     try {
-      const updated = await api.updateSession(sessionId, { title })
+      const updated = resolveSessionDirectory(await api.updateSession(sessionId, { title }))
 
       // 更新本地状态
       const index = sessions.value.findIndex(s => s.id === sessionId)

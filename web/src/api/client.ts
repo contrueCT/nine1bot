@@ -1,3 +1,4 @@
+import { beginSessionRead, markSessionSnapshot } from './session-snapshot-authority'
 import {
   RUNTIME_EVENT_TYPES,
   normalizeRuntimeEventEnvelope,
@@ -1147,6 +1148,7 @@ export const api = {
   },
 
   async searchSessions(query: string, directory: string): Promise<SessionSearchResponse> {
+    const readStarted = beginSessionRead()
     const params = new URLSearchParams({ q: query, limit: '50', directory })
     if (clientSurface === 'browser-extension') params.set('clientSource', 'browser-extension')
     const response = await requireOk(await fetchWithTimeout(`${BASE_URL}/session/search?${params}`, {
@@ -1157,12 +1159,13 @@ export const api = {
       throw new Error('搜索响应格式无效')
     }
     return { ...data, results: data.results.map((result: SessionSearchResult) => ({
-      ...result, session: normalizeSession(result.session),
+      ...result, session: markSessionSnapshot(normalizeSession(result.session), readStarted),
     })) }
   },
 
   // 获取会话列表
   async getSessions(directory?: string): Promise<Session[]> {
+    const readStarted = beginSessionRead()
     const params = new URLSearchParams()
     if (directory) params.set('directory', directory)
     params.set('roots', 'true')  // 只获取主会话，过滤掉 subagent 会话
@@ -1179,7 +1182,7 @@ export const api = {
     }
     // 添加 createdAt 字段用于显示
     return sessions
-      .map((s: Session) => normalizeSession(s))
+      .map((s: Session) => markSessionSnapshot(normalizeSession(s), readStarted))
       .filter((session: Session) => sessionMatchesClientSurface(session))
       .sort((a: Session, b: Session) => b.time.updated - a.time.updated)
   },
@@ -1412,6 +1415,7 @@ export const api = {
 
   // 更新会话（重命名、修改工作目录等）
   async updateSession(sessionId: string, updates: { title?: string; directory?: string }): Promise<Session> {
+    const readStarted = beginSessionRead()
     const res = await fetchWithDirectory(`${BASE_URL}/session/${sessionId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -1423,7 +1427,7 @@ export const api = {
     }
     const data = await res.json()
     const session = data.data || data
-    return normalizeSession(session)
+    return markSessionSnapshot(normalizeSession(session), readStarted)
   },
 
   // 删除消息部分
@@ -1875,6 +1879,7 @@ export const projectApi = {
   },
 
   async sessions(projectID: string, opts: { roots?: boolean; search?: string; limit?: number } = {}): Promise<Session[]> {
+    const readStarted = beginSessionRead()
     const params = new URLSearchParams()
     if (opts.roots !== undefined) params.set('roots', String(opts.roots))
     if (opts.search) params.set('search', opts.search)
@@ -1886,7 +1891,7 @@ export const projectApi = {
     }
     const sessions = await res.json()
     return (sessions || [])
-      .map((s: Session) => normalizeSession(s))
+      .map((s: Session) => markSessionSnapshot(normalizeSession(s), readStarted))
       .filter((session: Session) => sessionMatchesClientSurface(session))
   },
 

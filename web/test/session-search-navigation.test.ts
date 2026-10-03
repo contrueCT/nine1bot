@@ -4,6 +4,7 @@ import * as Icons from 'lucide-vue-next'
 import { compileScript, parse } from 'vue/compiler-sfc'
 import { api, permissionApi, questionApi, setApiDirectory, type Message, type Session, type SessionSearchResult } from '../src/api/client'
 import { getComposerDraft, clearComposerDrafts } from '../src/composables/composer-drafts'
+import { useGlobalRecentSessions } from '../src/composables/useGlobalRecentSessions'
 import { useSession } from '../src/composables/useSession'
 
 
@@ -138,6 +139,7 @@ function deferred<T>() {
 }
 const originalApi = {
   updateSession: api.updateSession,
+  getSessions: api.getSessions,
   getMessages: api.getMessages,
   getMessageReceipt: api.getMessageReceipt,
   sendMessage: api.sendMessage,
@@ -434,3 +436,89 @@ test('a fresh authoritative session record supersedes a local commit even with a
   expect(model.currentDirectory.value).toBe('/newer-external')
   expect(model.currentSession.value?.title).toBe('newer metadata')
 })
+
+
+async function actualSidebar(model: ReturnType<typeof useSession>, globalRecentSessions: ReturnType<typeof Vue.ref<Session[]>>) {
+  const { descriptor } = parse(await Bun.file(new URL('../src/App.vue', import.meta.url)).text())
+  const compiled = compileScript(descriptor, { id: 'sidebar-read-order' })
+  const source = (node: any) => descriptor.scriptSetup!.content.slice(node.start!, node.end!)
+  const sidebar = compiled.scriptSetupAst!.find((node: any) => node.type === 'VariableDeclaration' && node.declarations.some((item: any) => item.id?.name === 'sidebarSessions'))!
+  const tracking = compiled.scriptSetupAst!.find((node: any) => node.type === 'ExpressionStatement' && node.expression?.callee?.name === 'watch' && source(node).includes('watch(globalRecentSessions, rememberSessionRecords'))!
+  const handler = compiled.scriptSetupAst!.find((node: any) => node.type === 'FunctionDeclaration' && node.id?.name === 'handleSidebarSelectSession')!
+  const scope = { ...model, globalRecentSessions, sidebarMobileOpen: Vue.ref(true), showProjectsPage: Vue.ref(false), showMetricsPage: Vue.ref(false), showAutomationsPage: Vue.ref(false) }
+  const actual = new Function('scope', 'computed', 'watch', `
+    const { sessions, currentSession, globalRecentSessions, resolveSessionDirectory, rememberSessionRecords, sessionRecordOrder, selectSession,
+      sidebarMobileOpen, showProjectsPage, showMetricsPage, showAutomationsPage } = scope;
+    const stop = ${new Bun.Transpiler({ loader: 'ts' }).transformSync(source(tracking))}
+    ${new Bun.Transpiler({ loader: 'ts' }).transformSync(source(sidebar))}
+    ${new Bun.Transpiler({ loader: 'ts' }).transformSync(source(handler))}
+    return { sidebarSessions, handleSidebarSelectSession, stop };
+  `)(scope, Vue.computed, Vue.watch)
+  sidebarWatcherStops.push(actual.stop)
+  return actual
+}
+
+for (const provider of ['local', 'recents', 'both'] as const) {
+  for (const responseTiming of ['before-ack', 'after-ack'] as const) {
+    test(`actual App honors GET start order for ${provider}, old response ${responseTiming}, and later equal-time reads`, async () => {
+      const model = createSessionModel()
+      api.getMessages = async () => []
+      const recents = useGlobalRecentSessions()
+      recents.resetGlobalRecentSessions()
+      const originalFetch = globalThis.fetch
+      const a = { ...session('read-order-A'), directory: '/project/A' }
+      const b = { ...session('read-order-B'), directory: '/project/B' }
+      const projects = [{ id: 'read-order-project', worktree: '/project' }]
+      const responses: ReturnType<typeof deferred<Response>>[] = []
+      let holdReads = false
+      let serverRecord = a
+      globalThis.fetch = async input => {
+        const url = String(input)
+        if (!url.startsWith('/session?') && !url.startsWith('/project/read-order-project/session')) throw new Error(`Unexpected read: ${url}`)
+        if (!holdReads) return Response.json([serverRecord])
+        const response = deferred<Response>(); responses.push(response); return response.promise
+      }
+      try {
+        // Use the real API fetch paths and real project-to-recents transformation.
+        model.sessions.value = [a, b]
+        await recents.loadGlobalRecentSessions(projects)
+        const actual = await actualSidebar(model, recents.recentSessions as any)
+        await model.selectSession(a)
+        getComposerDraft(a.id, undefined, a.directory).text = 'survives old GET completion'
+        const update = deferred<Session>()
+        api.updateSession = () => update.promise
+        const changing = model.changeDirectory('/project/A/committed')
+        await model.selectSession(b)
+        holdReads = true
+        const refresh = () => Promise.all([
+          ...(provider !== 'recents' ? [model.loadSessions('/project')] : []),
+          ...(provider !== 'local' ? [recents.loadGlobalRecentSessions(projects)] : []),
+        ])
+        const oldRead = refresh()
+        await Promise.resolve()
+        expect(responses.length).toBe(provider === 'both' ? 2 : 1)
+        const releaseOld = () => { for (const response of responses.splice(0)) response.resolve(Response.json([a])) }
+        if (responseTiming === 'before-ack') { releaseOld(); await oldRead }
+        update.resolve({ ...a, directory: '/project/A/committed' }) // touch:false, same timestamp
+        await changing
+        if (responseTiming === 'after-ack') { releaseOld(); await oldRead }
+        const staleRow = actual.sidebarSessions.value.find((item: Session) => item.id === a.id)
+        expect(staleRow.directory).toBe('/project/A/committed')
+        await actual.handleSidebarSelectSession(staleRow)
+        expect(model.currentDirectory.value).toBe('/project/A/committed')
+        expect(getComposerDraft(a.id, undefined, model.currentDirectory.value).text).toBe('survives old GET completion')
+        holdReads = false
+        serverRecord = { ...a, directory: '/project/A/fresh-server' }
+        await refresh()
+        const freshRow = actual.sidebarSessions.value.find((item: Session) => item.id === a.id)
+        expect(freshRow.directory).toBe('/project/A/fresh-server')
+        await actual.handleSidebarSelectSession(freshRow)
+        expect(model.currentDirectory.value).toBe('/project/A/fresh-server')
+      } finally {
+        for (const response of responses) response.resolve(Response.json([a]))
+        globalThis.fetch = originalFetch
+        recents.resetGlobalRecentSessions()
+      }
+    })
+  }
+}
