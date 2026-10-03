@@ -20,7 +20,9 @@ export class SearchJournal {
         CREATE TABLE IF NOT EXISTS writers (id TEXT PRIMARY KEY, key TEXT NOT NULL, pid INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS writer_key ON writers(key);
         CREATE TABLE IF NOT EXISTS versions (key TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS cache_epoch (slot INTEGER PRIMARY KEY CHECK(slot = 1), value TEXT NOT NULL);
       `)
+      this.db.query("INSERT OR IGNORE INTO cache_epoch VALUES (1, ?)").run(randomUUID())
     } catch (error) {
       this.db.close()
       throw error
@@ -140,6 +142,30 @@ export class SearchJournal {
       }
     }
     return live
+  }
+
+  cacheEpoch() {
+    return this.db.query<{ value: string }, []>("SELECT value FROM cache_epoch WHERE slot = 1").get()!.value
+  }
+
+  bindCache(identity: string) {
+    this.db.query("UPDATE cache_epoch SET value = ? WHERE slot = 1 AND value != ?").run(identity, identity)
+  }
+
+  cacheLocked<T>(action: () => T): T {
+    this.flushCompleted()
+    return this.db.transaction(action).immediate()
+  }
+
+  replaceCache(action: () => void) {
+    // Invalidation can itself be handling a failed completion. Do not recursively
+    // retry that completion here; its bounded retry remains scheduled.
+    this.db
+      .transaction(() => {
+        this.bindCache(randomUUID())
+        action()
+      })
+      .immediate()
   }
 
   reconcile<T>(key: string, revision: number, apply: () => T): T | undefined {

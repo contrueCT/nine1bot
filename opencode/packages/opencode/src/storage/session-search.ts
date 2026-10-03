@@ -1,4 +1,6 @@
 import { Database } from "bun:sqlite"
+import fs from "node:fs"
+import { randomUUID } from "node:crypto"
 import { SearchJournal } from "./search-journal"
 import type { Session } from "../session"
 
@@ -26,23 +28,34 @@ export namespace SessionSearch {
     return `${start ? "…" : ""}${text.slice(start, end).replace(/\s+/g, " ")}${end < text.length ? "…" : ""}`
   }
 
+  export class StaleIndexError extends Error {
+    constructor() {
+      super("Session search cache was replaced; retry on its current owner")
+      this.name = "StaleIndexError"
+    }
+  }
+
   export class Index {
     private db!: Database
     private journal: SearchJournal
     private ownsJournal: boolean
+    private closed = false
+    private epoch = ""
+    private identity?: string
     private backfills = new Map<string, Promise<void>>()
     private recovering?: Promise<void>
 
     constructor(
-      filename: string,
+      private filename: string,
       private source: Source,
       journal?: SearchJournal,
     ) {
       this.journal = journal ?? new SearchJournal(filename === ":memory:" ? ":memory:" : `${filename}.journal`)
       this.ownsJournal = !journal
       try {
-        this.db = new Database(filename, { create: true })
-        this.db.exec(`
+        this.journal.cacheLocked(() => {
+          this.db = new Database(filename, { create: true })
+          this.db.exec(`
         PRAGMA journal_mode = WAL;
         PRAGMA busy_timeout = 5000;
         CREATE TABLE IF NOT EXISTS sessions (
@@ -70,7 +83,15 @@ export namespace SessionSearch {
           INSERT INTO document_fts(rowid, normalized) VALUES (new.id, new.normalized);
         END;
         CREATE TABLE IF NOT EXISTS ready (project_id TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS cache_identity (slot INTEGER PRIMARY KEY CHECK(slot = 1), value TEXT NOT NULL);
       `)
+          this.db.query("INSERT OR IGNORE INTO cache_identity VALUES (1, ?)").run(randomUUID())
+          this.epoch = this.db
+            .query<{ value: string }, []>("SELECT value FROM cache_identity WHERE slot = 1")
+            .get()!.value
+          this.journal.bindCache(this.epoch)
+          this.identity = this.fileIdentity()
+        })
       } catch (error) {
         this.db?.close()
         if (this.ownsJournal) this.journal.close()
@@ -79,8 +100,31 @@ export namespace SessionSearch {
     }
 
     close() {
+      if (this.closed) return
+      this.closed = true
       this.db.close()
       if (this.ownsJournal) this.journal.close()
+    }
+
+    private fileIdentity() {
+      if (this.filename === ":memory:") return ":memory:"
+      const stat = fs.statSync(this.filename, { bigint: true, throwIfNoEntry: false })
+      return stat ? `${stat.dev}:${stat.ino}:${stat.birthtimeNs}` : undefined
+    }
+
+    isCurrent() {
+      // The durable epoch is portable, including filesystems without useful inode
+      // numbers. Physical identity additionally detects direct file replacement.
+      return (
+        !this.closed &&
+        this.identity !== undefined &&
+        this.identity === this.fileIdentity() &&
+        this.epoch === this.journal.cacheEpoch()
+      )
+    }
+
+    private assertCurrent() {
+      if (!this.isCurrent()) throw new StaleIndexError()
     }
 
     begin(key: string[]) {
@@ -98,7 +142,10 @@ export namespace SessionSearch {
       // restored a concurrently recreated record and consumed the prior marker.
       const token = this.journal.begin(key)
       try {
-        this.db.transaction(() => this.apply(key, undefined))()
+        this.journal.cacheLocked(() => {
+          this.assertCurrent()
+          this.db.transaction(() => this.apply(key, undefined))()
+        })
       } finally {
         this.journal.finish(key, token)
       }
@@ -203,10 +250,15 @@ export namespace SessionSearch {
     private async load(key: string[], refreshChildren = false) {
       const serialized = JSON.stringify(key)
       for (;;) {
+        this.assertCurrent()
         const revision = this.journal.version(serialized)
         const value = await this.source.read(key)
-        const applied = this.journal.reconcile(serialized, revision, () =>
-          this.db.transaction(() => {
+        this.assertCurrent()
+        const applied = this.journal.reconcile(serialized, revision, () => {
+          // Validate inside the shared journal lock, BEFORE even beginning a
+          // transaction on the derived connection (which may now be closed/obsolete).
+          this.assertCurrent()
+          return this.db.transaction(() => {
             const existed =
               key[0] === "session"
                 ? this.db.query("SELECT 1 FROM sessions WHERE project_id = ? AND id = ?").get(key[1], key[2])
@@ -215,8 +267,8 @@ export namespace SessionSearch {
                   : true
             this.apply(key, value)
             return { children: refreshChildren || !existed }
-          })(),
-        )
+          })()
+        })
         if (!applied) continue
         // A parent first seen during an active write must not permanently lose
         // already existing descendants merely because they were visited too early.
@@ -243,7 +295,13 @@ export namespace SessionSearch {
     }
 
     private async ensureProject(projectID: string) {
-      if (this.db.query("SELECT 1 FROM ready WHERE project_id = ?").get(projectID)) return
+      if (
+        this.journal.cacheLocked(() => {
+          this.assertCurrent()
+          return this.db.query("SELECT 1 FROM ready WHERE project_id = ?").get(projectID)
+        })
+      )
+        return
       const existing = this.backfills.get(projectID)
       if (existing) return existing
       const backfill = (async () => {
@@ -251,7 +309,10 @@ export namespace SessionSearch {
           if (!relevant(session)) continue
           await this.load(session, true)
         }
-        this.db.query("INSERT OR IGNORE INTO ready VALUES (?)").run(projectID)
+        this.journal.cacheLocked(() => {
+          this.assertCurrent()
+          this.db.query("INSERT OR IGNORE INTO ready VALUES (?)").run(projectID)
+        })
       })().finally(() => {
         this.backfills.delete(projectID)
       })
@@ -263,6 +324,7 @@ export namespace SessionSearch {
       const q = input.q.trim().toLowerCase()
       if (!q) return { results: [], hasMore: false }
       const limit = Math.max(1, Math.min(100, Math.floor(input.limit ?? 50)))
+      this.assertCurrent()
       await this.recover()
       await this.ensureProject(input.projectID)
       await this.recover()
@@ -278,9 +340,11 @@ export namespace SessionSearch {
         input.clientSource ?? null,
         limit + 1,
       ]
-      const rows = this.db
-        .query<Row, (string | number | null)[]>(
-          `
+      const rows = this.journal.cacheLocked(() => {
+        this.assertCurrent()
+        return this.db
+          .query<Row, (string | number | null)[]>(
+            `
         WITH matches AS (
           SELECT s.info, s.id AS session_id, s.updated, d.message_id, d.text,
             row_number() OVER (PARTITION BY s.id ORDER BY d.message_id IS NOT NULL, d.message_id DESC, d.part_id) AS rank
@@ -296,8 +360,9 @@ export namespace SessionSearch {
             AND (? IS NULL OR s.client_source = ?)
         ) SELECT info, message_id, text FROM matches WHERE rank = 1 ORDER BY updated DESC, session_id LIMIT ?
       `,
-        )
-        .all(...bindings)
+          )
+          .all(...bindings)
+      })
       return {
         results: rows.slice(0, limit).map((row) => ({
           session: JSON.parse(row.info),

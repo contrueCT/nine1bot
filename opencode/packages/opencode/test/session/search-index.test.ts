@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
+import fsSync from "node:fs"
+import { SearchJournal } from "../../src/storage/search-journal"
 import os from "node:os"
 import path from "node:path"
 import { SessionSearch } from "../../src/storage/session-search"
@@ -333,4 +335,91 @@ test("a query during an unfinished write cannot consume its crash-recovery marke
   journal.close()
   expect((await f.search("after crash")).results).toHaveLength(1)
   expect((await f.search("before")).results).toEqual([])
+})
+
+test("cache ownership is checked inside journal reconciliation even with unavailable inode identity", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "search-cache-epoch-"))
+  directories.push(dir)
+  const filename = path.join(dir, "search.sqlite")
+  const fileSystem = fsSync as { statSync: typeof fsSync.statSync }
+  const stat = fileSystem.statSync
+  fileSystem.statSync = ((file: any, options: any) =>
+    String(file) === filename
+      ? { dev: 0n, ino: 0n, birthtimeNs: 0n }
+      : (stat as (...values: any[]) => any)(file, options)) as typeof fsSync.statSync
+  const original = SearchJournal.prototype.reconcile
+  let guard: SearchJournal | undefined
+  try {
+    const f = fixture(filename)
+    f.session("session-1")
+    f.message("session-1", "msg-1", "old needle")
+    await f.search("old")
+    const partKey = ["part", "msg-1", "part-msg-1"]
+    f.write(partKey, {
+      id: "part-msg-1",
+      messageID: "msg-1",
+      sessionID: "session-1",
+      type: "text",
+      text: "new current",
+    })
+    guard = new SearchJournal(`${filename}.journal`)
+    let replacement: SessionSearch.Index | undefined
+    let once = true
+    SearchJournal.prototype.reconcile = function (this: SearchJournal, ...args: any[]) {
+      if (once) {
+        once = false
+        // This runs AFTER the reader's post-await/entry guard, before the shared
+        // reconciliation lock. Only the guard inside that lock can catch it.
+        guard!.replaceCache(() => {
+          for (const suffix of ["", "-wal", "-shm"]) fsSync.rmSync(filename + suffix, { force: true })
+        })
+        replacement = new SessionSearch.Index(filename, f.source)
+        indexes.push(replacement)
+      }
+      return (original as (...values: any[]) => any).apply(this, args)
+    } as typeof SearchJournal.prototype.reconcile
+    await expect(f.search("new current")).rejects.toBeInstanceOf(SessionSearch.StaleIndexError)
+    expect(guard.pending()).toEqual([{ key: JSON.stringify(partKey) }])
+    SearchJournal.prototype.reconcile = original
+    expect((await replacement!.search({ projectID: "project", q: "new current" })).results[0].messageID).toBe("msg-1")
+    expect((await replacement!.search({ projectID: "project", q: "old needle" })).results).toEqual([])
+  } finally {
+    SearchJournal.prototype.reconcile = original
+    fileSystem.statSync = stat
+    guard?.close()
+  }
+})
+
+test("an index closed while awaiting canonical IO reports stale ownership and leaves provenance", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "search-closed-owner-"))
+  directories.push(dir)
+  const filename = path.join(dir, "search.sqlite")
+  const f = fixture(filename)
+  f.session("session-1", "old")
+  await f.search("old")
+  f.session("session-1", "new")
+  let release!: () => void
+  let entered!: () => void
+  const paused = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const read = f.source.read
+  f.source.read = async (key) => {
+    const value = await read(key)
+    entered()
+    await gate
+    return value
+  }
+  const pending = f.search("new")
+  await paused
+  f.index.close()
+  release()
+  await expect(pending).rejects.toBeInstanceOf(SessionSearch.StaleIndexError)
+  f.source.read = read
+  const replacement = new SessionSearch.Index(filename, f.source)
+  indexes.push(replacement)
+  expect((await replacement.search({ projectID: "project", q: "new" })).results).toHaveLength(1)
 })

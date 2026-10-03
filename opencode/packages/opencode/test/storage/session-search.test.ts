@@ -61,6 +61,7 @@ for (const scenario of [
   "cache-replacement-storage",
   "cache-rebuild-writer-crash",
   "journal-unavailable-storage",
+  "inflight-cache-replacement",
 ]) {
   test(`canonical reconciliation across processes: ${scenario}`, async () => {
     const root = await fs.mkdtemp(path.join((await import("node:os")).tmpdir(), "search-race-"))
@@ -219,4 +220,35 @@ test("a temporarily failed journal finish retries retirement without retiring an
     another.close()
     inspect.close()
   }
+})
+
+test("repeated cache invalidation during awaited IO uses one bounded retry", async () => {
+  await Storage.write(sessionKey, info)
+  await search()
+  await Storage.write(sessionKey, { ...info, title: "new needle" })
+  const target = path.join(Global.Path.data, "storage", ...sessionKey) + ".json"
+  const original = Bun.file
+  let reads = 0
+  Bun.file = ((...args: any[]) => {
+    const file = (original as (...values: any[]) => any)(...args)
+    if (String(args[0]) === target) {
+      const json = file.json.bind(file)
+      Object.defineProperty(file, "json", {
+        value: async () => {
+          const value = await json()
+          reads++
+          await Storage.rebuildSessionSearch()
+          return value
+        },
+      })
+    }
+    return file
+  }) as typeof Bun.file
+  try {
+    await expect(search()).rejects.toThrow("cache was replaced")
+    expect(reads).toBe(2)
+  } finally {
+    Bun.file = original
+  }
+  expect((await search()).results[0].session.title).toBe("new needle")
 })

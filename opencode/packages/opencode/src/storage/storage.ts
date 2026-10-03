@@ -24,23 +24,18 @@ export namespace Storage {
     return (searchJournal ??= new SearchJournal(journalFilename))
   }
   let searchIndex: SessionSearch.Index | undefined
-  let searchIdentity: string | undefined
 
   function invalidateSearch(error?: unknown) {
-    searchIndex?.close()
-    searchIndex = undefined
-    searchIdentity = undefined
-    for (const suffix of ["", "-wal", "-shm"]) {
-      fsSync.rmSync(searchFilename + suffix, { force: true })
-    }
+    journal().replaceCache(() => {
+      searchIndex?.close()
+      searchIndex = undefined
+      for (const suffix of ["", "-wal", "-shm"]) fsSync.rmSync(searchFilename + suffix, { force: true })
+    })
     if (error) log.warn("rebuilding session search index", { error })
   }
 
   function index() {
-    const stat = fsSync.statSync(searchFilename, { throwIfNoEntry: false })
-    const identity = stat ? `${stat.dev}:${stat.ino}` : undefined
-    if (searchIndex && identity === searchIdentity) return searchIndex
-    // The disposable cache can be removed/replaced while the server is running.
+    if (searchIndex?.isCurrent()) return searchIndex
     searchIndex?.close()
     searchIndex = undefined
     const source: SessionSearch.Source = {
@@ -60,8 +55,6 @@ export namespace Storage {
       invalidateSearch(error)
       searchIndex = new SessionSearch.Index(searchFilename, source, journal())
     }
-    const created = fsSync.statSync(searchFilename)
-    searchIdentity = `${created.dev}:${created.ino}`
     return searchIndex
   }
 
@@ -72,6 +65,11 @@ export namespace Storage {
       journal().finish(key, token)
       if (value === undefined) index().purge(key)
     } catch (error) {
+      if (error instanceof SessionSearch.StaleIndexError) {
+        searchIndex?.close()
+        searchIndex = undefined
+        return
+      }
       try {
         invalidateSearch(error)
       } catch (cleanupError) {
@@ -82,14 +80,26 @@ export namespace Storage {
 
   export async function searchSessions(input: SessionSearch.Query) {
     await state()
-    try {
-      return await index().search(input)
-    } catch (error) {
-      // A corrupt FTS page may only be detected when a query actually reads it.
-      const sqlite = error as { name?: string; errno?: number }
-      if (sqlite.name !== "SQLiteError" || ![1, 11, 26].includes((sqlite.errno ?? 0) & 0xff)) throw error
-      invalidateSearch(error)
-      return index().search(input)
+    for (let attempt = 0; ; attempt++) {
+      let current: SessionSearch.Index | undefined
+      try {
+        current = index()
+        return await current.search(input)
+      } catch (error) {
+        if (error instanceof SessionSearch.StaleIndexError) {
+          // Never delete a replacement cache because an older awaited reader lost ownership.
+          if (searchIndex === current) {
+            searchIndex?.close()
+            searchIndex = undefined
+          }
+          if (attempt === 0) continue
+          throw error
+        }
+        const sqlite = error as { name?: string; errno?: number }
+        if (attempt !== 0 || sqlite.name !== "SQLiteError" || ![1, 11, 26].includes((sqlite.errno ?? 0) & 0xff))
+          throw error
+        invalidateSearch(error)
+      }
     }
   }
 
