@@ -184,3 +184,41 @@ test('mounted composer retries a stopped attempt immediately and ignores the old
   expect(requests[0].requestID).toBe(attempt.id)
   expect(JSON.parse(requests[0].body).parts[0].text).toBe('retry original')
 })
+
+test('mounted composer resumes refreshed uncertainty with a receipt GET and preserves newer text', async () => {
+  const draft = drafts.getComposerDraft('A')
+  draft.text = 'new draft after uncertain send'
+  draft.attempts.push({ id: 'req_refresh', text: 'original', planMode: false, attachments: [], status: 'failed', generation: 0, submitted: true, recoverySessionID: 'A' })
+  let posts = 0
+  let receipts = 0
+  api.sendMessage = async () => { posts++; throw new Error('must not repost') }
+  api.getMessageReceipt = async (sessionID, requestID, directory) => {
+    receipts++
+    expect(directory).toBe('/workspace/A')
+    return { sessionID, requestID, state: 'accepted', messageID: 'msg_original' }
+  }
+  await mountComposer()
+  await new Promise(resolve => setTimeout(resolve, 0)); await Vue.nextTick()
+  expect(receipts).toBe(1)
+  expect(posts).toBe(0)
+  expect(draft.attempts).toHaveLength(0)
+  expect(draft.text).toBe('new draft after uncertain send')
+})
+
+test('mounted composer leaves an unknown refreshed send pending and exposes a receipt-only retry', async () => {
+  const draft = drafts.getComposerDraft('A')
+  draft.attempts.push({ id: 'req_unknown', text: 'original', planMode: false, attachments: [], status: 'failed', generation: 0, submitted: true, recoverySessionID: 'A' })
+  let posts = 0
+  let receipts = 0
+  api.sendMessage = async () => { posts++; throw new Error('must not repost') }
+  api.getMessageReceipt = async (sessionID, requestID) => { receipts++; return { sessionID, requestID, state: 'unknown' } }
+  const { root } = await mountComposer()
+  await new Promise(resolve => setTimeout(resolve, 0)); await Vue.nextTick()
+  expect(draft.attempts).toHaveLength(1)
+  expect(text(root)).toContain('发送结果待确认')
+  button(root, '检查回执').props.onClick()
+  await new Promise(resolve => setTimeout(resolve, 0)); await Vue.nextTick()
+  expect(receipts).toBe(2)
+  expect(posts).toBe(0)
+  expect(draft.attempts).toHaveLength(1)
+})

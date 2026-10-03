@@ -99,6 +99,18 @@ export namespace SessionRequest {
     verify(sessionID, fingerprint, receipt)
     return receipt.state === "accepted" ? receipt : undefined
   }
+  /** Read-only reconciliation: unknown/reserved must never authorize a new send. */
+  export async function inspectClient(sessionID: string, requestID: string) {
+    ID.parse(requestID)
+    const receipt = await readReceipt(requestKey(requestID))
+    if (receipt && receipt.sessionID !== sessionID) {
+      throw requestError("REQUEST_CONFLICT", "Request ID belongs to another session")
+    }
+    if (receipt?.messageID && !safeMessageID(receipt.messageID)) {
+      throw requestError("REQUEST_CORRUPTED", "请求回执的消息标识无效，请检查会话记录。")
+    }
+    return { sessionID, requestID, state: receipt?.state ?? "unknown", ...(receipt?.messageID ? { messageID: receipt.messageID } : {}) }
+  }
   export async function isAccepted(sessionID: string, messageID?: string, requestID?: string) {
     const target = inputKey({ messageID, requestID })
     if (!target) return false

@@ -392,6 +392,7 @@ export interface MessageAttempt {
   model?: { providerID: string; modelID: string }
   submission?: { sessionID: string; request: MessageSubmission }
   submitted?: boolean
+  recoverySessionID?: string
   notificationId?: string
 }
 
@@ -1224,6 +1225,16 @@ export const api = {
     const messages = Array.isArray(data) ? data : data.data
     if (!Array.isArray(messages)) throw new Error('会话历史响应格式无效')
     return messages
+  },
+
+  // Receipt recovery is strictly read-only, including after a refresh.
+  async getMessageReceipt(sessionId: string, requestID: string, directory: string): Promise<{ state: 'unknown' | 'reserved' | 'accepted'; sessionID: string; requestID: string; messageID?: string }> {
+    const url = applyDirectoryToUrl(`${BASE_URL}/nine1bot/agent/sessions/${encodeURIComponent(sessionId)}/requests/${encodeURIComponent(requestID)}`, directory)
+    const response = await requireOk(await fetchWithTimeout(url, { headers: { 'x-opencode-directory': encodeURIComponent(directory) } }, DEFAULT_TIMEOUT, false))
+    const data = await response.json()
+    if (data.sessionID !== sessionId || data.requestID !== requestID || !['unknown', 'reserved', 'accepted'].includes(data.state)
+      || (data.state === 'accepted' && (typeof data.messageID !== 'string' || !data.messageID.startsWith('msg')))) throw new Error('发送回执响应格式无效')
+    return data
   },
 
   // 发送消息。消息流通过 per-session runtime event stream 返回。

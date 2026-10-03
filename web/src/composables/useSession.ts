@@ -469,7 +469,7 @@ export function useSession() {
       setApiDirectory(directory)
       reconnectEventsForDirectory()
       const session = await api.createSession(directory, pageContext)
-      moveComposerDraft(draftKey, session.id)
+      moveComposerDraft(draftKey, session.id, session.directory, directory)
       // 创建请求在途期间用户可能已选择其他会话：新会话照常加入列表，
       // 但不抢占 currentSession、不订阅其事件流
       const ownsDraft = !currentSession.value && isDraftSession.value && composerKey.value === draftKey
@@ -576,6 +576,29 @@ export function useSession() {
     files?: Array<{ type: 'file'; mime: string; filename: string; url: string }>,
     attempt: MessageAttempt = { id: createRequestID() },
   ): Promise<boolean> {
+    // An uncertain original POST is only reconciled via its exact persisted receipt.
+    // Never turn a refresh, missing history, or a recovery click into another POST.
+    if (attempt.submitted) {
+      const sessionID = attempt.submission?.sessionID || attempt.recoverySessionID
+      if (!sessionID || sessionID !== currentSession.value?.id) return false
+      const directory = currentSession.value.directory
+      try {
+        const receipt = await api.getMessageReceipt(sessionID, attempt.id, directory)
+        if (receipt.state !== 'accepted') {
+          if (attempt.notificationId) dismissNotification(attempt.notificationId)
+          attempt.notificationId = pushSessionNotification({ sessionId: sessionID, type: 'error',
+            message: receipt.state === 'reserved' ? '原请求尚未完整确认，请核对会话记录；未重新发送' : '尚未找到原请求回执，请稍后再次检查；未重新发送' })
+          return false
+        }
+        await reconcileCurrentSessionState(sessionID)
+        if (attempt.notificationId) dismissNotification(attempt.notificationId)
+        return true
+      } catch (error: any) {
+        if (attempt.notificationId) dismissNotification(attempt.notificationId)
+        attempt.notificationId = pushSessionNotification({ sessionId: sessionID, type: 'error', message: `回执检查失败，原消息未重新发送: ${error.message || '网络错误'}` })
+        return false
+      }
+    }
     // Lock before the first await, and never reuse a cancelled local operation.
     if (localSends.value.some(send => !send.cancelled && ownsCurrentView(send))) return false
     if (attempt.submission && attempt.submission.sessionID !== currentSession.value?.id) return false
@@ -630,15 +653,14 @@ export function useSession() {
         applyCurrentSessionRuntime({ currentModel: modelResult.currentModel, profileSnapshotId: modelResult.profileSnapshotId })
       }
       if (!isCurrentSend()) return false
-      const replaying = Boolean(attempt.submitted)
       operation.posted = true
       attempt.submitted = true
       setSessionRunning(sessionId, true)
       const sendResult = await api.sendMessage(sessionId, attempt.submission.request)
+      if (sendResult.accepted !== true || sendResult.sessionId !== sessionId) throw new Error('发送回执响应格式无效')
       // Acceptance is authoritative even if display recovery is partial. Keep
       // historyError/retryHistory visible while independently reconciling idle;
       // restoring history must not require posting an accepted message again.
-      if (replaying) await reconcileCurrentSessionState(sessionId)
       if (attempt.notificationId) dismissNotification(attempt.notificationId)
       showContextEnrichmentNotice(sessionId, sendResult.contextEnrichment)
       return true
@@ -647,14 +669,14 @@ export function useSession() {
         await reconcileCurrentSessionState(sessionId)
         // A matching requestID identifies the persisted user message, but is not
         // proof that acceptance/receipt persistence completed. Keep the attempt
-        // until the same request receives a positive acknowledgement on replay.
+        // until its exact persisted receipt confirms acceptance.
         if (!operation.cancelled) {
           if (attempt.notificationId) dismissNotification(attempt.notificationId)
           attempt.notificationId = pushSessionNotification({
             sessionId,
             message: error instanceof SessionBusyError
               ? '该会话正在被其他客户端使用中，请稍后重试或创建新会话'
-              : attempt.submitted ? `发送结果待确认，可安全重试原消息: ${error.message || '网络错误'}` : `发送失败: ${error.message || '未知错误'}`,
+              : attempt.submitted ? `发送结果待确认，请检查原请求回执: ${error.message || '网络错误'}` : `发送失败: ${error.message || '未知错误'}`,
             type: 'error',
           })
         }

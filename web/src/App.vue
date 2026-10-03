@@ -523,12 +523,15 @@ function openCurrentExtensionSessionInMainWeb() {
   }, parentContext.origin)
 }
 
-function stopAuthenticatedRuntime() {
-  if (!authenticatedRuntimeStarted) return
+function stopAuthenticatedRuntime(preserveDrafts = false) {
+  if (!authenticatedRuntimeStarted) {
+    if (!preserveDrafts) clearDrafts()
+    return
+  }
   authenticatedRuntimeStarted = false
   authenticatedRuntimeGeneration++
   unsubscribe()
-  clearDrafts()
+  clearDrafts(undefined, preserveDrafts)
   if (globalEventSource) {
     globalEventSource.close()
     globalEventSource = null
@@ -669,13 +672,15 @@ onMounted(async () => {
   if (allowed) {
     await startAuthenticatedRuntime()
     if (!isBrowserExtension.value) applySettingsDeepLink()
+  } else {
+    clearDrafts()
   }
 })
 
 onUnmounted(() => {
   window.removeEventListener('message', handleExtensionParentMessage)
   clearAccessTransportWarningTimer()
-  stopAuthenticatedRuntime()
+  stopAuthenticatedRuntime(true)
 })
 
 function openSearch() {

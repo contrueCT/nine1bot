@@ -752,6 +752,17 @@ export const Nine1BotAgentRoutes = lazy(() =>
         }
       },
     )
+    .get(
+      "/agent/sessions/:sessionID/requests/:requestID",
+      validator("param", z.object({ sessionID: z.string().regex(/^ses_[A-Za-z0-9_-]+$/), requestID: SessionRequest.ID })),
+      async (c) => {
+        const { sessionID, requestID } = c.req.valid("param")
+        const session = await Session.get(sessionID)
+        if (session.directory !== Instance.directory) throw new HTTPException(404, { message: "Session not found in this directory" })
+        c.header("Cache-Control", "no-store")
+        return c.json(await SessionRequest.inspectClient(sessionID, requestID))
+      },
+    )
     .post(
       "/agent/sessions/:sessionID/messages",
       validator("param", z.object({ sessionID: z.string() })),
