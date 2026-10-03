@@ -5,6 +5,10 @@ import { Database } from "bun:sqlite"
 export class SearchJournal {
   private db: Database
   private writers = new Map<string, string[]>()
+  private completed = new Map<string, { key: string; token?: string }>()
+  private retry?: ReturnType<typeof setTimeout>
+  private retryDelay = 50
+  private closed = false
 
   constructor(filename: string) {
     this.db = new Database(filename, { create: true })
@@ -24,6 +28,8 @@ export class SearchJournal {
   }
 
   close() {
+    this.closed = true
+    if (this.retry) clearTimeout(this.retry)
     this.db.close()
   }
 
@@ -33,6 +39,7 @@ export class SearchJournal {
   }
 
   begin(key: string[]) {
+    this.flushCompleted()
     const serialized = JSON.stringify(key)
     const token = randomUUID()
     this.db
@@ -49,18 +56,52 @@ export class SearchJournal {
 
   finish(key: string[], token?: string) {
     const serialized = JSON.stringify(key)
-    const tokens = this.writers.get(serialized) ?? []
-    const completed = token ?? tokens[0]
-    this.db
-      .transaction(() => {
-        // Fence canonical readers again: completion order is not source-write order.
-        this.dirty(serialized)
-        if (completed) this.db.query("DELETE FROM writers WHERE id = ? AND key = ?").run(completed, serialized)
-      })
-      .immediate()
-    const remaining = tokens.filter((value) => value !== completed)
-    if (remaining.length) this.writers.set(serialized, remaining)
-    else this.writers.delete(serialized)
+    const completed = token ?? this.writers.get(serialized)?.[0]
+    // Record terminal completion before attempting IO. A full/busy journal must
+    // not make the token look active forever after storage recovers.
+    this.completed.set(completed ?? `dirty:${serialized}`, { key: serialized, token: completed })
+    this.flushCompleted()
+  }
+
+  private flushCompleted() {
+    if (!this.completed.size) return
+    const batch = [...this.completed]
+    try {
+      this.db
+        .transaction(() => {
+          for (const [, completion] of batch) {
+            this.dirty(completion.key)
+            if (completion.token)
+              this.db.query("DELETE FROM writers WHERE id = ? AND key = ?").run(completion.token, completion.key)
+          }
+        })
+        .immediate()
+    } catch (error) {
+      // Bounded retries also repair an otherwise idle server. Other processes
+      // retain the durable marker until this exact token is retired.
+      if (!this.retry && !this.closed) {
+        this.retry = setTimeout(() => {
+          this.retry = undefined
+          try {
+            this.flushCompleted()
+          } catch {
+            /* next bounded retry is scheduled */
+          }
+        }, this.retryDelay)
+        this.retry.unref?.()
+        this.retryDelay = Math.min(5000, this.retryDelay * 2)
+      }
+      throw error
+    }
+    for (const [id, completion] of batch) {
+      this.completed.delete(id)
+      const remaining = (this.writers.get(completion.key) ?? []).filter((token) => token !== completion.token)
+      if (remaining.length) this.writers.set(completion.key, remaining)
+      else this.writers.delete(completion.key)
+    }
+    if (this.retry) clearTimeout(this.retry)
+    this.retry = undefined
+    this.retryDelay = 50
   }
 
   version(key: string) {
@@ -71,6 +112,7 @@ export class SearchJournal {
   }
 
   pending() {
+    this.flushCompleted()
     return this.db
       .query<{ key: string }, []>(
         `SELECT key FROM pending
@@ -101,6 +143,7 @@ export class SearchJournal {
   }
 
   reconcile<T>(key: string, revision: number, apply: () => T): T | undefined {
+    this.flushCompleted()
     // The journal lock covers the derived commit and marker cleanup across two DBs.
     // A derived failure leaves provenance intact; rebuilding never erases writers.
     return this.db

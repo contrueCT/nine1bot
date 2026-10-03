@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { Global } from "../../src/global"
 import { Storage } from "../../src/storage/storage"
+import { SearchJournal } from "../../src/storage/search-journal"
 
 const filename = path.join(Global.Path.cache, "session-search-v1.sqlite")
 const projectID = "search-cache-test"
@@ -154,3 +155,68 @@ for (const operation of ["write", "update", "writeAtomic", "remove", "corrupt-re
     }
   })
 }
+
+test("a temporarily failed journal finish retries retirement without retiring another active writer", async () => {
+  await Storage.write(sessionKey, info)
+  await search()
+  const another = new SearchJournal(journalFilename)
+  const activeToken = another.begin(sessionKey)
+  const target = path.join(Global.Path.data, "storage", ...sessionKey) + ".json"
+  const write = Bun.write
+  const query = Database.prototype.query
+  let blocked = false
+  let attempts = 0
+  const inspect = new Database(journalFilename)
+  Database.prototype.query = function (this: Database, sql: any, ...args: any[]) {
+    if (blocked && String(sql) === "DELETE FROM writers WHERE id = ? AND key = ?") {
+      attempts++
+      throw Object.assign(new Error("simulated journal disk full"), { code: "ENOSPC" })
+    }
+    return (query as (...values: any[]) => any).call(this, sql, ...args)
+  } as typeof Database.prototype.query
+  Bun.write = (async (...args: any[]) => {
+    const result = await (write as (...values: any[]) => any)(...args)
+    if (String(args[0]) === target) blocked = true
+    return result
+  }) as typeof Bun.write
+  try {
+    await Storage.write(sessionKey, { ...info, title: "after journal failure needle" })
+    expect(attempts).toBe(1)
+    expect(inspect.query("SELECT id FROM writers WHERE key = ?").all(JSON.stringify(sessionKey))).toHaveLength(2)
+  } finally {
+    Bun.write = write
+    Database.prototype.query = query
+  }
+  try {
+    // The owner is idle: completion recovery must not depend on another write.
+    const deadline = Date.now() + 2000
+    while (inspect.query("SELECT id FROM writers WHERE key = ?").all(JSON.stringify(sessionKey)).length > 1) {
+      if (Date.now() > deadline) throw new Error("Finished writer was not retired after journal recovery")
+      await Bun.sleep(20)
+    }
+    expect(inspect.query("SELECT id FROM writers WHERE key = ?").all(JSON.stringify(sessionKey))).toEqual([
+      { id: activeToken },
+    ])
+    expect((await search()).results[0].session.title).toBe("after journal failure needle")
+    another.finish(sessionKey, activeToken)
+    await search()
+    assertNoWriters()
+    const file = Bun.file
+    let reads = 0
+    Bun.file = ((...args: any[]) => {
+      if (String(args[0]) === target) reads++
+      return (file as (...values: any[]) => any)(...args)
+    }) as typeof Bun.file
+    try {
+      await search()
+      await search()
+      expect(reads).toBe(0)
+    } finally {
+      Bun.file = file
+    }
+  } finally {
+    another.finish(sessionKey, activeToken)
+    another.close()
+    inspect.close()
+  }
+})
