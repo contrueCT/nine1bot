@@ -261,7 +261,7 @@ async function productionRemember(session: Session.Info, controller: AbortContro
 }
 
 test("remember, routes, wrapper and prompts keep the session owner after its first Git commit", async () => {
-  const { owner, rememberedID } = await Instance.provide({ directory: root, fn: async () => {
+  const { owner, rememberedID, sessionID } = await Instance.provide({ directory: root, fn: async () => {
     const session = await Session.createNext({ directory: root, runtimeProfile: emptyProfile() })
     const owner = Instance.project.id
     expect(session.projectID).toBe(owner)
@@ -271,7 +271,7 @@ test("remember, routes, wrapper and prompts keep the session owner after its fir
       cwd: root, stdout: "pipe", stderr: "pipe",
     })
     expect(await commit.exited).toBe(0)
-    expect((await Project.fromDirectory(root)).project.id).not.toBe(owner)
+    expect((await Project.fromDirectory(root)).project.id).toBe(owner)
     expect(Instance.project.id).toBe(owner)
     const execute = await productionRemember(session, new AbortController())
     const saved = execute("same session remembered sentinel")
@@ -291,11 +291,12 @@ test("remember, routes, wrapper and prompts keep the session owner after its fir
     expect(prompt).toContain("same session remembered sentinel")
     expect(prompt).toContain("same session wrapper sentinel")
     expect((await Session.get(session.id)).projectID).toBe(owner)
-    return { owner, rememberedID }
+    return { owner, rememberedID, sessionID: session.id }
   } })
   await Instance.disposeAll()
   await Instance.provide({ directory: root, fn: async () => {
     expect(Instance.project.id).not.toBe(owner)
+    expect((await Session.get(sessionID)).projectID).toBe(Instance.project.id)
     const app = new Hono().route("/preferences", PreferencesRoutes())
     const state = await (await app.request("/preferences")).json()
     expect(state.project).toEqual([])

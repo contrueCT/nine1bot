@@ -326,7 +326,11 @@ function validateDeprecatedBrowserConfig(config: Partial<Nine1BotConfig>): void 
  * @param customConfigPath 可选的自定义配置文件路径
  * @param sourceOverride Pending source edit validated with startup merge/env semantics.
  */
-export async function loadConfig(customConfigPath?: string, sourceOverride?: Record<string, unknown>): Promise<Nine1BotConfig> {
+export async function loadConfigDocument(
+  customConfigPath?: string,
+  sourceOverride?: Record<string, unknown>,
+  options: { globalConfigPath?: string; strictGlobalConfig?: boolean } = {},
+): Promise<Partial<Nine1BotConfig>> {
   let result: Partial<Nine1BotConfig> = {}
   const projectConfigPath = customConfigPath || await findConfigPath()
   let projectConfig: Partial<Nine1BotConfig> = {}
@@ -352,12 +356,13 @@ export async function loadConfig(customConfigPath?: string, sourceOverride?: Rec
   const skipGlobalConfig = Boolean(projectConfig.isolation?.disableGlobalConfig)
 
   // 1. 加载全局配置
-  const globalConfigPath = getGlobalConfigPath()
+  const globalConfigPath = options.globalConfigPath ?? getGlobalConfigPath()
   if (!skipGlobalConfig && await fileExists(globalConfigPath)) {
     try {
       const globalConfig = await loadConfigFile(globalConfigPath)
       result = deepMerge(result, globalConfig)
     } catch (error) {
+      if (options.strictGlobalConfig) throw error
       console.warn(`Warning: Failed to load global config from ${globalConfigPath}:`, error)
     }
   }
@@ -366,6 +371,19 @@ export async function loadConfig(customConfigPath?: string, sourceOverride?: Rec
   if (projectConfigPath) {
     result = deepMerge(result, projectConfig)
   }
+
+  // A source-level null masks an inherited platform setting. Resolve these
+  // tombstones before startup as well as runtime platform config reads.
+  for (const entry of Object.values(result.platforms ?? {})) {
+    if (!entry?.settings || typeof entry.settings !== 'object' || Array.isArray(entry.settings)) continue
+    entry.settings = Object.fromEntries(Object.entries(entry.settings).filter(([, value]) => value !== null))
+  }
+
+  return result
+}
+
+export async function loadConfig(customConfigPath?: string, sourceOverride?: Record<string, unknown>): Promise<Nine1BotConfig> {
+  const result = await loadConfigDocument(customConfigPath, sourceOverride)
 
   // 验证并返回最终配置
   try {

@@ -246,7 +246,7 @@ function handleOverlayClick(e: MouseEvent) {
           :loading="loadingProviders"
           :importing="importingAuth"
           :importResult="authImportResult"
-          @oauth="id => runAction(() => startOAuth(id), '已打开授权页面')"
+          @oauth="(id, methodIndex) => runAction(() => startOAuth(id, methodIndex), '认证已完成')"
           @set-api-key="setApiKey"
           @remove="removeAuth"
           @import-opencode="() => runAction(importAuthFromOpencode, '认证导入完成')"

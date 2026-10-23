@@ -7,6 +7,7 @@ import { Instance } from "@/project/instance"
 import { RuntimeResourceResolver } from "@/runtime/resource/resolver"
 import { RuntimeToolCatalog } from "@/runtime/tool/catalog"
 import { ToolRegistry } from "@/tool/registry"
+import { Lock } from "@/util/lock"
 import {
   getBuiltinPlatformManager,
 } from "../../../../../../packages/nine1bot/src/platform/builtin"
@@ -104,6 +105,7 @@ function isExposureDenied(toolID: string, ruleset: PermissionNext.Ruleset) {
 export const Nine1BotPlatformRoutes = () =>
   new Hono()
     .get("/", async (c) => {
+      using lock = await Lock.write("nine1bot.platform-config")
       try {
         const manager = await syncManagerFromConfig()
         return c.json({
@@ -114,6 +116,7 @@ export const Nine1BotPlatformRoutes = () =>
       }
     })
     .get("/tools", async (c) => {
+      using lock = await Lock.write("nine1bot.platform-config")
       try {
         await syncManagerFromConfig()
         const parsed = ToolCatalogQuerySchema.safeParse({
@@ -182,6 +185,7 @@ export const Nine1BotPlatformRoutes = () =>
       }
     })
     .get("/:id", async (c) => {
+      using lock = await Lock.write("nine1bot.platform-config")
       try {
         const manager = await syncManagerFromConfig()
         await manager.refreshStatus(c.req.param("id"))
@@ -193,6 +197,7 @@ export const Nine1BotPlatformRoutes = () =>
       }
     })
     .patch("/:id", async (c) => {
+      using lock = await Lock.write("nine1bot.platform-config")
       let previousConfig
       try {
         previousConfig = await readPlatformManagerConfig()
@@ -209,7 +214,7 @@ export const Nine1BotPlatformRoutes = () =>
 
         await manager.updateConfig(c.req.param("id"), parsed.data as PlatformConfigPatch)
         const nextConfig = manager.configSnapshot()
-        await writePlatformManagerConfig(nextConfig)
+        await writePlatformManagerConfig(nextConfig, undefined, previousConfig)
 
         const detail = await manager.getDetail(c.req.param("id"))
         if (!detail) throw new PlatformNotFoundError(c.req.param("id"))
@@ -224,6 +229,7 @@ export const Nine1BotPlatformRoutes = () =>
       }
     })
     .post("/:id/health", async (c) => {
+      using lock = await Lock.write("nine1bot.platform-config")
       try {
         const manager = getBuiltinPlatformManager()
         const runtimeStatus = await manager.refreshStatus(c.req.param("id"))
@@ -237,6 +243,7 @@ export const Nine1BotPlatformRoutes = () =>
       }
     })
     .post("/:id/actions/:actionId", async (c) => {
+      using lock = await Lock.write("nine1bot.platform-config")
       let previousConfig
       try {
         const parsed = PlatformActionBodySchema.safeParse(await parseJson(c))
@@ -249,11 +256,11 @@ export const Nine1BotPlatformRoutes = () =>
           }, 400)
         }
 
-        const manager = getBuiltinPlatformManager()
+        const manager = await syncManagerFromConfig()
         previousConfig = manager.configSnapshot()
         const result = await manager.executeAction(c.req.param("id"), c.req.param("actionId"), parsed.data)
         if (result.updatedSettings !== undefined) {
-          await writePlatformManagerConfig(manager.configSnapshot())
+          await writePlatformManagerConfig(manager.configSnapshot(), undefined, previousConfig)
         }
         return c.json(result)
       } catch (error) {

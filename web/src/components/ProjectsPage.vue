@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { Plus, Search, FolderOpen, Clock, ArrowLeft, MessageSquare, Save, Pencil, Check, X, Folder, Trash2, Globe, EllipsisVertical, Upload } from 'lucide-vue-next'
 import { projectApi, type Session, type ProjectEnvironmentResponse, type ProjectSharedFile } from '../api/client'
 import type { ProjectInfo } from './Sidebar.vue'
@@ -53,7 +53,9 @@ const instructions = ref('')
 const isSaving = ref(false)
 const sessions = ref<Session[]>([])
 const isLoadingSessions = ref(false)
+const sessionsError = ref('')
 const environment = ref<ProjectEnvironmentResponse>({ keys: [], variables: {} })
+const isLoadingEnvironment = ref(false)
 const envKey = ref('')
 const envValue = ref('')
 const envError = ref('')
@@ -61,7 +63,25 @@ const isSavingEnv = ref(false)
 const sharedFiles = ref<ProjectSharedFile[]>([])
 const isLoadingSharedFiles = ref(false)
 const isUploadingSharedFile = ref(false)
+const deletingSharedFile = ref('')
+const sharedFileError = ref('')
+const sharedFileNotice = ref('')
 const sharedFileInput = ref<HTMLInputElement | null>(null)
+let projectGeneration = 0
+let sessionsRequest = 0
+let environmentRequest = 0
+let sharedFilesRequest = 0
+let disposed = false
+
+function ownsProject(projectId: string, generation: number) {
+  return !disposed && generation === projectGeneration && props.currentProject?.id === projectId
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? `${fallback}：${error.message}` : fallback
+}
+
+onUnmounted(() => { disposed = true })
 
 const filteredProjects = computed(() => {
   if (!searchQuery.value.trim()) return props.projects
@@ -76,7 +96,31 @@ const filteredProjects = computed(() => {
 // Watch current project changes for detail view
 watch(
   () => props.currentProject,
-  async (project) => {
+  async (project, previous) => {
+    if (project?.id !== previous?.id) {
+      projectGeneration++
+      sessions.value = []
+      environment.value = { keys: [], variables: {} }
+      sharedFiles.value = []
+      sessionsError.value = ''
+      envError.value = ''
+      sharedFileError.value = ''
+      sharedFileNotice.value = ''
+      envKey.value = ''
+      envValue.value = ''
+      isLoadingSessions.value = false
+      isLoadingEnvironment.value = false
+      isLoadingSharedFiles.value = false
+      isSaving.value = false
+      isSavingEnv.value = false
+      isUploadingSharedFile.value = false
+      deletingSharedFile.value = ''
+      isEditingName.value = false
+      showDeleteConfirm.value = false
+      sessionContextMenu.value = null
+      deletingSession.value = null
+      isRenamingSession.value = null
+    }
     if (!project) {
       instructions.value = ''
       editName.value = ''
@@ -90,7 +134,7 @@ watch(
     editName.value = project.name || ''
     await Promise.all([loadSessions(project.id), loadEnvironment(project.id), loadSharedFiles(project.id)])
   },
-  { immediate: true },
+  { immediate: true, flush: 'sync' },
 )
 
 watch(
@@ -105,35 +149,50 @@ watch(
 )
 
 async function loadSessions(projectId: string) {
+  const generation = projectGeneration
+  const request = ++sessionsRequest
+  const current = () => request === sessionsRequest && ownsProject(projectId, generation)
   isLoadingSessions.value = true
+  sessionsError.value = ''
   try {
-    sessions.value = await projectApi.sessions(projectId, { roots: true })
+    const result = await projectApi.sessions(projectId, { roots: true })
+    if (current()) sessions.value = result
   } catch (error) {
-    console.error('Failed to load project sessions:', error)
-    sessions.value = []
+    if (current()) sessionsError.value = errorMessage(error, '加载会话失败')
   } finally {
-    isLoadingSessions.value = false
+    if (current()) isLoadingSessions.value = false
   }
 }
 
 async function loadEnvironment(projectId: string) {
+  const generation = projectGeneration
+  const request = ++environmentRequest
+  const current = () => request === environmentRequest && ownsProject(projectId, generation)
+  isLoadingEnvironment.value = true
+  envError.value = ''
   try {
-    environment.value = await projectApi.getEnvironment(projectId)
+    const result = await projectApi.getEnvironment(projectId)
+    if (current()) environment.value = result
   } catch (error) {
-    console.error('Failed to load project environment:', error)
-    environment.value = { keys: [], variables: {} }
+    if (current()) envError.value = errorMessage(error, '加载环境变量失败')
+  } finally {
+    if (current()) isLoadingEnvironment.value = false
   }
 }
 
 async function loadSharedFiles(projectId: string) {
+  const generation = projectGeneration
+  const request = ++sharedFilesRequest
+  const current = () => request === sharedFilesRequest && ownsProject(projectId, generation)
   isLoadingSharedFiles.value = true
+  sharedFileError.value = ''
   try {
-    sharedFiles.value = await projectApi.listSharedFiles(projectId)
+    const result = await projectApi.listSharedFiles(projectId)
+    if (current()) sharedFiles.value = result
   } catch (error) {
-    console.error('Failed to load shared files:', error)
-    sharedFiles.value = []
+    if (current()) sharedFileError.value = errorMessage(error, '加载共享文件失败')
   } finally {
-    isLoadingSharedFiles.value = false
+    if (current()) isLoadingSharedFiles.value = false
   }
 }
 
@@ -178,16 +237,20 @@ function saveName() {
 }
 
 async function saveInstructions() {
-  if (!props.currentProject) return
+  if (!props.currentProject || isSaving.value) return
+  const projectId = props.currentProject.id
+  const generation = projectGeneration
   isSaving.value = true
   // 保存状态由父级处理完成后通过回调复位，不再用固定时长假状态
-  emit('updateProject', props.currentProject.id, { instructions: instructions.value }, () => {
-    isSaving.value = false
+  emit('updateProject', projectId, { instructions: instructions.value }, () => {
+    if (ownsProject(projectId, generation)) isSaving.value = false
   })
 }
 
 async function saveEnvironmentVariable() {
-  if (!props.currentProject) return
+  if (!props.currentProject || isSavingEnv.value) return
+  const projectId = props.currentProject.id
+  const generation = projectGeneration
 
   const key = envKey.value.trim().toUpperCase()
   const value = envValue.value
@@ -200,25 +263,31 @@ async function saveEnvironmentVariable() {
 
   isSavingEnv.value = true
   try {
-    await projectApi.setEnvironmentKey(props.currentProject.id, key, value)
+    await projectApi.setEnvironmentKey(projectId, key, value)
+    if (!ownsProject(projectId, generation)) return
     envKey.value = ''
     envValue.value = ''
-    await loadEnvironment(props.currentProject.id)
+    await loadEnvironment(projectId)
   } catch (error) {
-    console.error('Failed to save environment variable:', error)
-    envError.value = '保存变量失败'
+    if (ownsProject(projectId, generation)) envError.value = errorMessage(error, '保存变量失败')
   } finally {
-    isSavingEnv.value = false
+    if (ownsProject(projectId, generation)) isSavingEnv.value = false
   }
 }
 
 async function deleteEnvironmentVariable(key: string) {
-  if (!props.currentProject) return
+  if (!props.currentProject || isSavingEnv.value || isLoadingEnvironment.value || !environment.value.keys.includes(key)) return
+  const projectId = props.currentProject.id
+  const generation = projectGeneration
+  isSavingEnv.value = true
+  envError.value = ''
   try {
-    await projectApi.deleteEnvironmentKey(props.currentProject.id, key)
-    await loadEnvironment(props.currentProject.id)
+    await projectApi.deleteEnvironmentKey(projectId, key)
+    if (ownsProject(projectId, generation)) await loadEnvironment(projectId)
   } catch (error) {
-    console.error('Failed to delete environment variable:', error)
+    if (ownsProject(projectId, generation)) envError.value = errorMessage(error, '删除变量失败')
+  } finally {
+    if (ownsProject(projectId, generation)) isSavingEnv.value = false
   }
 }
 
@@ -229,44 +298,73 @@ function triggerSharedFileUpload() {
 async function onSharedFilePicked(event: Event) {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
-  if (!file || !props.currentProject) return
+  if (!file || !props.currentProject || isUploadingSharedFile.value) return
+  const projectId = props.currentProject.id
+  const generation = projectGeneration
 
   const reader = new FileReader()
   isUploadingSharedFile.value = true
+  sharedFileError.value = ''
+  sharedFileNotice.value = ''
+
+  function finish() {
+    if (ownsProject(projectId, generation)) isUploadingSharedFile.value = false
+    target.value = ''
+  }
 
   reader.onload = async () => {
     try {
       const url = String(reader.result || '')
       if (!url.startsWith('data:')) throw new Error('Invalid file payload')
-      await projectApi.uploadSharedFile(props.currentProject!.id, {
+      await projectApi.uploadSharedFile(projectId, {
         filename: file.name,
         url,
         mime: file.type || undefined,
       })
-      await loadSharedFiles(props.currentProject!.id)
+      if (ownsProject(projectId, generation)) {
+        sharedFileNotice.value = `${file.name} 已上传。`
+        await loadSharedFiles(projectId)
+      }
     } catch (error) {
-      console.error('Failed to upload shared file:', error)
+      if (ownsProject(projectId, generation)) sharedFileError.value = errorMessage(error, '上传共享文件失败')
     } finally {
-      isUploadingSharedFile.value = false
-      target.value = ''
+      finish()
     }
   }
 
   reader.onerror = () => {
-    isUploadingSharedFile.value = false
-    target.value = ''
+    if (ownsProject(projectId, generation)) sharedFileError.value = '读取文件失败，请重新选择文件。'
+    finish()
   }
-
-  reader.readAsDataURL(file)
+  reader.onabort = () => {
+    if (ownsProject(projectId, generation)) sharedFileError.value = '文件读取已取消，请重新选择文件。'
+    finish()
+  }
+  try {
+    reader.readAsDataURL(file)
+  } catch (error) {
+    if (ownsProject(projectId, generation)) sharedFileError.value = errorMessage(error, '读取文件失败')
+    finish()
+  }
 }
 
 async function deleteSharedFile(relativePath: string) {
-  if (!props.currentProject) return
+  if (!props.currentProject || deletingSharedFile.value || isLoadingSharedFiles.value || !sharedFiles.value.some(file => file.relativePath === relativePath)) return
+  const projectId = props.currentProject.id
+  const generation = projectGeneration
+  deletingSharedFile.value = relativePath
+  sharedFileError.value = ''
+  sharedFileNotice.value = ''
   try {
-    await projectApi.deleteSharedFile(props.currentProject.id, relativePath)
-    await loadSharedFiles(props.currentProject.id)
+    await projectApi.deleteSharedFile(projectId, relativePath)
+    if (ownsProject(projectId, generation)) {
+      sharedFileNotice.value = `${relativePath} 已删除。`
+      await loadSharedFiles(projectId)
+    }
   } catch (error) {
-    console.error('Failed to delete shared file:', error)
+    if (ownsProject(projectId, generation)) sharedFileError.value = errorMessage(error, '删除共享文件失败')
+  } finally {
+    if (ownsProject(projectId, generation)) deletingSharedFile.value = ''
   }
 }
 
@@ -447,7 +545,9 @@ function confirmDeleteSession() {
           <div v-if="isLoadingSessions" class="sessions-loading">
             正在加载会话...
           </div>
-
+          <div v-else-if="sessionsError" class="env-error" role="alert">
+            {{ sessionsError }} <button class="btn btn-ghost btn-sm" @click="loadSessions(currentProject.id)">重试</button>
+          </div>
           <div v-else-if="sessions.length === 0" class="sessions-empty">
             该项目下暂无会话，创建一个开始使用。
           </div>
@@ -516,23 +616,24 @@ function confirmDeleteSession() {
           </div>
           <p class="project-section-desc">变量值仅用于执行，提示词中只会包含变量名。</p>
           <div class="env-form">
-            <input v-model="envKey" class="dialog-input" placeholder="KEY_NAME" />
-            <input v-model="envValue" class="dialog-input" placeholder="变量值" />
+            <input v-model="envKey" class="dialog-input" placeholder="KEY_NAME" :disabled="isSavingEnv" />
+            <input v-model="envValue" class="dialog-input" placeholder="变量值" :disabled="isSavingEnv" />
             <button class="btn btn-primary btn-sm" @click="saveEnvironmentVariable" :disabled="isSavingEnv">
               <Plus :size="14" />
               <span>{{ isSavingEnv ? '保存中...' : '设置' }}</span>
             </button>
           </div>
-          <p v-if="envError" class="env-error">{{ envError }}</p>
+          <p v-if="envError" class="env-error" role="alert">{{ envError }} <button class="btn btn-ghost btn-sm" :disabled="isLoadingEnvironment || isSavingEnv" @click="loadEnvironment(currentProject.id)">重新加载</button></p>
 
-          <div v-if="environment.keys.length === 0" class="sessions-empty">
+          <div v-if="isLoadingEnvironment" class="sessions-loading">正在加载环境变量...</div>
+          <div v-else-if="!envError && environment.keys.length === 0" class="sessions-empty">
             尚未配置环境变量。
           </div>
           <div v-else class="shared-files-list">
             <div v-for="key in environment.keys" :key="key" class="shared-file-row">
               <span class="shared-file-name">{{ key }}</span>
               <span class="shared-file-meta">已配置</span>
-              <button class="session-action-btn danger" @click="deleteEnvironmentVariable(key)">
+              <button class="session-action-btn danger" :disabled="isSavingEnv" @click="deleteEnvironmentVariable(key)">
                 <Trash2 :size="14" />
               </button>
             </div>
@@ -549,14 +650,16 @@ function confirmDeleteSession() {
           </div>
           <p class="project-section-desc">存储在 <code>.nine1bot/projectfiles</code> 目录下。</p>
           <input ref="sharedFileInput" type="file" style="display: none" @change="onSharedFilePicked" />
+          <p v-if="sharedFileError" class="env-error" role="alert">{{ sharedFileError }} <button class="btn btn-ghost btn-sm" :disabled="isLoadingSharedFiles" @click="loadSharedFiles(currentProject.id)">重新加载</button></p>
+          <p v-if="sharedFileNotice" role="status">{{ sharedFileNotice }}</p>
 
           <div v-if="isLoadingSharedFiles" class="sessions-loading">正在加载共享文件...</div>
-          <div v-else-if="sharedFiles.length === 0" class="sessions-empty">暂无共享文件。</div>
+          <div v-else-if="!sharedFileError && sharedFiles.length === 0" class="sessions-empty">暂无共享文件。</div>
           <div v-else class="shared-files-list">
             <div v-for="file in sharedFiles" :key="file.relativePath" class="shared-file-row">
               <span class="shared-file-name">{{ file.relativePath }}</span>
               <span class="shared-file-meta">{{ formatBytes(file.size) }}</span>
-              <button class="session-action-btn danger" @click="deleteSharedFile(file.relativePath)">
+              <button class="session-action-btn danger" :disabled="Boolean(deletingSharedFile)" @click="deleteSharedFile(file.relativePath)">
                 <Trash2 :size="14" />
               </button>
             </div>

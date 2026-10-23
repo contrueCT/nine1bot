@@ -7,6 +7,7 @@ import { X, FileDown, File, Eye } from 'lucide-vue-next'
 import { useFilePreview } from '../composables/useFilePreview'
 import { formatDuration, formatMessageTime } from '../utils/time-format'
 import { buildAgentTimeline } from '../utils/agent-timeline'
+import { resolveFileUrl } from '../utils/file-url'
 
 const props = defineProps<{
   searchMessageId?: string
@@ -37,13 +38,6 @@ const completedTime = computed(() => (!props.isStreaming && lastCompleted.value 
 
 function isImageFile(part: MessagePart): boolean {
   return ((part as any).mime || '').startsWith('image/')
-}
-
-function resolveFileUrl(url: string): string {
-  if (url.startsWith('file://')) {
-    return `/file/upload?path=${encodeURIComponent(url.slice(7))}`
-  }
-  return url
 }
 
 const previewImageUrl = ref<string | null>(null)
@@ -97,12 +91,8 @@ const previewTools = computed<PreviewMeta[]>(() => {
 })
 
 function downloadAttachment(att: FilePart) {
-  let url = att.url
-  if (url.startsWith('file://')) {
-    url = `/file/download?path=${encodeURIComponent(url.slice(7))}`
-  }
   const a = document.createElement('a')
-  a.href = url
+  a.href = resolveFileUrl(att.url, 'download', att.filename)
   a.download = att.filename || 'download'
   document.body.appendChild(a)
   a.click()
@@ -151,12 +141,12 @@ async function openPreview(meta: PreviewMeta, idx: number) {
         <div v-else class="file-attachment">
           <img
             v-if="isImageFile(item.part)"
-            :src="resolveFileUrl((item.part as any).url)"
+            :src="resolveFileUrl((item.part as any).url, 'upload', (item.part as any).filename)"
             :alt="(item.part as any).filename || 'image'"
             class="uploaded-image"
-            @click="previewImageUrl = resolveFileUrl((item.part as any).url)"
+            @click="previewImageUrl = resolveFileUrl((item.part as any).url, 'upload', (item.part as any).filename)"
           />
-          <a v-else :href="resolveFileUrl((item.part as any).url)" target="_blank" class="file-badge">
+          <a v-else :href="resolveFileUrl((item.part as any).url, 'upload', (item.part as any).filename)" target="_blank" class="file-badge">
             <File :size="18" class="file-icon" />
             <span class="file-name">{{ (item.part as any).filename || '文件' }}</span>
           </a>

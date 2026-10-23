@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import * as Vue from 'vue'
 import { compileScript, parse } from 'vue/compiler-sfc'
-import { api, permissionApi, questionApi, type MessageSubmission } from '../src/api/client'
+import { api, permissionApi, questionApi, SessionBusyError, type MessageSubmission } from '../src/api/client'
 import { useSession } from '../src/composables/useSession'
 import * as drafts from '../src/composables/composer-drafts'
 import { draftStorageKey } from '../src/composables/draft-storage'
@@ -61,19 +61,22 @@ async function mountComposer() {
     .replace('export default', 'return')
   const InputBox = new Function('Vue', 'drafts', 'icons', compiled)(Vue, drafts, icons)
   const sends: Promise<boolean>[] = []
+  let compressions = 0
   let aborting: Promise<void> | undefined
   const root = node('root')
   app = renderer.createApp({ render: () => Vue.h(InputBox, {
     disabled: false, draftKey: active.composerKey.value, directory: active.currentDirectory.value, isStreaming: active.isStreaming.value,
+    isSummarizing: active.isSummarizing.value,
     onSend(content: string, files: any, _plan: boolean, onResult: (success: boolean) => void, attempt: drafts.SendAttempt) {
       const sending = active.sendMessage(content, { providerID: 'p', modelID: 'slow' }, files, attempt)
       sends.push(sending)
       void sending.then(onResult)
     },
     onAbort() { aborting = active.abortCurrentSession() },
+    onCompressSession() { compressions++ },
   }) })
   app.mount(root)
-  return { root, sends, stop: async () => { button(root, '停止').props.onClick(); await aborting; await Vue.nextTick() } }
+  return { root, sends, get compressions() { return compressions }, stop: async () => { button(root, '停止').props.onClick(); await aborting; await Vue.nextTick() } }
 }
 
 beforeEach(async () => {
@@ -98,6 +101,21 @@ afterEach(() => {
   useParallelSessions().clearSession('A')
   for (const [object, methods] of originals) Object.assign(object, methods)
   Object.assign(globalThis, globals)
+})
+
+test('the composer disables compression while its session is running', async () => {
+  useParallelSessions().setSessionRunning('A', true)
+  const mounted = await mountComposer()
+  button(mounted.root, '添加文件和更多功能').props.onClick({ stopPropagation() {} })
+  await Vue.nextTick()
+  expect(button(mounted.root, '压缩会话').props.disabled).toBe(true)
+  button(mounted.root, '压缩会话').props.onClick()
+  expect(mounted.compressions).toBe(0)
+  useParallelSessions().setSessionRunning('A', false)
+  await Vue.nextTick()
+  expect(button(mounted.root, '压缩会话').props.disabled).toBe(false)
+  button(mounted.root, '压缩会话').props.onClick()
+  expect(mounted.compressions).toBe(1)
 })
 
 test('mounted composer can send replacement text immediately after Stop while the old model request is unresolved', async () => {
@@ -184,6 +202,41 @@ test('mounted composer retries a stopped attempt immediately and ignores the old
   expect(requests).toHaveLength(1)
   expect(requests[0].requestID).toBe(attempt.id)
   expect(JSON.parse(requests[0].body).parts[0].text).toBe('retry original')
+})
+
+for (const action of ['retry', 'edit'] as const) test(`mounted composer can ${action} a definitively rejected busy request`, async () => {
+  api.changeSessionModel = async () => ({ sessionId: 'A', currentModel: { providerID: 'p', modelID: 'slow' } })
+  const requests: MessageSubmission[] = []
+  api.sendMessage = async (_id, submission) => {
+    requests.push(submission as MessageSubmission)
+    if (requests.length === 1) throw new SessionBusyError('A')
+    return { accepted: true, sessionId: 'A' }
+  }
+  let receipts = 0
+  api.getMessageReceipt = async () => { receipts++; throw new Error('Rejected requests have no accepted receipt') }
+  const mounted = await mountComposer()
+  const draft = drafts.getComposerDraft('A')
+  draft.text = 'original busy text'
+  await Vue.nextTick()
+  button(mounted.root, '发送').props.onClick()
+  expect(await mounted.sends[0]).toBe(false)
+  await Vue.nextTick()
+  expect(draft.attempts[0].submitted).toBe(false)
+  expect(button(mounted.root, '重试').props.disabled).toBe(false)
+  expect(text(mounted.root)).not.toContain('检查回执')
+  if (action === 'edit') {
+    button(mounted.root, '编辑').props.onClick()
+    expect(draft.text).toBe('original busy text')
+    expect(draft.attempts).toHaveLength(0)
+  } else {
+    button(mounted.root, '重试').props.onClick()
+    expect(await mounted.sends[1]).toBe(true)
+    await Vue.nextTick()
+    expect(draft.attempts).toHaveLength(0)
+    expect(requests).toHaveLength(2)
+    expect(requests[1]).toEqual(requests[0])
+  }
+  expect(receipts).toBe(0)
 })
 
 test('mounted composer resumes refreshed uncertainty with a receipt GET and preserves newer text', async () => {

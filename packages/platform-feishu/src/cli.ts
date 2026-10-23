@@ -198,14 +198,13 @@ export function runFeishuCli(
       windowsHide: true,
       shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(command),
     }, (error, stdout, stderr) => {
-      const errorRecord = error && typeof error === 'object' ? error as Record<string, unknown> : undefined
-      const code = errorRecord?.code
+      const code = error?.code
       const exitCode = typeof code === 'number' ? code : error ? 1 : 0
       resolve({
         exitCode,
         stdout: String(stdout ?? ''),
         stderr: String(stderr ?? ''),
-        timedOut: Boolean(errorRecord?.killed) || code === 'ETIMEDOUT',
+        timedOut: Boolean(error?.killed) || code === 'ETIMEDOUT',
       })
     })
   })

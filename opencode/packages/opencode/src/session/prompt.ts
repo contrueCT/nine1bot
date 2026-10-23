@@ -62,6 +62,7 @@ import { PlatformToolAssembly } from "@/runtime/tool/assembly"
 import { RuntimeControllerEvents } from "@/runtime/controller/events"
 import { RunLease } from "./run-lease"
 import { SessionRequest } from "./request"
+import { SessionUploads } from "./uploads"
 import { RuntimeMetricsEvents } from "@/runtime/metrics/events"
 
 // @ts-ignore
@@ -92,59 +93,16 @@ export namespace SessionPrompt {
     }
   }
 
-  function sanitizeUploadFilename(filename?: string) {
-    const basename = path.basename((filename || "").replace(/\0/g, "")).trim()
-    const cleaned = basename
-      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
-      .replace(/[. ]+$/g, "")
-    return cleaned || `upload-${Date.now()}`
-  }
-
-  async function pathExists(target: string) {
-    try {
-      await fs.stat(target)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  async function createManagedUploadTarget(session: Session.Info, filename?: string) {
-    const uploadsDir = Session.uploadsDirectory(session)
-    await fs.mkdir(uploadsDir, { recursive: true })
-
-    const initialName = sanitizeUploadFilename(filename)
-    const parsed = path.parse(initialName)
-    const ext = parsed.ext
-    const baseName = parsed.name || "upload"
-
-    let attempt = 0
-    let resolvedName = initialName
-    let uploadFilePath = path.join(uploadsDir, resolvedName)
-
-    while (await pathExists(uploadFilePath)) {
-      attempt += 1
-      resolvedName = `${baseName}-${attempt}${ext}`
-      uploadFilePath = path.join(uploadsDir, resolvedName)
-    }
-
-    const tempFilePath = path.join(
-      uploadsDir,
-      `.${baseName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}.part`,
-    )
-
-    return {
-      filename: resolvedName,
-      uploadFilePath,
-      tempFilePath,
-    }
-  }
-
   async function writeManagedUpload(session: Session.Info, filename: string | undefined, content: Buffer) {
-    const target = await createManagedUploadTarget(session, filename)
-    await fs.writeFile(target.tempFilePath, content)
-    await fs.rename(target.tempFilePath, target.uploadFilePath)
-    return target
+    const target = await SessionUploads.createTarget(Session.uploadsDirectory(session), filename)
+    try {
+      await fs.writeFile(target.tempFilePath, content, { flag: "wx" })
+      await fs.rename(target.tempFilePath, target.filePath)
+      return { ...target, uploadFilePath: target.filePath }
+    } catch (error) {
+      await fs.rm(target.directory, { recursive: true, force: true })
+      throw error
+    }
   }
 
   function decodeDataUrlContent(url: string) {
@@ -704,7 +662,7 @@ export namespace SessionPrompt {
         if (stats.isDirectory()) {
           parts.push({
             type: "file",
-            url: `file://${filepath}`,
+            url: pathToFileURL(filepath).href,
             filename: name,
             mime: "application/x-directory",
           })
@@ -713,7 +671,7 @@ export namespace SessionPrompt {
 
         parts.push({
           type: "file",
-          url: `file://${filepath}`,
+          url: pathToFileURL(filepath).href,
           filename: name,
           mime: "text/plain",
         })
@@ -1357,6 +1315,14 @@ export namespace SessionPrompt {
     const lease = RunLease.reserve(sessionID)
     return loopWithTerminalErrors(sessionID, lease)
   })
+
+  /** Continue work already admitted before changing persisted history. */
+  export async function loopWithLease(sessionID: string, lease: RunLease.Info) {
+    if (lease.sessionID !== sessionID || RunLease.current(sessionID)?.id !== lease.id) {
+      throw new Error("Session execution lease is no longer owned by this operation")
+    }
+    return loopWithTerminalErrors(sessionID, lease)
+  }
 
   async function lastModel(sessionID: string) {
     for await (const item of MessageV2.stream(sessionID)) {

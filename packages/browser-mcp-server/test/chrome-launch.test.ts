@@ -30,12 +30,14 @@ async function executable(script: string, mode = 0o700) {
 }
 
 describe('Chrome child launch lifecycle (synthetic executables only)', () => {
-  test('reports early exit and bounded stderr promptly', async () => {
+  test('reports early exit and stderr before the startup deadline', async () => {
     const executablePath = await executable("printf 'fixture: sandbox refused\\n' >&2; exit 23")
-    const start = Date.now()
-    await expect(launchChrome({ executablePath })).rejects.toThrow('code 23')
-    expect(Date.now() - start).toBeLessThan(2000)
-    await expect(launchChrome({ executablePath })).rejects.toThrow('fixture: sandbox refused')
+    // The reported exit code distinguishes a child exit from the 30s startup
+    // deadline. Avoid treating OS spawn scheduling as a 2s product deadline.
+    let message = ''
+    try { await launchChrome({ executablePath }) } catch (error) { message = String(error) }
+    expect(message).toContain('code 23')
+    expect(message).toContain('fixture: sandbox refused')
     const { readdir } = await import('node:fs/promises')
     expect((await readdir(root)).filter(name => name.startsWith('browser-mcp-chrome-'))).toEqual(['browser-mcp-chrome-profile'])
   })
@@ -90,11 +92,18 @@ describe('Chrome child launch lifecycle (synthetic executables only)', () => {
 })
 
 test('force-stops only the owned child if it ignores graceful termination', async () => {
-  const executablePath = await executable("trap '' TERM; printf 'ready' >&2; while :; do :; done")
+  const readyPath = join(root, 'signal-handler-ready')
+  const quotedReadyPath = `'${readyPath.replaceAll("'", "'\\''")}'`
+  const executablePath = await executable(`trap '' TERM; printf 'ready' > ${quotedReadyPath}; while :; do :; done`)
   let pid: number | undefined
   fetchMock.mockImplementation(async () => {
-    // Allow the fixture shell to install its handler before returning CDP ready.
-    await new Promise(resolve => setTimeout(resolve, 30))
+    // A fixed delay can race a slow spawn. The marker is written only after
+    // the fixture has installed the handler that this test intends to exercise.
+    const deadline = Date.now() + 2000
+    while (!await Bun.file(readyPath).exists()) {
+      if (Date.now() > deadline) throw new Error('Fixture did not install its signal handler')
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
     return Response.json({ Browser: 'Fixture' })
   })
   instance = await launchChrome({ executablePath })

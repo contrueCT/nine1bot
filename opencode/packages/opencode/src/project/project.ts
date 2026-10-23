@@ -14,6 +14,8 @@ import { BusEvent } from "@/bus/bus-event"
 import { iife } from "@/util/iife"
 import { GlobalBus } from "@/bus/global"
 import { existsSync } from "fs"
+import { Lock } from "../util/lock"
+import { migrateDirectoryProject } from "./migration"
 
 export namespace Project {
   const log = Log.create({ service: "project" })
@@ -76,6 +78,26 @@ export namespace Project {
   interface Meta {
     hidden?: boolean
     hiddenAt?: number
+    migratedTo?: string
+  }
+
+  const instanceProjects = new Map<string, string>()
+  const executionOwners = new Map<string, Set<string>>()
+  export function registerInstance(directory: string, projectID: string) {
+    instanceProjects.set(directory, projectID)
+  }
+  export function unregisterInstance(directory: string) {
+    instanceProjects.delete(directory)
+  }
+  export function retainExecution(projectID: string, leaseID: string) {
+    const owners = executionOwners.get(projectID) ?? new Set<string>()
+    owners.add(leaseID)
+    executionOwners.set(projectID, owners)
+  }
+  export function releaseExecution(projectID: string, leaseID: string) {
+    const owners = executionOwners.get(projectID)
+    owners?.delete(leaseID)
+    if (owners?.size === 0) executionOwners.delete(projectID)
   }
 
   export function directoryProjectID(directory: string) {
@@ -84,7 +106,10 @@ export namespace Project {
   }
 
   async function readMeta(projectID: string): Promise<Meta> {
-    return Storage.read<Meta>(["project_meta", projectID]).catch(() => ({}))
+    return Storage.read<Meta>(["project_meta", projectID], { preserveCorrupted: true }).catch((error) => {
+      if (Storage.NotFoundError.isInstance(error)) return {}
+      throw error
+    })
   }
 
   async function setHidden(projectID: string, hidden: boolean) {
@@ -116,13 +141,16 @@ export namespace Project {
     })
   }
 
-  export async function fromDirectory(directory: string) {
+  export async function fromDirectory(directory: string, options: { registerInstance?: boolean } = {}) {
+    // Discovery is infrequent. One lock covers identity calculation, migration
+    // and instance registration, including a first commit racing another open.
+    using discoveryLock = await Lock.write("project-discovery")
     log.info("fromDirectory", { directory })
 
     const absoluteDirectory = path.resolve(directory)
     const resolvedDirectory = await fs.realpath(absoluteDirectory).catch(() => absoluteDirectory)
 
-    const { id, sandbox, worktree, vcs, projectType, rootDirectory } = await iife(async () => {
+    let { id, sandbox, worktree, vcs, projectType, rootDirectory } = await iife(async () => {
       const matches = Filesystem.up({ targets: [".git"], start: directory })
       const git = await matches.next().then((x) => x.value)
       await matches.return()
@@ -171,7 +199,7 @@ export namespace Project {
               id: directoryProjectID(normalized),
               worktree: normalized,
               sandbox: sandbox,
-              vcs: Info.shape.vcs.parse(Flag.OPENCODE_FAKE_VCS),
+              vcs: "git" as const,
               projectType: "git" as const,
               rootDirectory: normalized,
             }
@@ -263,7 +291,19 @@ export namespace Project {
       }
     })
 
-    let existing = await Storage.read<Info>(["project", id]).catch(() => undefined)
+    const previousIDs = projectType === "git"
+      ? [...new Set([resolvedDirectory, rootDirectory, worktree].map(directoryProjectID))].filter((previous) => previous !== id)
+      : []
+    // An open instance still owns its namespace (and may be executing). Keep
+    // that identity until disposal instead of moving records underneath it.
+    const activePrevious = previousIDs.find((previous) =>
+      [...instanceProjects.values()].includes(previous) || executionOwners.has(previous),
+    )
+    if (activePrevious) id = activePrevious
+    let existing = await Storage.read<Info>(["project", id], { preserveCorrupted: true }).catch((error) => {
+      if (Storage.NotFoundError.isInstance(error)) return undefined
+      throw error
+    })
     if (!existing) {
       existing = {
         id,
@@ -280,6 +320,10 @@ export namespace Project {
       if (id !== "global") {
         await migrateFromGlobal(id, worktree)
       }
+    }
+
+    if (!activePrevious) {
+      for (const previous of previousIDs) existing = await migrateDirectoryProject(previous, existing)
     }
 
     // migrate old projects before sandboxes
@@ -305,9 +349,10 @@ export namespace Project {
       result.sandboxes.push(normalizedSandbox)
     }
     result.sandboxes = result.sandboxes.filter((x) => existsSync(x))
-    await Storage.write<Info>(["project", id], result)
+    await Storage.writeAtomic<Info>(["project", id], result)
     await setHidden(id, false)
     emitProjectUpdated(result)
+    if (options.registerInstance) registerInstance(resolvedDirectory, result.id)
     return { project: result, sandbox: normalizedSandbox }
   }
 
@@ -366,6 +411,7 @@ export namespace Project {
   }
 
   export async function setInitialized(projectID: string) {
+    projectID = (await get(projectID)).id
     await Storage.update<Info>(["project", projectID], (draft) => {
       draft.time.initialized = Date.now()
     })
@@ -384,11 +430,20 @@ export namespace Project {
   }
 
   export async function get(projectID: string) {
+    const visited = new Set<string>()
+    while (true) {
+      if (visited.has(projectID)) throw new Error("Cyclic project migration alias")
+      visited.add(projectID)
+      const meta = await readMeta(projectID)
+      if (!meta.migratedTo) break
+      projectID = meta.migratedTo
+    }
     const project = await Storage.read<Info>(["project", projectID])
     return normalizeProject(project)
   }
 
   export async function forget(projectID: string) {
+    projectID = (await get(projectID)).id
     await setHidden(projectID, true)
     return true
   }
@@ -405,6 +460,7 @@ export namespace Project {
   }
 
   export async function markContextChanged(projectID: string, changed: ContextChanged[]) {
+    projectID = (await get(projectID)).id
     const uniqueChanged = [...new Set(changed)]
     if (uniqueChanged.length === 0) {
       return readContextRevision(projectID)
@@ -443,6 +499,7 @@ export namespace Project {
       commands: Info.shape.commands.optional(),
     }),
     async (input) => {
+      input = { ...input, projectID: (await get(input.projectID)).id }
       let instructionsChanged = false
       const result = await Storage.update<Info>(["project", input.projectID], (draft) => {
         if (input.name !== undefined) draft.name = input.name

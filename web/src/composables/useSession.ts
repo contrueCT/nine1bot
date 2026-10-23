@@ -59,6 +59,7 @@ export function useSession() {
     setSessionRunning,
     canStartNewAgent,
     handleGlobalSSEEvent,
+    rememberSessionDirectory,
     syncSessionStatus,
     runningCount,
     clearSession
@@ -142,6 +143,29 @@ export function useSession() {
   const pendingCreations = new Map<string, Promise<Session>>()
   let sessionsLoadVersion = 0
   const sessionEventReconciler = createSessionEventReconciler<SSEEvent>(dispatchSessionEvent)
+  let questionRevision = 0
+  let permissionRevision = 0
+  let pendingRequestsVersion = 0
+  let interactionReadOrder = 0
+  let appliedQuestionRead = 0
+  let appliedPermissionRead = 0
+  const questionChanges = new Map<string, number>()
+  const permissionChanges = new Map<string, number>()
+  function noteQuestionChange(id: string) { questionChanges.set(id, ++questionRevision) }
+  function notePermissionChange(id: string) { permissionChanges.set(id, ++permissionRevision) }
+  function mergeInteractions<T extends { id: string; sessionID: string }>(
+    loaded: T[], visible: T[], changes: Map<string, number>, since: number, sessionID: string,
+  ): T[] {
+    const merged = new Map(loaded.filter(item => item.sessionID === sessionID).map(item => [item.id, item]))
+    const current = new Map(visible.filter(item => item.sessionID === sessionID).map(item => [item.id, item]))
+    for (const [id, changedAt] of changes) {
+      if (changedAt <= since) continue
+      const item = current.get(id)
+      if (item) merged.set(id, item)
+      else merged.delete(id)
+    }
+    return [...merged.values()]
+  }
   const messagePositions = new Map<string, number>()
   const partPositions = new Map<string, number>()
   const frameDeltaBuffer = createFrameDeltaBuffer({
@@ -307,6 +331,8 @@ export function useSession() {
     // 使任何在途的选择/创建请求失效，防止其返回后抢占新草稿
     cancelPreflight()
     selectionVersion++
+    questionChanges.clear()
+    permissionChanges.clear()
     composerKey.value = `draft:${directory || '.'}`
     isLoading.value = false
     historyError.value = null
@@ -354,6 +380,7 @@ export function useSession() {
         const updated = await api.updateSession(sessionID, { directory })
         if (version < (successfulDirectoryVersions.get(sessionID) || 0)) return
         successfulDirectoryVersions.set(sessionID, version)
+        rememberSessionDirectory(sessionID, updated.directory)
         const directoryCutoff = acknowledgeSessionDirectory()
         // Directory authority is session-owned, not selection-owned. Patch only
         // this metadata so a late directory response cannot roll back a new title.
@@ -426,6 +453,9 @@ export function useSession() {
   }
 
   async function reconcileSession(sessionID: string, generation: number) {
+    const readOrder = ++interactionReadOrder
+    const questionsAtStart = questionRevision
+    const permissionsAtStart = permissionRevision
     try {
       const snapshot = await loadSessionRecoverySnapshot(sessionID, {
         getMessages: api.getMessages,
@@ -458,8 +488,14 @@ export function useSession() {
             if (message.info.role === 'user') seenUserMessageIds.add(message.info.id)
           }
         }
-        if (snapshot.questions) pendingQuestions.value = snapshot.questions
-        if (snapshot.permissions) pendingPermissions.value = snapshot.permissions
+        if (snapshot.questions && readOrder >= appliedQuestionRead) {
+          pendingQuestions.value = mergeInteractions(snapshot.questions, pendingQuestions.value, questionChanges, questionsAtStart, sessionID)
+          appliedQuestionRead = readOrder
+        }
+        if (snapshot.permissions && readOrder >= appliedPermissionRead) {
+          pendingPermissions.value = mergeInteractions(snapshot.permissions, pendingPermissions.value, permissionChanges, permissionsAtStart, sessionID)
+          appliedPermissionRead = readOrder
+        }
         if (snapshot.status) applyRecoveryStatus(sessionID, snapshot.status)
         historyError.value = snapshot.messagesError ?? (snapshot.failures?.length
           ? `${snapshot.failures.join('、')}加载失败，消息已显示，请重试同步。`
@@ -537,6 +573,7 @@ export function useSession() {
       setApiDirectory(directory)
       reconnectEventsForDirectory()
       const session = await api.createSession(directory, pageContext)
+      rememberSessionDirectory(session.id, session.directory)
       moveComposerDraft(draftKey, session.id, session.directory, directory)
       // 创建请求在途期间用户可能已选择其他会话：新会话照常加入列表，
       // 但不抢占 currentSession、不订阅其事件流
@@ -570,8 +607,11 @@ export function useSession() {
 
   async function selectSession(session: Session) {
     session = resolveSessionDirectory(session)
+    rememberSessionDirectory(session.id, session.directory)
     cancelPreflight()
     const requestVersion = ++selectionVersion
+    questionChanges.clear()
+    permissionChanges.clear()
     try {
       isLoading.value = true
       historyError.value = null
@@ -731,6 +771,10 @@ export function useSession() {
       showContextEnrichmentNotice(sessionId, sendResult.contextEnrichment)
       return true
     } catch (error: any) {
+      // A busy response explicitly confirms admission was rejected. Preserve
+      // the original payload for retry, while unknown transport failures remain
+      // receipt-only so an accepted request cannot accidentally be duplicated.
+      if (error instanceof SessionBusyError) attempt.submitted = false
       if (sessionId) {
         await reconcileCurrentSessionState(sessionId)
         // A matching requestID identifies the persisted user message, but is not
@@ -792,6 +836,12 @@ export function useSession() {
 
   function handleSSEEvent(event: SSEEvent) {
     const { type, properties } = event
+    const sessionID = extractSessionID(event)
+    if (!sessionID || sessionID === currentSession.value?.id) {
+      const requestID = properties?.requestID || properties?.id
+      if (requestID && type.startsWith('question.')) noteQuestionChange(requestID)
+      if (requestID && type.startsWith('permission.')) notePermissionChange(requestID)
+    }
 
     switch (type) {
       case 'session.updated':
@@ -925,6 +975,15 @@ export function useSession() {
       case 'message.completed':
         // 消息完成
         break
+
+      case 'message.part.removed': {
+        if (properties?.sessionID && properties.sessionID !== currentSession.value?.id) break
+        const message = messages.value.find(item => item.info.id === properties?.messageID)
+        if (!message || !properties?.partID) break
+        frameDeltaBuffer.flush(properties.partID)
+        message.parts = message.parts.filter(part => part.id !== properties.partID)
+        break
+      }
 
       case 'message.removed':
         // 消息被完全删除（含级联删除配对的 assistant 消息）
@@ -1109,6 +1168,17 @@ export function useSession() {
     handleSSEEvent(event)
   }
 
+  // Current-session status follows its runtime stream and reconciled snapshot.
+  // Global events supply the background projects whose directory stream closed.
+  function handleGlobalSessionEvent(event: SSEEvent, directory?: string) {
+    if (extractSessionID(event) === currentSession.value?.id) return
+    handleGlobalSSEEvent(event, directory)
+  }
+
+  function syncBackgroundSessionStatus(records: readonly Pick<Session, 'id' | 'directory'>[] = [], isCurrent?: () => boolean) {
+    return syncSessionStatus(records, isCurrent, id => id !== currentSession.value?.id)
+  }
+
   // 订阅全局事件流
   function subscribeToEvents() {
     if (eventSource) {
@@ -1269,19 +1339,28 @@ export function useSession() {
   // 加载待处理的问题和权限请求
   async function loadPendingRequests() {
     const version = selectionVersion
+    const request = ++pendingRequestsVersion
+    const readOrder = ++interactionReadOrder
+    const questionsAtStart = questionRevision
+    const permissionsAtStart = permissionRevision
+    const sessionID = currentSession.value?.id
+    if (!sessionID) return
     try {
       const [questions, permissions] = await Promise.all([
         questionApi.list(),
         permissionApi.list()
       ])
-      if (version !== selectionVersion) return
-      // 只保留当前会话的请求
-      if (currentSession.value) {
-        pendingQuestions.value = questions.filter(q => q.sessionID === currentSession.value!.id)
-        pendingPermissions.value = permissions.filter(p => p.sessionID === currentSession.value!.id)
-      } else {
-        pendingQuestions.value = questions
-        pendingPermissions.value = permissions
+      if (version !== selectionVersion || sessionID !== currentSession.value?.id || request !== pendingRequestsVersion) return
+      // Keep the list's independent pending items and overlay only the IDs that
+      // changed while it was loading. A later-started complete read wins even
+      // when the normal list and runtime recovery finish in the opposite order.
+      if (readOrder >= appliedQuestionRead) {
+        pendingQuestions.value = mergeInteractions(questions, pendingQuestions.value, questionChanges, questionsAtStart, sessionID)
+        appliedQuestionRead = readOrder
+      }
+      if (readOrder >= appliedPermissionRead) {
+        pendingPermissions.value = mergeInteractions(permissions, pendingPermissions.value, permissionChanges, permissionsAtStart, sessionID)
+        appliedPermissionRead = readOrder
       }
     } catch (error) {
       console.error('Failed to load pending requests:', error)
@@ -1292,18 +1371,21 @@ export function useSession() {
   function answerQuestion(requestId: string, answers: string[][]) {
     const snapshot = answers.map(answer => [...answer])
     return respondToInteraction(requestId, 'answer', () => questionApi.reply(requestId, snapshot), () => {
+      noteQuestionChange(requestId)
       pendingQuestions.value = pendingQuestions.value.filter(q => q.id !== requestId)
     })
   }
 
   function rejectQuestion(requestId: string) {
     return respondToInteraction(requestId, 'reject', () => questionApi.reject(requestId), () => {
+      noteQuestionChange(requestId)
       pendingQuestions.value = pendingQuestions.value.filter(q => q.id !== requestId)
     })
   }
 
   function respondPermission(requestId: string, reply: 'once' | 'always' | 'reject', message?: string) {
     return respondToInteraction(requestId, reply, () => permissionApi.reply(requestId, reply, message), () => {
+      notePermissionChange(requestId)
       pendingPermissions.value = pendingPermissions.value.filter(p => p.id !== requestId)
     })
   }
@@ -1415,7 +1497,7 @@ export function useSession() {
 
   // 压缩会话
   async function summarizeSession() {
-    if (!currentSession.value || isSummarizing.value) return
+    if (!currentSession.value || isSummarizing.value || isStreaming.value) return
 
     // 从最近的 assistant 消息中获取模型信息
     const lastAssistantMsg = [...messages.value].reverse().find(m => m.info.role === 'assistant')
@@ -1442,6 +1524,8 @@ export function useSession() {
       await reconcileCurrentSessionState(sessionID)
     } catch (error) {
       console.error('Failed to summarize session:', error)
+      pushSessionNotification({ sessionId: sessionID, type: 'error',
+        message: error instanceof Error ? `压缩会话失败：${error.message}` : '压缩会话失败，请重试' })
       throw error
     } finally {
       summarizingSessions.value.delete(sessionID)
@@ -1535,7 +1619,8 @@ export function useSession() {
     // 事件处理器注册
     registerEventHandler,
     // 并行会话
-    syncSessionStatus,
+    syncSessionStatus: syncBackgroundSessionStatus,
+    handleGlobalSessionEvent,
     runningCount,
     isSessionRunning,
     canStartNewAgent,

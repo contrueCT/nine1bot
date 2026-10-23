@@ -2,10 +2,23 @@ import path from "path"
 import { Global } from "../global"
 import { JsonFile } from "../util/json-file"
 import z from "zod"
+import { Lock } from "../util/lock"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
 export namespace Auth {
+  const authorizations = new Map<string, symbol>()
+
+  export async function beginAuthorization(providerID: string) {
+    using lock = await Lock.write("auth.credentials")
+    const generation = Symbol()
+    authorizations.set(providerID, generation)
+    return generation
+  }
+
+  export function isAuthorizationCurrent(providerID: string, generation: symbol | undefined) {
+    return generation !== undefined && authorizations.get(providerID) === generation
+  }
   export const Oauth = z
     .object({
       type: z.literal("oauth"),
@@ -81,14 +94,31 @@ export namespace Auth {
     return loadAuthFile(getAuthFilePath())
   }
 
-  export async function set(key: string, info: Info) {
+  async function writeCredential(key: string, info: Info) {
     await JsonFile.transaction([getAuthFilePath()], ([document]) => {
       document.data[key] = Info.parse(info)
       document.mode = 0o600
     })
   }
 
+  export async function set(key: string, info: Info) {
+    const credential = Info.parse(info)
+    using lock = await Lock.write("auth.credentials")
+    authorizations.delete(key)
+    await writeCredential(key, credential)
+  }
+
+  export async function setAuthorized(key: string, info: Info, generation: symbol | undefined) {
+    using lock = await Lock.write("auth.credentials")
+    if (!isAuthorizationCurrent(key, generation)) return false
+    await writeCredential(key, info)
+    authorizations.delete(key)
+    return true
+  }
+
   export async function remove(key: string) {
+    using lock = await Lock.write("auth.credentials")
+    authorizations.delete(key)
     await JsonFile.update(getAuthFilePath(), (data) => {
       delete data[key]
     })
@@ -115,6 +145,7 @@ export namespace Auth {
     const skippedExisting: string[] = []
     const skippedInvalid: string[] = []
 
+    using lock = await Lock.write("auth.credentials")
     await JsonFile.transaction([getAuthFilePath()], ([document]) => {
       document.mode = 0o600
       for (const [providerID, value] of sourceEntries) {
@@ -128,6 +159,7 @@ export namespace Auth {
           continue
         }
         document.data[providerID] = parsed.data
+        authorizations.delete(providerID)
         imported.push(providerID)
       }
     })
