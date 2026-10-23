@@ -1,0 +1,75 @@
+nine1bot-review-ci-test-1.3.14.log
+(fail) force-stops only the owned child if it ignores graceful termination [36.77ms]
+(skip) REAL Chrome: bot CDP and installed MV3 extension regression
+(skip) fixture runtime awaits server shutdown after a server-initiated WebSocket close
+(skip) REAL Chrome: bot CDP and installed MV3 extension regression
+(skip) fixture runtime awaits server shutdown after a server-initiated WebSocket close
+(fail) force-stops only the owned child if it ignores graceful termination [36.77ms]
+ 1199 pass
+ 2 skip
+ 1 fail
+Ran 1202 tests across 114 files. [23.67s]
+
+nine1bot-review-runtime.log
+(skip) atomic replacement cannot redirect an acknowledged update to a deleted-inode pathname
+(skip) literal deleted suffix and file/directory symlink aliases retain one identity
+(skip) missing targets through symlinks use the target path and cyclic symlinks fail
+(skip) an update cancelled behind the canonical file lock never writes
+(skip) cancellation during rename restores the original file state (existing=false)
+(skip) cancellation during rename restores the original file state (existing=true)
+(skip) symlink targets resolve directory links before parent components
+(skip) exactly forty file symlinks resolve, while a forty-first is rejected
+(skip) missing parents in symlink targets retain resolved directory ownership
+(skip) invalid symlink traversal missing/../preferences.json fails closed with ENOENT
+(skip) invalid symlink traversal blocker.json/../preferences.json fails closed with ENOTDIR
+(skip) invalid symlink traversal preferences.json/ fails closed with ENOTDIR
+(skip) directory and leaf symlinks share the native forty-hop limit
+(skip) atomic replacement cannot redirect an acknowledged update to a deleted-inode pathname
+(skip) literal deleted suffix and file/directory symlink aliases retain one identity
+(skip) missing targets through symlinks use the target path and cyclic symlinks fail
+(skip) an update cancelled behind the canonical file lock never writes
+(skip) cancellation during rename restores the original file state (existing=false)
+(skip) cancellation during rename restores the original file state (existing=true)
+(skip) symlink targets resolve directory links before parent components
+(skip) exactly forty file symlinks resolve, while a forty-first is rejected
+(skip) missing parents in symlink targets retain resolved directory ownership
+(skip) invalid symlink traversal missing/../preferences.json fails closed with ENOENT
+(skip) invalid symlink traversal blocker.json/../preferences.json fails closed with ENOTDIR
+(skip) invalid symlink traversal preferences.json/ fails closed with ENOTDIR
+(skip) directory and leaf symlinks share the native forty-hop limit
+ 487 pass
+ 13 skip
+ 0 fail
+Ran 500 tests across 44 files. [19.49s]
+ 1 pass
+ 0 fail
+Ran 1 test across 1 file. [473.00ms]
+
+nine1bot-review-browser-extension-typecheck.log
+$ tsc --noEmit
+
+
+nine1bot-review-browser-mcp-server-typecheck.log
+$ tsc --noEmit
+
+
+nine1bot-review-nine1bot-typecheck.log
+$ tsc --project tsconfig.check.json
+
+
+nine1bot-review-platform-feishu-typecheck.log
+$ tsc --noEmit
+src/cli.ts(201,64): error TS2352: Conversion of type 'ExecException' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Index signature for type 'string' is missing in type 'ExecException'.
+
+
+nine1bot-review-platform-gitlab-typecheck.log
+$ tsc --noEmit
+
+
+nine1bot-review-platform-protocol-typecheck.log
+$ tsc --noEmit
+
+
+nine1bot-review-web-typecheck.log
+$ vue-tsc -b

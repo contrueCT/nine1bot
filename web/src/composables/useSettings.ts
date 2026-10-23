@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 import { getApiDirectory } from '../api/client'
 import { providerApi, configApi, mcpApi, skillApi, authApi, nine1botConfigApi, customProviderApi, platformApi, importAuthFromOpencode as importAuthFromOpencodeApi } from '../api/client'
-import type { Provider, McpServer, Skill, Config, McpConfig, CustomProvider, AuthImportResult, PlatformSummary, PlatformDetail, PlatformConfigPatch, PlatformActionResult } from '../api/client'
+import type { Provider, ProviderAuthorization, McpServer, Skill, Config, McpConfig, CustomProvider, AuthImportResult, PlatformSummary, PlatformDetail, PlatformConfigPatch, PlatformActionResult } from '../api/client'
 import { authenticateMcpWithPopup } from '../utils/mcp-auth'
 
 const showSettings = ref(false)
@@ -18,6 +18,23 @@ const importingAuth = ref(false)
 const providerSearchQuery = ref('')
 const customProviders = ref<Record<string, CustomProvider>>({})
 const authImportResult = ref<AuthImportResult | null>(null)
+type ProviderOAuthState = Partial<ProviderAuthorization> & {
+  providerId: string
+  methodIndex: number
+  directory: string
+  status: 'starting' | 'waiting' | 'completing' | 'success' | 'error'
+  error?: string
+}
+const providerOAuth = ref<ProviderOAuthState | null>(null)
+let providerOAuthController: AbortController | undefined
+let providerOAuthGeneration = 0
+
+function cancelProviderOAuth() {
+  providerOAuthGeneration++
+  providerOAuthController?.abort()
+  providerOAuthController = undefined
+  providerOAuth.value = null
+}
 
 // 供应商优先级（热门供应商排在前面）
 const PROVIDER_PRIORITY: Record<string, number> = {
@@ -102,6 +119,7 @@ export function useSettings() {
   }
 
   function closeSettings() {
+    cancelProviderOAuth()
     showSettings.value = false
   }
 
@@ -383,12 +401,61 @@ export function useSettings() {
     }
   }
 
-  async function startOAuth(providerId: string) {
+  async function completeProviderOAuth(code?: string): Promise<boolean> {
+    const state = providerOAuth.value
+    const controller = providerOAuthController
+    if (!state || !controller || state.status === 'completing' || state.status === 'starting' || state.status === 'success') return false
+    if (state.method === 'code' && !code?.trim()) {
+      state.error = '请输入授权页面提供的授权码'
+      return false
+    }
+    const generation = providerOAuthGeneration
+    state.status = 'completing'
+    state.error = undefined
     try {
-      const { url } = await providerApi.startOAuth(providerId)
-      window.open(url, '_blank', 'width=600,height=700')
+      await providerApi.completeOAuth(state.providerId, code?.trim(), state.methodIndex, { signal: controller.signal, directory: state.directory })
+      if (generation !== providerOAuthGeneration) return false
+      state.status = 'success'
+      await loadProviders()
+      return true
+    } catch (error) {
+      if (generation !== providerOAuthGeneration) return false
+      state.status = 'error'
+      state.error = error instanceof Error ? error.message : '授权未完成，请重试'
+      throw error
+    }
+  }
+
+  async function startOAuth(providerId: string, requestedMethodIndex?: number): Promise<boolean> {
+    cancelProviderOAuth()
+    const generation = providerOAuthGeneration
+    const controller = new AbortController()
+    providerOAuthController = controller
+    const directory = getApiDirectory()
+    // Open synchronously from the click so popup blockers do not discard it
+    // after the authorize request. A visible link remains available if blocked.
+    const popup = window.open('', '_blank', 'width=600,height=700')
+    if (popup) popup.opener = null
+    providerOAuth.value = { providerId, methodIndex: requestedMethodIndex ?? 0, directory, status: 'starting' }
+    try {
+      const methods = providers.value.find(provider => provider.id === providerId)?.authMethods
+        ?? (await providerApi.getAuthMethods())[providerId] ?? []
+      if (generation !== providerOAuthGeneration) { popup?.close(); return false }
+      const methodIndex = requestedMethodIndex ?? methods.findIndex(method => method.type === 'oauth')
+      if (methodIndex < 0 || methods[methodIndex]?.type !== 'oauth') throw new Error('该供应商没有可用的网页登录方式')
+      const authorization = await providerApi.startOAuth(providerId, methodIndex, { signal: controller.signal, directory })
+      if (generation !== providerOAuthGeneration) { popup?.close(); return false }
+      providerOAuth.value = { ...authorization, providerId, methodIndex, directory, status: 'waiting' }
+      if (popup && !popup.closed) popup.location.href = authorization.url
+      if (authorization.method === 'auto') return await completeProviderOAuth()
+      return false
     } catch (e) {
-      console.error('Failed to start OAuth:', e)
+      if (generation !== providerOAuthGeneration) return false
+      if (providerOAuth.value?.status === 'starting') popup?.close()
+      if (providerOAuth.value) {
+        providerOAuth.value.status = 'error'
+        providerOAuth.value.error = e instanceof Error ? e.message : '无法开始授权'
+      }
       throw e
     }
   }
@@ -397,6 +464,7 @@ export function useSettings() {
     settingsError.value = ''
     try {
       await authApi.setApiKey(providerId, apiKey)
+      if (providerOAuth.value?.providerId === providerId) cancelProviderOAuth()
       await loadProviders()
       return true
     } catch (e) {
@@ -408,6 +476,7 @@ export function useSettings() {
   async function removeAuth(providerId: string) {
     try {
       await authApi.remove(providerId)
+      if (providerOAuth.value?.providerId === providerId) cancelProviderOAuth()
       await loadProviders()
     } catch (e) {
       console.error('Failed to remove auth:', e)
@@ -553,6 +622,7 @@ export function useSettings() {
     loadingProviders,
     importingAuth,
     authImportResult,
+    providerOAuth,
     mcpServers,
     loadingMcp,
     skills,
@@ -589,6 +659,8 @@ export function useSettings() {
     healthMcp,
 
     startOAuth,
+    completeProviderOAuth,
+    cancelProviderOAuth,
     setApiKey,
     removeAuth,
     importAuthFromOpencode,

@@ -1,6 +1,9 @@
 import { Slug } from "@opencode-ai/util/slug"
 import path from "path"
 import fs from "fs/promises"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { SessionUploads } from "./uploads"
+import { Filesystem } from "../util/filesystem"
 import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
 import { Decimal } from "decimal.js"
@@ -174,46 +177,100 @@ export namespace Session {
       messageID: Identifier.schema("message").optional(),
     }),
     async (input) => {
-      // Get parent session to inherit its directory
-      const parentSession = await get(input.sessionID)
-      const childID = Identifier.descending("session")
-      let runtimeProfile: SessionProfileSnapshot | undefined
-      let runtimeCurrentModel: SessionRuntimeProfile.CurrentModel | undefined
-      if (await RuntimeFeatureFlags.profileSnapshotEnabled()) {
-        const forked = await SessionRuntimeProfile.cloneForFork(parentSession, {
-          id: childID,
-          projectID: parentSession.projectID,
-        })
-        if (forked) {
-          runtimeProfile = forked.snapshot
-          runtimeCurrentModel = forked.summary.currentModel
-        } else {
-          runtimeProfile = await SessionProfileCompiler.compile({
-            session: {
-              ...parentSession,
-              id: childID,
-              runtime: undefined,
-            },
-            directory: parentSession.directory,
-            permission: parentSession.permission,
-            source: "legacy-resumed",
-          })
-        }
+      // Keep source deletion/execution out of the attachment snapshot window.
+      const lease = RunLease.reserve(input.sessionID)
+      try {
+        return await forkSession(input)
+      } finally {
+        RunLease.release(input.sessionID, lease.id)
       }
-      const session = await createNext({
-        id: childID,
-        directory: parentSession.directory,
-        runtimeProfile,
-        runtimeCurrentModel,
-      })
-      const msgs = await messages({ sessionID: input.sessionID })
-      const idMap = new Map<string, string>()
+    },
+  )
 
+  async function forkSession(input: { sessionID: string; messageID?: string }) {
+    const parentSession = await get(input.sessionID)
+    const childID = Identifier.descending("session")
+    let runtimeProfile: SessionProfileSnapshot | undefined
+    let runtimeCurrentModel: SessionRuntimeProfile.CurrentModel | undefined
+    if (await RuntimeFeatureFlags.profileSnapshotEnabled()) {
+      const forked = await SessionRuntimeProfile.cloneForFork(parentSession, {
+        id: childID,
+        projectID: parentSession.projectID,
+      })
+      if (forked) {
+        runtimeProfile = forked.snapshot
+        runtimeCurrentModel = forked.summary.currentModel
+      } else {
+        runtimeProfile = await SessionProfileCompiler.compile({
+          session: { ...parentSession, id: childID, runtime: undefined },
+          directory: parentSession.directory,
+          permission: parentSession.permission,
+          source: "legacy-resumed",
+        })
+      }
+    }
+    const session = await createNext({
+      id: childID,
+      directory: parentSession.directory,
+      permission: parentSession.permission,
+      client: parentSession.client,
+      runtimeProfile,
+      runtimeCurrentModel,
+    })
+    try {
+      const msgs = (await messages({ sessionID: input.sessionID }))
+        .filter((msg) => !input.messageID || msg.info.id < input.messageID)
+      const uploadsRoot = path.join(parentSession.directory, ".nine1bot", "uploads")
+      const copies = new Map<string, string>()
+      const sourcePaths = new Map<string, string>()
+      const fileTools = new Set(["preview_file", "display_file", "send_file"])
+      const copyUpload = async (source: string, filename?: string) => {
+        if (!Filesystem.contains(uploadsRoot, source) || copies.has(source)) return
+        const target = await SessionUploads.createTarget(uploadsDirectory(session), filename ?? path.basename(source))
+        await fs.copyFile(source, target.tempFilePath)
+        await fs.rename(target.tempFilePath, target.filePath)
+        copies.set(source, target.filePath)
+      }
+      const references = msgs.flatMap((msg) => msg.parts.flatMap((part) =>
+        part.type === "file" ? [part] : part.type === "tool" && part.state.status === "completed"
+          ? part.state.attachments ?? [] : [],
+      ))
+      for (const part of references) {
+        if (!part.url.startsWith("file:")) continue
+        const raw = part.url.startsWith("file:///") ? part.url.slice(7) : undefined
+        let decoded: string | undefined
+        try { decoded = fileURLToPath(part.url) } catch {}
+        // Older writers concatenated file:// with a raw path. The filename
+        // disambiguates literal %20/#/? from correctly encoded new references.
+        const legacy = raw && part.filename === path.basename(raw) && Filesystem.contains(uploadsRoot, raw)
+          && await fs.stat(raw).then((stat) => stat.isFile()).catch(() => false)
+        const source = legacy ? raw : decoded
+        if (!source) throw new Error(`Invalid attachment URL: ${part.url}`)
+        sourcePaths.set(part.url, source)
+        // Include references made by older forks into another session's uploads.
+        await copyUpload(source, part.filename)
+      }
+      for (const part of msgs.flatMap(msg => msg.parts)) {
+        if (part.type !== "tool" || part.state.status !== "completed" || !fileTools.has(part.tool.toLowerCase())) continue
+        const source = part.state.metadata?.path
+        if (typeof source !== "string") continue
+        const filename = part.state.metadata?.filename
+        await copyUpload(path.resolve(parentSession.directory, source), typeof filename === "string" ? filename : undefined)
+      }
+      const cloneFile = (part: MessageV2.FilePart): MessageV2.FilePart => {
+        const source = sourcePaths.get(part.url)
+        const target = source ? copies.get(source) : undefined
+        return target ? {
+          ...part,
+          url: pathToFileURL(target).href,
+          ...(part.source?.type === "file" && part.source.path === source
+            ? { source: { ...part.source, path: target } } : {}),
+        } : part
+      }
+      const idMap = new Map<string, string>()
       for (const msg of msgs) {
-        if (input.messageID && msg.info.id >= input.messageID) break
         const newID = Identifier.ascending("message")
         idMap.set(msg.info.id, newID)
-
         const parentID = msg.info.role === "assistant" && msg.info.parentID ? idMap.get(msg.info.parentID) : undefined
         const cloned = await updateMessage({
           ...msg.info,
@@ -221,19 +278,44 @@ export namespace Session {
           id: newID,
           ...(parentID && { parentID }),
         })
-
-        for (const part of msg.parts) {
-          await updatePart({
-            ...part,
-            id: Identifier.ascending("part"),
-            messageID: cloned.id,
-            sessionID: session.id,
-          })
+        for (const original of msg.parts) {
+          let part = original.type === "file" ? cloneFile(original) : structuredClone(original)
+          if (part.type === "tool" && part.state.status === "completed" && part.state.attachments) {
+            part.state.attachments = part.state.attachments.map((attachment) => ({
+              ...cloneFile(attachment),
+              id: Identifier.ascending("part"),
+              messageID: cloned.id,
+              sessionID: session.id,
+            }))
+          }
+          if (part.type === "tool" && part.state.status === "completed" && fileTools.has(part.tool.toLowerCase())) {
+            const source = part.state.metadata?.path
+            const target = typeof source === "string" ? copies.get(path.resolve(parentSession.directory, source)) : undefined
+            if (target) {
+              part.state.metadata = { ...part.state.metadata, path: target }
+              // Preview registry tokens belong to the original live preview.
+              // Forked history reopens its independent file via metadata.path.
+              delete part.state.metadata.previewId
+            }
+            const inputPath = part.state.input.path
+            const inputTarget = typeof inputPath === "string" ? copies.get(path.resolve(parentSession.directory, inputPath)) : undefined
+            if (inputTarget) part.state.input = { ...part.state.input, path: inputTarget }
+          }
+          if (part.type === "text" && part.synthetic) {
+            for (const [source, target] of copies) {
+              part.text = part.text.replaceAll(`File saved to: ${source}\n`, `File saved to: ${target}\n`)
+            }
+          }
+          await updatePart({ ...part, id: Identifier.ascending("part"), messageID: cloned.id, sessionID: session.id })
         }
       }
       return session
-    },
-  )
+    } catch (error) {
+      // A failed copy must not leave a visible, partially cloned conversation.
+      await remove(session.id)
+      throw error
+    }
+  }
 
   export const touch = fn(Identifier.schema("session"), async (sessionID) => {
     await update(sessionID, (draft) => {

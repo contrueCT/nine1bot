@@ -390,25 +390,44 @@ export namespace Storage {
     const target = path.join(dir, ...key) + ".json"
     return withErrorHandling(async () => {
       using _ = await Lock.write(target)
-      await fs.mkdir(path.dirname(target), { recursive: true })
-      const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
-      const bytes = Buffer.from(JSON.stringify(content, null, 2))
-      const searchWrite = searchChange(key, "begin")
-      try {
-        const written = await Bun.write(temporary, bytes)
-        if (written !== bytes.length) throw new Error("Incomplete atomic storage write")
-        const file = await fs.open(temporary, "r+")
-        try {
-          await file.sync()
-        } finally {
-          await file.close()
-        }
-        await fs.rename(temporary, target)
-      } finally {
-        searchChange(key, "finish", content, searchWrite)
-        await fs.unlink(temporary).catch(() => {})
-      }
+      await writeAtomicFile(key, target, content)
     })
+  }
+
+  /** Preserve the last complete record while applying an edit under its write lock. */
+  export async function updateAtomic<T>(key: string[], edit: (draft: T) => void) {
+    const dir = await state().then((x) => x.dir)
+    const target = path.join(dir, ...key) + ".json"
+    return withErrorHandling(async () => {
+      using _ = await Lock.write(target)
+      let content: T
+      try {
+        content = await Bun.file(target).json()
+      } catch (error) {
+        if (error instanceof SyntaxError) throw new CorruptedError({ message: `Corrupted JSON file: ${target}` })
+        throw error
+      }
+      edit(content)
+      await writeAtomicFile(key, target, content)
+      return content
+    })
+  }
+
+  async function writeAtomicFile(key: string[], target: string, content: unknown) {
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
+    const bytes = Buffer.from(JSON.stringify(content, null, 2))
+    const searchWrite = searchChange(key, "begin")
+    try {
+      const written = await Bun.write(temporary, bytes)
+      if (written !== bytes.length) throw new Error("Incomplete atomic storage write")
+      const file = await fs.open(temporary, "r+")
+      try { await file.sync() } finally { await file.close() }
+      await fs.rename(temporary, target)
+    } finally {
+      searchChange(key, "finish", content, searchWrite)
+      await fs.unlink(temporary).catch(() => {})
+    }
   }
 
   async function withErrorHandling<T>(body: () => Promise<T>) {
@@ -423,8 +442,8 @@ export namespace Storage {
   }
 
   const glob = new Bun.Glob("**/*")
-  export async function list(prefix: string[]) {
-    return listEntries(prefix)
+  export async function list(prefix: string[], options: { strict?: boolean } = {}) {
+    return listEntries(prefix, options.strict)
   }
 
   async function listEntries(prefix: string[], strict = false) {

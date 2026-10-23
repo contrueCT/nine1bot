@@ -3,6 +3,7 @@ import path from "path"
 import { existsSync } from "fs"
 import { Global } from "@/global"
 import { Log } from "@/util/log"
+import { JsonFile } from "@/util/json-file"
 
 const log = Log.create({ service: "project.environment" })
 
@@ -129,10 +130,32 @@ async function write(projectID: string, variables: Record<string, string>) {
     variables,
     updatedAt: Date.now(),
   }
-  await fs.writeFile(file, JSON.stringify(payload, null, 2), "utf8")
+  await JsonFile.update(file, (draft) => { Object.assign(draft, payload) })
 }
 
 export namespace ProjectEnvironment {
+  /** Copy missing keys once; retain the source file and target's explicit values. */
+  export async function migrate(sourceID: string, targetID: string) {
+    const directory = await ensureEnvDir()
+    await JsonFile.transaction([projectFilePath(directory, sourceID), projectFilePath(directory, targetID)], ([source, target]) => {
+      if (!source.existed) return
+      const migrated: string[] = Array.isArray(target.data.migratedFrom) ? target.data.migratedFrom : []
+      if (migrated.includes(sourceID)) return
+      const variables = { ...(source.data.variables ?? {}), ...(target.data.variables ?? {}) }
+      for (const [key, value] of Object.entries(variables)) {
+        validateKey(key)
+        validateValue(key, value as string)
+      }
+      Object.assign(target.data, {
+        version: DEFAULT_FILE_VERSION,
+        projectID: targetID,
+        variables,
+        updatedAt: Date.now(),
+        migratedFrom: [...migrated, sourceID],
+      })
+    })
+  }
+
   export async function getPath() {
     return ensureEnvDir()
   }
@@ -175,4 +198,3 @@ export namespace ProjectEnvironment {
     return vars
   }
 }
-

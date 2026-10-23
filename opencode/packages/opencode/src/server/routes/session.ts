@@ -4,7 +4,6 @@ import { RunLease } from "../../session/run-lease"
 import { Hono, type Context } from "hono"
 import { stream } from "hono/streaming"
 import { describeRoute, validator, resolver } from "hono-openapi"
-import path from "path"
 import fs from "fs/promises"
 import { createWriteStream } from "fs"
 import { Readable } from "stream"
@@ -12,6 +11,7 @@ import { pathToFileURL } from "url"
 import Busboy from "@fastify/busboy"
 import z from "zod"
 import { Session } from "../../session"
+import { SessionUploads } from "../../session/uploads"
 import { Storage } from "../../storage/storage"
 import { MessageV2 } from "../../session/message-v2"
 import { SessionPrompt } from "../../session/prompt"
@@ -27,7 +27,6 @@ import { PermissionNext } from "@/permission/next"
 import { RuntimePromptBridgeCompiler } from "@/runtime/bridge/prompt-compiler"
 import { LegacyAgentRunSpecAdapter } from "@/runtime/compat/legacy-agent-run-spec-adapter"
 import { RuntimeFeatureFlags } from "@/runtime/config/feature-flags"
-import { Filesystem } from "@/util/filesystem"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
 
@@ -44,23 +43,6 @@ type LegacySessionPromptBody = Omit<
   SessionPrompt.PromptInput,
   "sessionID" | "runtimeModelSource" | "runtimeProfileSnapshot"
 >
-
-function sanitizeUploadFilename(filename?: string) {
-  const basename = path.basename((filename || "").replace(/\0/g, "")).trim()
-  const cleaned = basename
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
-    .replace(/[. ]+$/g, "")
-  return cleaned || `upload-${Date.now()}`
-}
-
-async function pathExists(target: string) {
-  try {
-    await fs.stat(target)
-    return true
-  } catch {
-    return false
-  }
-}
 
 async function compileLegacySessionPrompt(
   sessionID: string,
@@ -93,30 +75,7 @@ async function compileLegacySessionPrompt(
 }
 
 async function createUploadTarget(session: Pick<Session.Info, "id" | "directory">, originalFilename?: string) {
-  const uploadsDir = path.resolve(Session.uploadsDirectory(session))
-  await fs.mkdir(uploadsDir, { recursive: true })
-
-  const initialName = sanitizeUploadFilename(originalFilename)
-  const parsed = path.parse(initialName)
-  const ext = parsed.ext
-  const baseName = parsed.name || "upload"
-
-  let attempt = 0
-  let filename = initialName
-  let filePath = path.resolve(path.join(uploadsDir, filename))
-
-  while (await pathExists(filePath)) {
-    attempt += 1
-    filename = `${baseName}-${attempt}${ext}`
-    filePath = path.resolve(path.join(uploadsDir, filename))
-  }
-
-  if (!Filesystem.contains(uploadsDir, filePath)) {
-    throw new Error("Resolved upload path is outside the managed uploads directory")
-  }
-
-  const tempFilePath = path.join(uploadsDir, `.${baseName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}.part`)
-  return { filename, filePath, tempFilePath }
+  return SessionUploads.createTarget(Session.uploadsDirectory(session), originalFilename)
 }
 
 async function handleSessionUpload(c: Context) {
@@ -139,6 +98,7 @@ async function handleSessionUpload(c: Context) {
     let source: Readable | null = null
     let tempFilePath: string | undefined
     let finalFilePath: string | undefined
+    let uploadDirectory: string | undefined
     let fileSeen = false
     let parseError: { status: number; message: string } | null = null
     let uploadedFile: z.infer<typeof SessionUploadResponse> | null = null
@@ -150,6 +110,9 @@ async function handleSessionUpload(c: Context) {
       }
       if (removeFinal && finalFilePath) {
         await fs.rm(finalFilePath, { force: true }).catch(() => {})
+      }
+      if (removeFinal && uploadDirectory) {
+        await fs.rm(uploadDirectory, { recursive: true, force: true }).catch(() => {})
       }
     }
 
@@ -192,8 +155,14 @@ async function handleSessionUpload(c: Context) {
       fileSeen = true
       fileWritePromise = (async () => {
         const target = await createUploadTarget(session, filename)
+        uploadDirectory = target.directory
         tempFilePath = target.tempFilePath
         finalFilePath = target.filePath
+        if (settled) {
+          file.resume()
+          await cleanupFiles(true)
+          return
+        }
 
         await new Promise<void>((resolveWrite, rejectWrite) => {
           const writer = createWriteStream(tempFilePath!, { flags: "wx" })
@@ -315,10 +284,11 @@ export const SessionRoutes = lazy(() =>
       ),
       async (c) => {
         const query = c.req.valid("query")
+        const directory = query.directory === undefined ? undefined : await Instance.normalizeDirectory(query.directory)
         const term = query.search?.toLowerCase()
         const sessions: Session.Info[] = []
         for await (const session of Session.list()) {
-          if (query.directory !== undefined && session.directory !== query.directory) continue
+          if (directory !== undefined && await Instance.normalizeDirectory(session.directory) !== directory) continue
           if (query.roots && session.parentID) continue
           if (query.start !== undefined && session.time.updated < query.start) continue
           if (term !== undefined && !session.title.toLowerCase().includes(term)) continue
@@ -839,28 +809,35 @@ export const SessionRoutes = lazy(() =>
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
         const body = c.req.valid("json")
-        const session = await Session.get(sessionID)
-        await SessionRevert.cleanup(session)
-        const msgs = await Session.messages({ sessionID })
-        let currentAgent = await Agent.defaultAgent()
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const info = msgs[i].info
-          if (info.role === "user") {
-            currentAgent = info.agent || (await Agent.defaultAgent())
-            break
+        const lease = RunLease.reserve(sessionID)
+        try {
+          const session = await Session.get(sessionID)
+          lease.controller.signal.throwIfAborted()
+          await SessionRevert.cleanup(session)
+          const msgs = await Session.messages({ sessionID })
+          let currentAgent = await Agent.defaultAgent()
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const info = msgs[i].info
+            if (info.role === "user") {
+              currentAgent = info.agent || (await Agent.defaultAgent())
+              break
+            }
           }
+          lease.controller.signal.throwIfAborted()
+          await SessionCompaction.create({
+            sessionID,
+            agent: currentAgent,
+            model: {
+              providerID: body.providerID,
+              modelID: body.modelID,
+            },
+            auto: body.auto,
+          })
+          await SessionPrompt.loopWithLease(sessionID, lease)
+          return c.json(true)
+        } finally {
+          RunLease.release(sessionID, lease.id)
         }
-        await SessionCompaction.create({
-          sessionID,
-          agent: currentAgent,
-          model: {
-            providerID: body.providerID,
-            modelID: body.modelID,
-          },
-          auto: body.auto,
-        })
-        await SessionPrompt.loop(sessionID)
-        return c.json(true)
       },
     )
     .get(

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { Download, AlertCircle } from 'lucide-vue-next'
 import type { FilePreviewInfo } from '../../composables/useFilePreview'
 
@@ -10,13 +10,13 @@ const props = defineProps<{
 const containerRef = ref<HTMLDivElement | null>(null)
 const isLoading = ref(true)
 const error = ref<string | null>(null)
-const docxPreviewModule = ref<any>(null)
+let renderGeneration = 0
+let requestController: AbortController | undefined
 
 // Dynamic import of docx-preview
 async function loadDocxPreview() {
   try {
     const module = await import('docx-preview')
-    docxPreviewModule.value = module
     return module
   } catch (e) {
     console.warn('docx-preview not installed, falling back to download mode')
@@ -25,18 +25,25 @@ async function loadDocxPreview() {
 }
 
 async function renderDocument() {
+  const generation = ++renderGeneration
+  const preview = props.preview
+  requestController?.abort()
+  const controller = new AbortController()
+  requestController = controller
   isLoading.value = true
   error.value = null
+  containerRef.value?.replaceChildren()
 
   try {
     // Check if it's a DOCX file
-    if (!props.preview.mime.includes('wordprocessingml')) {
+    if (!preview.mime.includes('wordprocessingml')) {
       error.value = '不支持的文档格式，仅支持 .docx 文件'
       return
     }
 
     // Load docx-preview module
     const docxModule = await loadDocxPreview()
+    if (generation !== renderGeneration) return
     if (!docxModule) {
       error.value = 'Word 预览组件未安装'
       return
@@ -44,38 +51,44 @@ async function renderDocument() {
 
     // Get file content
     let blob: Blob
-    if (props.preview.content) {
+    if (preview.content) {
       // Decode base64
-      const binary = atob(props.preview.content)
+      const binary = atob(preview.content)
       const bytes = new Uint8Array(binary.length)
       for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i)
       }
-      blob = new Blob([bytes], { type: props.preview.mime })
+      blob = new Blob([bytes], { type: preview.mime })
     } else {
       // Fetch from server
-      const res = await fetch(`/file/preview/${props.preview.id}`)
-      if (!res.ok) throw new Error('Failed to load file')
+      const res = await fetch(`/file/preview/${encodeURIComponent(preview.id)}`, { signal: controller.signal })
+      if (!res.ok) throw new Error(`无法读取文件（HTTP ${res.status}）`)
       blob = await res.blob()
     }
 
-    // Render document
-    if (containerRef.value) {
-      containerRef.value.innerHTML = ''
-      await docxModule.renderAsync(blob, containerRef.value, undefined, {
-        className: 'docx-wrapper',
-        inWrapper: true,
-      })
-    }
+    if (generation !== renderGeneration) return
+    // Rendering cannot be cancelled. Stage each result outside the live view so
+    // a slower previous document cannot overwrite the currently selected one.
+    const rendered = document.createElement('div')
+    await docxModule.renderAsync(blob, rendered, undefined, {
+      className: 'docx-wrapper',
+      inWrapper: true,
+    })
+    if (generation !== renderGeneration) return
+    containerRef.value?.replaceChildren(rendered)
   } catch (e: any) {
-    error.value = e.message || '文档加载失败'
+    if (generation === renderGeneration) error.value = e.message || '文档加载失败'
   } finally {
-    isLoading.value = false
+    if (generation === renderGeneration) isLoading.value = false
   }
 }
 
 onMounted(renderDocument)
-watch(() => props.preview.id, renderDocument)
+watch(() => props.preview, renderDocument, { flush: 'post' })
+onUnmounted(() => {
+  renderGeneration++
+  requestController?.abort()
+})
 
 // Download file
 function downloadFile() {
@@ -107,9 +120,10 @@ function downloadFile() {
         <Download :size="16" />
         下载文件
       </button>
+      <button class="download-btn" @click="renderDocument">重试预览</button>
     </div>
 
-    <div v-else ref="containerRef" class="docx-container"></div>
+    <div v-show="!isLoading && !error" ref="containerRef" class="docx-container"></div>
   </div>
 </template>
 

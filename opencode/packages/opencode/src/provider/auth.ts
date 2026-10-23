@@ -6,6 +6,7 @@ import { fn } from "@/util/fn"
 import type { AuthOuathResult, Hooks } from "@opencode-ai/plugin"
 import { NamedError } from "@opencode-ai/util/error"
 import { Auth } from "@/auth"
+import { Provider } from "./provider"
 
 export namespace ProviderAuth {
   const state = Instance.state(async () => {
@@ -15,7 +16,7 @@ export namespace ProviderAuth {
       map((x) => [x.auth!.provider, x.auth!] as const),
       fromEntries(),
     )
-    return { methods, pending: {} as Record<string, AuthOuathResult> }
+    return { methods, pending: {} as Record<string, AuthOuathResult>, authorizing: {} as Record<string, symbol> }
   })
 
   export const Method = z
@@ -58,10 +59,16 @@ export namespace ProviderAuth {
     }),
     async (input): Promise<Authorization | undefined> => {
       const auth = await state().then((s) => s.methods[input.providerID])
-      const method = auth.methods[input.method]
+      const method = auth?.methods[input.method]
+      if (!method) throw new OauthMissing({ providerID: input.providerID })
       if (method.type === "oauth") {
+        const current = await state()
+        const generation = await Auth.beginAuthorization(input.providerID)
+        current.authorizing[input.providerID] = generation
+        delete current.pending[input.providerID]
         const result = await method.authorize()
-        await state().then((s) => (s.pending[input.providerID] = result))
+        if (!Auth.isAuthorizationCurrent(input.providerID, generation)) throw new OauthMissing({ providerID: input.providerID })
+        current.pending[input.providerID] = result
         return {
           url: result.url,
           method: result.method,
@@ -78,7 +85,9 @@ export namespace ProviderAuth {
       code: z.string().optional(),
     }),
     async (input) => {
-      const match = await state().then((s) => s.pending[input.providerID])
+      const current = await state()
+      const match = current.pending[input.providerID]
+      const generation = current.authorizing[input.providerID]
       if (!match) throw new OauthMissing({ providerID: input.providerID })
       let result
 
@@ -92,14 +101,13 @@ export namespace ProviderAuth {
       }
 
       if (result?.type === "success") {
-        if ("key" in result) {
-          await Auth.set(input.providerID, {
-            type: "api",
-            key: result.key,
-          })
-        }
+        const pending = await state().then((s) => s.pending)
+        // An older, still-running device poll must not overwrite a newer login.
+        if (pending[input.providerID] !== match) throw new OauthMissing({ providerID: input.providerID })
+        let info: Auth.Info | undefined
+        if ("key" in result) info = { type: "api", key: result.key }
         if ("refresh" in result) {
-          const info: Auth.Info = {
+          info = {
             type: "oauth",
             access: result.access,
             refresh: result.refresh,
@@ -108,8 +116,10 @@ export namespace ProviderAuth {
           if (result.accountId) {
             info.accountId = result.accountId
           }
-          await Auth.set(input.providerID, info)
         }
+        if (!info || !await Auth.setAuthorized(input.providerID, info, generation)) throw new OauthMissing({ providerID: input.providerID })
+        if (pending[input.providerID] === match) delete pending[input.providerID]
+        Provider.refreshAll()
         return
       }
 

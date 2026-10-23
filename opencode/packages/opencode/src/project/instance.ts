@@ -47,20 +47,29 @@ export const Instance = {
     if (!existing) {
       Log.Default.info("creating instance", { directory: input.directory })
       existing = iife(async () => {
-        const { project, sandbox } = await Project.fromDirectory(directory)
+        const { project, sandbox } = await Project.fromDirectory(directory, { registerInstance: true })
         const ctx = {
           directory,
           worktree: sandbox,
           project,
         }
-        await context.provide(ctx, async () => {
-          await input.init?.()
-        })
+        try {
+          await context.provide(ctx, async () => {
+            await input.init?.()
+          })
+        } catch (error) {
+          await context.provide(ctx, () => State.dispose(directory))
+          Project.unregisterInstance(directory)
+          throw error
+        }
         return ctx
       })
       cache.set(directory, existing)
     }
-    const ctx = await existing
+    const ctx = await existing.catch((error) => {
+      if (cache.get(directory) === existing) cache.delete(directory)
+      throw error
+    })
     return context.provide(ctx, async () => {
       return input.fn()
     })
@@ -93,6 +102,7 @@ export const Instance = {
     Log.Default.info("disposing instance", { directory: Instance.directory })
     await State.dispose(Instance.directory)
     cache.delete(Instance.directory)
+    Project.unregisterInstance(Instance.directory)
     GlobalBus.emit("event", {
       directory: Instance.directory,
       payload: {

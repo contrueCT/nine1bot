@@ -7,6 +7,7 @@ import type { Message, MessagePart } from '../api/client'
 import { useUserProfile } from '../composables/useUserProfile'
 import { createMessageMutation, type MessageMutationDone } from '../composables/message-mutation'
 import { formatMessageTime } from '../utils/time-format'
+import { resolveFileUrl } from '../utils/file-url'
 
 const { profile } = useUserProfile()
 
@@ -101,14 +102,6 @@ function isImageFile(part: MessagePart): boolean {
   return mime.startsWith('image/')
 }
 
-// 将 file:// URL 转为 HTTP URL（浏览器无法加载 file:// 协议）
-function resolveFileUrl(url: string): string {
-  if (url.startsWith('file://')) {
-    return `/file/upload?path=${encodeURIComponent(url.slice(7))}`
-  }
-  return url
-}
-
 // Image preview state
 const previewImageUrl = ref<string | null>(null)
 
@@ -176,12 +169,12 @@ onUnmounted(() => {
             <div v-if="item.part.type === 'file'" class="file-attachment">
               <img
                 v-if="isImageFile(item.part)"
-                :src="resolveFileUrl((item.part as any).url)"
+                :src="resolveFileUrl((item.part as any).url, 'upload', (item.part as any).filename)"
                 :alt="(item.part as any).filename || '上传的图片'"
                 class="uploaded-image"
-                @click="openImagePreview(resolveFileUrl((item.part as any).url))"
+                @click="openImagePreview(resolveFileUrl((item.part as any).url, 'upload', (item.part as any).filename))"
               />
-              <a v-else :href="resolveFileUrl((item.part as any).url)" target="_blank" class="file-badge">
+              <a v-else :href="resolveFileUrl((item.part as any).url, 'upload', (item.part as any).filename)" target="_blank" class="file-badge">
                 <span class="file-icon"><File :size="18" /></span>
                 <span class="file-name">{{ (item.part as any).filename || '文件' }}</span>
               </a>
@@ -510,5 +503,4 @@ onUnmounted(() => {
 }
 
 </style>
-
 

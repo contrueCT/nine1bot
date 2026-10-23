@@ -11,13 +11,27 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  oauth: [providerId: string]
+  oauth: [providerId: string, methodIndex: number]
   'set-api-key': [providerId: string, apiKey: string]
   remove: [providerId: string]
   'import-opencode': []
 }>()
 
-const { filteredProviders, providerSearchQuery, customProviders, upsertCustomProvider, removeCustomProvider } = useSettings()
+const { filteredProviders, providerSearchQuery, customProviders, upsertCustomProvider, removeCustomProvider, providerOAuth, completeProviderOAuth, cancelProviderOAuth } = useSettings()
+const oauthCode = ref('')
+const oauthMethodSelection = ref<Record<string, number>>({})
+const oauthBusy = computed(() => providerOAuth.value !== null && ['starting', 'waiting', 'completing'].includes(providerOAuth.value.status))
+function beginOAuth(providerId: string, methods: Array<{ type: string }>) {
+  oauthCode.value = ''
+  emit('oauth', providerId, oauthMethodSelection.value[providerId] ?? methods.findIndex(method => method.type === 'oauth'))
+}
+async function submitOAuthCode() {
+  try {
+    if (await completeProviderOAuth(oauthCode.value)) oauthCode.value = ''
+  } catch {
+    // The shared authorization state keeps the error beside the code input.
+  }
+}
 
 const apiKeyInputs = ref<Record<string, string>>({})
 const showApiKeyInput = ref<Record<string, boolean>>({})
@@ -346,6 +360,23 @@ async function handleDeleteCustomProvider(providerId: string) {
             </span>
           </div>
 
+          <div v-if="providerOAuth?.providerId === provider.id" class="oauth-status" aria-live="polite">
+            <p v-if="providerOAuth.status === 'starting'">正在准备授权…</p>
+            <template v-else>
+              <p v-if="providerOAuth.instructions" class="oauth-instructions">{{ providerOAuth.instructions }}</p>
+              <a v-if="providerOAuth.url && providerOAuth.status !== 'success'" :href="providerOAuth.url" target="_blank" rel="noopener noreferrer">打开授权页面</a>
+              <p v-if="providerOAuth.status === 'completing'">正在等待授权完成…</p>
+              <p v-if="providerOAuth.status === 'success'">认证已完成</p>
+              <p v-if="providerOAuth.error" role="alert">{{ providerOAuth.error }}</p>
+              <form v-if="providerOAuth.method === 'code' && providerOAuth.status !== 'success'" class="api-key-form" @submit.prevent="submitOAuthCode">
+                <label :for="`oauth-code-${provider.id}`">授权码</label>
+                <input :id="`oauth-code-${provider.id}`" v-model="oauthCode" class="input" autocomplete="off" :disabled="providerOAuth.status === 'completing'" />
+                <button class="btn btn-primary" :disabled="!oauthCode.trim() || providerOAuth.status === 'completing'">完成授权</button>
+              </form>
+            </template>
+            <button v-if="providerOAuth.status !== 'success'" class="btn btn-ghost btn-sm" @click="cancelProviderOAuth">停止等待</button>
+          </div>
+
           <!-- API Key Input -->
           <div v-if="showApiKeyInput[provider.id]" class="api-key-form">
             <div class="input-group">
@@ -369,11 +400,15 @@ async function handleDeleteCustomProvider(providerId: string) {
         </div>
         <div class="list-item-actions">
           <template v-if="!provider.authenticated">
+            <select v-if="(provider.authMethods?.filter(method => method.type === 'oauth').length || 0) > 1" :value="oauthMethodSelection[provider.id] ?? provider.authMethods!.findIndex(method => method.type === 'oauth')" :disabled="oauthBusy" aria-label="登录方式" @change="oauthMethodSelection[provider.id] = Number(($event.target as HTMLSelectElement).value)">
+              <template v-for="(method, index) in provider.authMethods" :key="index"><option v-if="method.type === 'oauth'" :value="index">{{ method.name || `网页登录 ${index + 1}` }}</option></template>
+            </select>
             <!-- OAuth Button -->
             <button
               v-if="provider.authMethods?.some(m => m.type === 'oauth')"
               class="btn btn-primary"
-              @click="emit('oauth', provider.id)"
+              :disabled="oauthBusy"
+              @click="beginOAuth(provider.id, provider.authMethods || [])"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M13.8 12H3"/>
@@ -407,6 +442,8 @@ async function handleDeleteCustomProvider(providerId: string) {
 </template>
 
 <style scoped>
+.oauth-status { display: grid; gap: var(--space-sm); margin-top: var(--space-sm); }
+.oauth-instructions { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .auth-manager {
   display: flex;
   flex-direction: column;

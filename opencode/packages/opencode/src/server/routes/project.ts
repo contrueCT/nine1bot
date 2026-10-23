@@ -126,9 +126,9 @@ export const ProjectRoutes = lazy(() =>
         const query = c.req.valid("query")
 
         // Ensure project exists
-        await Project.get(projectID)
+        const project = await Project.get(projectID)
 
-        const keys = await Storage.list(["session", projectID])
+        const keys = await Storage.list(["session", project.id])
         const sessions: Session.Info[] = []
         await work(8, keys, async (key) => {
           const session = await Storage.read<Session.Info>(key).catch(() => undefined)
@@ -198,8 +198,8 @@ export const ProjectRoutes = lazy(() =>
       validator("param", z.object({ projectID: z.string() })),
       async (c) => {
         const { projectID } = c.req.valid("param")
-        await Project.get(projectID)
-        const variables = await ProjectEnvironment.getAll(projectID)
+        const project = await Project.get(projectID)
+        const variables = await ProjectEnvironment.getAll(project.id)
         return c.json({
           keys: Object.keys(variables).sort(),
           variables,
@@ -229,9 +229,9 @@ export const ProjectRoutes = lazy(() =>
       async (c) => {
         const { projectID } = c.req.valid("param")
         const body = c.req.valid("json")
-        await Project.get(projectID)
-        const variables = await ProjectEnvironment.setAll(projectID, body.variables)
-        await Project.markContextChanged(projectID, ["environment"])
+        const project = await Project.get(projectID)
+        const variables = await ProjectEnvironment.setAll(project.id, body.variables)
+        await Project.markContextChanged(project.id, ["environment"])
         return c.json(variables)
       },
     )
@@ -258,9 +258,9 @@ export const ProjectRoutes = lazy(() =>
       async (c) => {
         const { projectID, key } = c.req.valid("param")
         const body = c.req.valid("json")
-        await Project.get(projectID)
-        const variables = await ProjectEnvironment.set(projectID, key, body.value)
-        await Project.markContextChanged(projectID, ["environment"])
+        const project = await Project.get(projectID)
+        const variables = await ProjectEnvironment.set(project.id, key, body.value)
+        await Project.markContextChanged(project.id, ["environment"])
         return c.json(variables)
       },
     )
@@ -285,9 +285,9 @@ export const ProjectRoutes = lazy(() =>
       validator("param", z.object({ projectID: z.string(), key: z.string() })),
       async (c) => {
         const { projectID, key } = c.req.valid("param")
-        await Project.get(projectID)
-        const variables = await ProjectEnvironment.remove(projectID, key)
-        await Project.markContextChanged(projectID, ["environment"])
+        const project = await Project.get(projectID)
+        const variables = await ProjectEnvironment.remove(project.id, key)
+        await Project.markContextChanged(project.id, ["environment"])
         return c.json(variables)
       },
     )

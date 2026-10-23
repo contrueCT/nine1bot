@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto"
 import { Instance } from "@/project/instance"
 import { State } from "@/project/state"
+import { Project } from "@/project/project"
 import { Session } from "."
 import { SessionStatus } from "./status"
 
@@ -71,11 +72,14 @@ export namespace RunLease {
     signal?.addEventListener("abort", onAbort, { once: true })
     const ids = owned()
     ids.add(sessionID)
+    const projectID = Instance.project.id
+    Project.retainExecution(projectID, lease.id)
     active.set(sessionID, {
       lease,
       release: Instance.bind(() => {
         signal?.removeEventListener("abort", onAbort)
         ids.delete(sessionID)
+        Project.releaseExecution(projectID, lease.id)
         SessionStatus.set(sessionID, { type: "idle" })
       }),
     })
