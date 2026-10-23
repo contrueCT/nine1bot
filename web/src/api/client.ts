@@ -3096,6 +3096,8 @@ export interface AgentTerminalBuffer {
   latestSeq: number
   firstSeq: number
   reset: boolean
+  /** Screen captured at latestSeq, before any later output. */
+  screen?: { screenAnsi: string; cursor: { row: number; col: number } }
 }
 
 export const agentTerminalApi = {

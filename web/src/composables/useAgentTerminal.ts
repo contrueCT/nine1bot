@@ -20,6 +20,10 @@ export interface TerminalScreen {
   screenAnsi: string
   cursor: { row: number; col: number }
   outputData?: string
+  /** Character offset of the retained output within the current reset epoch. */
+  outputOffset?: number
+  /** Start of the coherent screen patch, if this epoch includes one. */
+  outputSnapshotOffset?: number
   outputSeq?: number
   outputResetToken?: number
   latestSeq?: number
@@ -43,7 +47,10 @@ let screenGeneration = 0
 let initializeRequest = 0
 let resetTokenCounter = 0
 const closedTerminals = new Set<string>()
-type Recovery = { id: string; generation: number; queued: boolean }
+type Recovery = {
+  id: string; generation: number; queued: boolean; full?: boolean
+  live: Array<{ seq: number; data: string }>; liveSize: number; overflow: boolean
+}
 let recovering: Recovery | undefined
 
 function emptyScreen(id: string, sessionID: string): TerminalScreen {
@@ -72,7 +79,10 @@ function boundedTail(value: string, limit: number) {
 }
 
 function storeScreen(screen: TerminalScreen) {
-  const outputData = screen.outputData === undefined ? undefined : boundedTail(screen.outputData, TERMINAL_SCREEN_LIMITS.outputData)
+  // Trim in large steps so a terminal at capacity does not copy 2 MiB on every
+  // tiny output event. Offsets let a mounted viewer append without losing history.
+  const outputData = screen.outputData === undefined ? undefined : boundedTail(screen.outputData,
+    screen.outputData.length > TERMINAL_SCREEN_LIMITS.outputData ? TERMINAL_SCREEN_LIMITS.outputData / 2 : TERMINAL_SCREEN_LIMITS.outputData)
   terminalScreen.value = {
     id: screen.id,
     sessionID: screen.sessionID,
@@ -80,8 +90,10 @@ function storeScreen(screen: TerminalScreen) {
     screenAnsi: boundedTail(screen.screenAnsi, TERMINAL_SCREEN_LIMITS.screenAnsi),
     cursor: screen.cursor,
     outputData,
+    outputOffset: (screen.outputOffset ?? 0) + (screen.outputData?.length ?? 0) - (outputData?.length ?? 0),
+    outputSnapshotOffset: screen.outputSnapshotOffset,
     outputSeq: screen.outputSeq,
-    outputResetToken: outputData !== screen.outputData ? ++resetTokenCounter : screen.outputResetToken,
+    outputResetToken: screen.outputResetToken,
     latestSeq: screen.latestSeq,
   }
 }
@@ -101,6 +113,8 @@ async function refreshScreen(id: string, sessionID: string, generation = screenG
     storeScreen({
       ...screen,
       outputData: existing?.outputData,
+      outputOffset: existing?.outputOffset,
+      outputSnapshotOffset: existing?.outputSnapshotOffset,
       outputSeq: existing?.outputSeq,
       outputResetToken: existing?.outputResetToken,
       latestSeq: existing?.latestSeq,
@@ -119,24 +133,44 @@ async function recoverTerminalOutput(id: string, afterSeq?: number) {
   if (!sessionID || !isCurrentScreen(id, sessionID, generation)) return
   if (recovering?.id === id && recovering.generation === generation) {
     recovering.queued = true
+    if (afterSeq === undefined) recovering.full = true
     return
   }
-  const operation: Recovery = { id, generation, queued: false }
+  const operation: Recovery = { id, generation, queued: false, live: [], liveSize: 0, overflow: false }
   recovering = operation
   try {
     const snapshot = await agentTerminalApi.getBuffer(id, sessionID, afterSeq)
     if (!isCurrentScreen(id, sessionID, generation)) return
     const existing = terminalScreen.value || emptyScreen(id, sessionID)
     if (snapshot.reset) {
-      const screen = await refreshScreen(id, sessionID, generation)
-      if (!isCurrentScreen(id, sessionID, generation)) return
+      // A response may describe an older instant than SSE output already applied
+      // while it was in flight. Merge the contiguous live tail before publishing
+      // the reset; never wait for another request between reading and committing.
+      let latestSeq = snapshot.latestSeq
+      let tail = ''
+      for (const chunk of operation.live) {
+        if (chunk.seq <= latestSeq) continue
+        if (chunk.seq !== latestSeq + 1) break
+        tail += chunk.data
+        latestSeq = chunk.seq
+      }
+      if (latestSeq < (existing.latestSeq ?? 0)) {
+        operation.queued = operation.full = true
+        return // An overflowed/incomplete tail needs a fresh full snapshot.
+      }
       storeScreen({
-        ...(terminalScreen.value || existing),
-        ...(screen || {}),
-        outputData: snapshot.buffer,
-        outputSeq: snapshot.latestSeq,
+        ...existing,
+        // The raw ring can start mid-escape or omit a still-visible prompt.
+        // Restore the screen at the snapshot's sequence, then replay live tail.
+        outputData: snapshot.buffer + (snapshot.screen
+          ? '\x18\x1b[0m\x1b[H\x1b[2J' + snapshot.screen.screenAnsi.replace(/\n/g, '\r\n')
+            + `\x1b[${snapshot.screen.cursor.row + 1};${snapshot.screen.cursor.col + 1}H`
+          : '') + tail,
+        outputOffset: 0,
+        outputSnapshotOffset: snapshot.screen ? snapshot.buffer.length : undefined,
+        outputSeq: latestSeq,
         outputResetToken: ++resetTokenCounter,
-        latestSeq: snapshot.latestSeq,
+        latestSeq,
       })
       return
     }
@@ -144,12 +178,11 @@ async function recoverTerminalOutput(id: string, afterSeq?: number) {
     const chunks = snapshot.chunks.filter((chunk) => chunk.seq > latestSeq)
     if (chunks.length) {
       const outputSeq = chunks[chunks.length - 1]!.seq
-      storeScreen({ ...existing, outputData: chunks.map((chunk) => chunk.data).join(''), outputSeq,
-        outputResetToken: undefined, latestSeq: Math.max(outputSeq, snapshot.latestSeq) })
+      storeScreen({ ...existing, outputData: (existing.outputData ?? '') + chunks.map((chunk) => chunk.data).join(''), outputSeq,
+        latestSeq: Math.max(outputSeq, snapshot.latestSeq) })
     } else {
       storeScreen({ ...existing, latestSeq: Math.max(latestSeq, snapshot.latestSeq) })
     }
-    await refreshScreen(id, sessionID, generation)
   } catch (error) {
     if (isCurrentScreen(id, sessionID, generation)) console.warn(`[AgentTerminal] Failed to recover terminal ${id}:`, error)
   } finally {
@@ -157,7 +190,7 @@ async function recoverTerminalOutput(id: string, afterSeq?: number) {
     if (recovering === operation) {
       recovering = undefined
       if (operation.queued && isCurrentScreen(id, sessionID, generation)) {
-        void recoverTerminalOutput(id, terminalScreen.value?.latestSeq ?? afterSeq)
+        void recoverTerminalOutput(id, operation.full ? undefined : terminalScreen.value?.latestSeq ?? afterSeq)
       }
     }
   }
@@ -275,7 +308,8 @@ export function useAgentTerminal() {
       case 'agent-terminal.screen': {
         if (id !== activeTerminalId.value) break
         const existing = terminalScreen.value
-        storeScreen({ ...(properties as TerminalScreen), outputData: existing?.outputData,
+        storeScreen({ ...(properties as TerminalScreen), outputData: existing?.outputData, outputOffset: existing?.outputOffset,
+          outputSnapshotOffset: existing?.outputSnapshotOffset,
           outputSeq: existing?.outputSeq, outputResetToken: existing?.outputResetToken, latestSeq: existing?.latestSeq })
         break
       }
@@ -286,7 +320,16 @@ export function useAgentTerminal() {
         const lastSeq = existing.latestSeq ?? existing.outputSeq ?? 0
         if (seq <= lastSeq) break
         if (seq > lastSeq + 1) void recoverTerminalOutput(id, lastSeq)
-        else storeScreen({ ...existing, outputData: data, outputSeq: seq, outputResetToken: undefined, latestSeq: seq })
+        else {
+          if (recovering?.id === id && recovering.generation === screenGeneration && !recovering.overflow) {
+            recovering.liveSize += data.length
+            if (recovering.liveSize > TERMINAL_SCREEN_LIMITS.outputData || recovering.live.length >= 1024) {
+              recovering.live = []
+              recovering.overflow = true
+            } else recovering.live.push({ seq, data })
+          }
+          storeScreen({ ...existing, outputData: (existing.outputData ?? '') + data, outputSeq: seq, latestSeq: seq })
+        }
         break
       }
       case 'agent-terminal.exited': {

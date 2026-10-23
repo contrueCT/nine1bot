@@ -38,7 +38,7 @@ function fixture() {
 const preview = { id: 'preview-local-id', mime: 'text/html', content: Buffer.from('<h1>你好</h1>').toString('base64') }
 
 describe('HTML preview window ownership', () => {
-  it('keeps inline content usable until the new window document has loaded', async () => {
+  it('keeps loaded inline content usable for reload and late reads until its window closes', async () => {
     const f = fixture()
     expect(f.opener.open(preview)).toBe(true)
     const url = f.created[0]!
@@ -50,17 +50,26 @@ describe('HTML preview window ownership', () => {
     expect(f.revoked).toEqual([])
     f.target.document.readyState = 'complete'
     f.tick()
+    expect(f.revoked).toEqual([])
+    f.advance(PREVIEW_WINDOW_NAVIGATION_TIMEOUT_MS * 2)
+    f.tick()
+    expect(await (await fetch(url)).text()).toBe('<h1>你好</h1>')
+    f.target.closed = true
+    f.tick()
     expect(f.revoked).toEqual([url])
     expect(f.cleared()).toBe(1)
     await expect(fetch(url)).rejects.toThrow()
   })
 
-  it('releases an interactive main document even when its subresources never finish loading', () => {
+  it('retains an interactive document while its subresources are still loading', () => {
     const f = fixture()
     f.opener.open(preview)
     f.target.document = { URL: f.created[0]!, readyState: 'interactive' }
     f.tick()
-    expect(f.revoked).toEqual(f.created)
+    f.advance(PREVIEW_WINDOW_NAVIGATION_TIMEOUT_MS * 2)
+    f.tick()
+    expect(f.revoked).toEqual([])
+    f.opener.dispose()
     expect(f.cleared()).toBe(1)
   })
 
@@ -116,6 +125,9 @@ describe('HTML preview window ownership', () => {
     expect(f.revoked).toEqual([])
     f.target.document = { URL: f.created[0]!, readyState: 'complete' }
     f.tick()
+    expect(f.revoked).toEqual([])
+    f.target.document = { URL: 'https://example.org', readyState: 'complete' }
+    f.tick()
     expect(f.revoked).toEqual(f.created)
     f.opener.open(preview)
     f.pagehide()
@@ -129,6 +141,19 @@ describe('HTML preview window ownership', () => {
     Object.defineProperty(f.target, 'document', { get() { throw new Error('cross-origin') } })
     f.tick()
     expect(f.revoked).toEqual(f.created)
+  })
+
+  it('releases a loaded window when it later navigates to about:blank', async () => {
+    const f = fixture()
+    f.opener.open(preview)
+    f.target.document = { URL: f.created[0]!, readyState: 'interactive' }
+    f.tick()
+    expect(f.revoked).toEqual([])
+    f.target.document = { URL: 'about:blank', readyState: 'complete' }
+    f.tick()
+    expect(f.revoked).toEqual(f.created)
+    expect(f.cleared()).toBe(1)
+    await expect(fetch(f.created[0]!)).rejects.toThrow()
   })
 })
 
@@ -165,7 +190,7 @@ async function mountPreview(name: string, open: ReturnType<typeof createPreviewW
 }
 
 for (const name of ['PreviewContent', 'preview/HtmlPreview']) {
-  it(`${name} keeps an opened tab usable across component unmount and releases its URL after load`, async () => {
+  it(`${name} keeps an opened tab usable across component unmount and releases its URL on close`, async () => {
     const f = fixture()
     const { root, app } = await mountPreview(name, f.opener.open)
     try {
@@ -178,6 +203,10 @@ for (const name of ['PreviewContent', 'preview/HtmlPreview']) {
       expect(f.revoked).toEqual([])
       expect(await (await fetch(f.created[0]!)).text()).toBe('<h1>你好</h1>')
       f.target.document = { URL: f.created[0]!, readyState: 'complete' }
+      f.tick()
+      expect(f.revoked).toEqual([])
+      expect(await (await fetch(f.created[0]!)).text()).toBe('<h1>你好</h1>')
+      f.target.closed = true
       f.tick()
       expect(f.revoked).toEqual(f.created)
     } finally {

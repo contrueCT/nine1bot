@@ -213,7 +213,7 @@ describe('useAgentTerminal', () => {
     })
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(terminal.activeScreen.value?.outputData).toBe('twothree')
+    expect(terminal.activeScreen.value?.outputData).toBe('onetwothree')
     expect(terminal.activeScreen.value?.latestSeq).toBe(3)
   })
 
@@ -238,11 +238,11 @@ describe('useAgentTerminal', () => {
     mockState.resumeAAfterSeq1?.()
     await recovery
 
-    expect(terminal.activeScreen.value?.outputData).toBe('three')
+    expect(terminal.activeScreen.value?.outputData).toBe('onetwo-livethree')
     expect(terminal.activeScreen.value?.latestSeq).toBe(3)
   })
 
-  it('keeps retained buffer data for reset recovery and clears reset token on later output', async () => {
+  it('keeps retained reset history and appends later output within the same epoch', async () => {
     const terminal = useAgentTerminal()
     terminal.setSessionContext('ses_a')
     await settle()
@@ -258,8 +258,82 @@ describe('useAgentTerminal', () => {
       properties: { id: 'agt_a', sessionID: 'ses_a', seq: 1, data: 'after-reset' },
     })
 
-    expect(terminal.activeScreen.value?.outputData).toBe('after-reset')
-    expect(terminal.activeScreen.value?.outputResetToken).toBeUndefined()
+    expect(terminal.activeScreen.value?.outputData).toBe('trimmed-tailafter-reset')
+    expect(terminal.activeScreen.value?.outputResetToken).toBeGreaterThan(0)
+  })
+
+  it('merges live output that arrives while an older reset buffer is in flight', async () => {
+    const terminal = useAgentTerminal()
+    terminal.setSessionContext('ses_a')
+    await settle()
+    terminal.handleSSEEvent({ type: 'agent-terminal.output', properties: { id: 'agt_a', sessionID: 'ses_a', seq: 1, data: 'old' } })
+    let resume!: (snapshot: Awaited<ReturnType<typeof agentTerminalApi.getBuffer>>) => void
+    agentTerminalApi.getBuffer = () => new Promise(resolve => { resume = resolve })
+    const recovery = terminal.recoverTerminalOutput('agt_a', -1)
+    terminal.handleSSEEvent({ type: 'agent-terminal.output', properties: { id: 'agt_a', sessionID: 'ses_a', seq: 2, data: 'LIVE_TAIL' } })
+    resume({ buffer: 'old', chunks: [], latestSeq: 1, firstSeq: 1, reset: true })
+    await recovery
+    expect(terminal.activeScreen.value?.latestSeq).toBe(2)
+    expect(terminal.activeScreen.value?.outputSeq).toBe(2)
+    expect(terminal.activeScreen.value?.outputData).toBe('oldLIVE_TAIL')
+  })
+
+  it('preserves reset and live output when an older screen request finishes later', async () => {
+    const terminal = useAgentTerminal()
+    let resume!: (screen: Awaited<ReturnType<typeof agentTerminalApi.getScreen>>) => void
+    agentTerminalApi.getScreen = () => new Promise(resolve => { resume = resolve })
+    agentTerminalApi.getBuffer = async () => ({ buffer: 'old', chunks: [], latestSeq: 1, firstSeq: 1, reset: true })
+    terminal.setSessionContext('ses_a')
+    await settle()
+    terminal.handleSSEEvent({ type: 'agent-terminal.output', properties: { id: 'agt_a', sessionID: 'ses_a', seq: 2, data: 'LIVE_TAIL' } })
+    resume({ sessionID: 'ses_a', screen: 'old', screenAnsi: 'old', cursor: { row: 0, col: 3 } })
+    await settle()
+    expect(terminal.activeScreen.value?.latestSeq).toBe(2)
+    expect(terminal.activeScreen.value?.outputData).toBe('oldLIVE_TAIL')
+  })
+
+  it('gets a fresh full snapshot instead of rewinding when the bounded live journal overflows', async () => {
+    const terminal = useAgentTerminal()
+    terminal.setSessionContext('ses_a')
+    await settle()
+    let resume!: (snapshot: Awaited<ReturnType<typeof agentTerminalApi.getBuffer>>) => void
+    const calls: Array<number | undefined> = []
+    agentTerminalApi.getBuffer = async (_id, _sessionID, afterSeq) => {
+      calls.push(afterSeq)
+      if (calls.length === 1) return new Promise(resolve => { resume = resolve })
+      return { buffer: 'fresh', chunks: [], latestSeq: 1100, firstSeq: 1090, reset: true }
+    }
+    const recovery = terminal.recoverTerminalOutput('agt_a', -1)
+    for (let seq = 1; seq <= 1100; seq++) {
+      terminal.handleSSEEvent({ type: 'agent-terminal.output', properties: { id: 'agt_a', sessionID: 'ses_a', seq, data: 'x' } })
+    }
+    resume({ buffer: 'old', chunks: [], latestSeq: 0, firstSeq: 1, reset: true })
+    await recovery
+    expect(terminal.activeScreen.value?.latestSeq).toBe(1100)
+    await settle()
+    expect(calls).toEqual([-1, undefined])
+    expect(terminal.activeScreen.value?.outputData).toBe('fresh')
+    expect(terminal.activeScreen.value?.latestSeq).toBe(1100)
+  })
+
+  it('preserves a queued full-snapshot request while an incremental recovery is running', async () => {
+    const terminal = useAgentTerminal()
+    terminal.setSessionContext('ses_a')
+    await settle()
+    const calls: Array<number | undefined> = []
+    let resume!: (snapshot: Awaited<ReturnType<typeof agentTerminalApi.getBuffer>>) => void
+    agentTerminalApi.getBuffer = async (_id, _sessionID, afterSeq) => {
+      calls.push(afterSeq)
+      if (calls.length === 1) return new Promise(resolve => { resume = resolve })
+      return { buffer: 'full', chunks: [], latestSeq: 0, firstSeq: 1, reset: true }
+    }
+    const incremental = terminal.recoverTerminalOutput('agt_a', 0)
+    await terminal.recoverTerminalOutput('agt_a')
+    resume({ buffer: '', chunks: [], latestSeq: 0, firstSeq: 1, reset: false })
+    await incremental
+    await settle()
+    expect(calls).toEqual([0, undefined])
+    expect(terminal.activeScreen.value?.outputData).toBe('full')
   })
 
   it('releases screen and terminal metadata on session exit, and restores from the server on return', async () => {
@@ -369,8 +443,8 @@ describe('useAgentTerminal', () => {
     const screen = terminal.activeScreen.value!
     expect(screen.screen.length).toBe(TERMINAL_SCREEN_LIMITS.screen)
     expect(screen.screenAnsi.length).toBe(TERMINAL_SCREEN_LIMITS.screenAnsi)
-    expect(screen.outputData!.length).toBe(TERMINAL_SCREEN_LIMITS.outputData)
-    expect(screen.outputResetToken).toBeGreaterThan(0)
+    expect(screen.outputData!.length).toBe(TERMINAL_SCREEN_LIMITS.outputData / 2)
+    expect(screen.outputOffset).toBe(2 * 1024 * 1024)
     expect('fullView' in screen).toBe(false)
     expect(2 * (screen.screen.length + screen.screenAnsi.length + screen.outputData!.length)).toBeLessThan(6 * 1024 * 1024)
   })

@@ -41,7 +41,9 @@ async function component() {
   return new Function('Vue', 'deps', compiled)(Vue, {
     copyText: async () => true, createCodeRenderer, markdownRenderMode, applyBlockOps, diffBlocks,
     createMarkdownBlockRenderer: (options: any) => { const render = createMarkdownBlockRenderer(options); return (text: string) => { inlineParses++; return render(text) } },
-    DOMPurify: { sanitize(html: string) { sanitized.push(html); return html.replace(/<script>[\s\S]*?<\/script>/g, '') } },
+    // This spy checks dispatch only. Real DOMPurify + Worker coverage lives in
+    // browser/lifecycle.ts, which mounts this SFC in Chromium without substitutes.
+    DOMPurify: { sanitize(html: string) { sanitized.push(html); return html } },
     markdownWorkerClient: { render(source: string, done: (blocks: string[] | null) => void) { const job = { source, done, cancelled: false }; jobs.push(job); return () => { job.cancelled = true } } },
   })
 }
@@ -77,17 +79,17 @@ test('real component appends large live text without Markdown parsing or replaci
   expect(jobs.length).toBe(0)
 })
 
-test('real component formats completed long text asynchronously and sanitizes worker HTML', async () => {
+test('component sends completed worker blocks through the sanitizer', async () => {
   const source = 'source '.repeat(2000)
   const { props, host } = await mount(source, true)
   props.streaming = false
   await Vue.nextTick()
   expect(jobs.length).toBe(1)
   expect(host.props['aria-busy']).toBe(true)
-  jobs[0].done(['<p>formatted</p><script>unsafe</script>'])
+  jobs[0].done(['<p>formatted</p>'])
   await Vue.nextTick()
   expect(host.innerHTML).toBe('<p>formatted</p>')
-  expect(sanitized).toContain('<p>formatted</p><script>unsafe</script>')
+  expect(sanitized).toContain('<p>formatted</p>')
   expect(host.props['aria-busy']).toBeUndefined()
 })
 
