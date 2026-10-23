@@ -28,6 +28,55 @@ describe('createSessionEventReconciler', () => {
     expect(reconciler.buffer(generation, 'live')).toBe(false)
     expect(applied).toEqual(['snapshot', 'buffered', 'live'])
   })
+
+  it('invalidates an overflowing snapshot and resumes only from a newer recovery', () => {
+    const applied: string[] = []
+    const overflows: number[] = []
+    const reconciler = createSessionEventReconciler<string>(event => applied.push(event), {
+      maxEvents: 2,
+      onOverflow: generation => overflows.push(generation),
+    })
+    const old = reconciler.begin('session')
+    for (let index = 0; index < 10000; index++) reconciler.buffer(old, `event-${index}`)
+    expect(overflows).toEqual([old])
+    expect(reconciler.needsResync(old)).toBe(true)
+    expect(reconciler.applySnapshot(old, () => applied.push('stale-snapshot'))).toBe(false)
+    expect(reconciler.finish(old)).toBe(false)
+    expect(applied).toEqual([])
+
+    const fresh = reconciler.begin('session')
+    reconciler.buffer(fresh, 'fresh-delta')
+    reconciler.applySnapshot(fresh, () => applied.push('fresh-snapshot'))
+    reconciler.finish(fresh)
+    reconciler.buffer(fresh, 'live')
+    expect(applied).toEqual(['fresh-snapshot', 'fresh-delta', 'live'])
+  })
+
+  it('also bounds buffer size when one event is large and releases cancelled generations', () => {
+    const applied: string[] = []
+    const reconciler = createSessionEventReconciler<string>(event => applied.push(event), { maxBytes: 20 })
+    const generation = reconciler.begin('session')
+    reconciler.buffer(generation, 'x'.repeat(50))
+    expect(reconciler.needsResync(generation)).toBe(true)
+    reconciler.clear()
+    expect(reconciler.sessionID()).toBeUndefined()
+    expect(reconciler.applySnapshot(generation, () => applied.push('cancelled'))).toBe(false)
+    expect(reconciler.buffer(generation, 'late')).toBe(false)
+    expect(applied).toEqual([])
+  })
+
+  it('stops replay if an event handler releases the current session', () => {
+    const applied: string[] = []
+    const reconciler = createSessionEventReconciler<string>(event => {
+      applied.push(event)
+      reconciler.clear()
+    })
+    const generation = reconciler.begin('session')
+    reconciler.buffer(generation, 'leave-session')
+    reconciler.buffer(generation, 'stale-after-leaving')
+    expect(reconciler.finish(generation)).toBe(false)
+    expect(applied).toEqual(['leave-session'])
+  })
 })
 
 describe('loadSessionRecoverySnapshot', () => {
@@ -107,5 +156,20 @@ describe('loadSessionRecoverySnapshot', () => {
     expect(snapshot.questions).toHaveLength(1)
     expect(snapshot.permissions).toHaveLength(1)
     expect(snapshot.failures).toEqual(['历史消息'])
+  })
+
+  it('settles immediately on cancellation even when a dependency ignores the abort signal', async () => {
+    const controller = new AbortController()
+    let delivered = false
+    const loading = loadSessionRecoverySnapshot('session', {
+      getMessages: () => new Promise<never>(() => {}),
+      async getStatuses() { return {} },
+      async getQuestions() { return [] },
+      async getPermissions() { return [] },
+      onMessages() { delivered = true },
+    }, controller.signal)
+    controller.abort(new DOMException('View changed', 'AbortError'))
+    await expect(loading).rejects.toThrow('View changed')
+    expect(delivered).toBe(false)
   })
 })

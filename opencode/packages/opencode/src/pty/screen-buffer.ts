@@ -77,6 +77,13 @@ export namespace ScreenBuffer {
       await this.writeChain
     }
 
+    /** Capture after prior writes, before any subsequently submitted writes. */
+    snapshot(): Promise<{ screenAnsi: string; cursor: CursorPosition }> {
+      const next = this.writeChain.then(() => ({ screenAnsi: this.getScreenAnsi(), cursor: this.getCursor() }))
+      this.writeChain = next.then(() => undefined, () => undefined)
+      return next
+    }
+
     /**
      * 获取当前可见视口在缓冲区中的起始行号
      */

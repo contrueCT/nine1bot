@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onBeforeUnmount } from 'vue'
 import { Eye, X, Download, ExternalLink, Copy, Check } from 'lucide-vue-next'
 import { useFilePreview } from '../composables/useFilePreview'
-import { decodeBase64Utf8 } from '../utils/encoding'
+import { openPreviewInNewTab } from '../utils/preview-window'
 import { copyText } from '../utils/clipboard'
 
 // Sub-renderers
@@ -22,6 +22,12 @@ const {
 } = useFilePreview()
 
 const copied = ref(false)
+let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+let unmounted = false
+onBeforeUnmount(() => {
+  unmounted = true
+  if (copyResetTimer) clearTimeout(copyResetTimer)
+})
 
 // Format file size
 function formatSize(bytes: number): string {
@@ -52,23 +58,16 @@ function downloadFile() {
 // Copy file path
 async function copyPath() {
   if (!activePreview.value) return
-  if (!await copyText(activePreview.value.path)) return
+  if (!await copyText(activePreview.value.path) || unmounted) return
   copied.value = true
-  setTimeout(() => copied.value = false, 2000)
+  if (copyResetTimer) clearTimeout(copyResetTimer)
+  copyResetTimer = setTimeout(() => copied.value = false, 2000)
 }
 
 // Open in new tab (for HTML)
 function openInNewTab() {
   if (!activePreview.value) return
-  const preview = activePreview.value
-
-  if (preview.content) {
-    const decoded = decodeBase64Utf8(preview.content)
-    const blob = new Blob([decoded], { type: `${preview.mime};charset=utf-8` })
-    window.open(URL.createObjectURL(blob), '_blank')
-  } else {
-    window.open(`/file/preview/${preview.id}`, '_blank')
-  }
+  openPreviewInNewTab(activePreview.value)
 }
 </script>
 
