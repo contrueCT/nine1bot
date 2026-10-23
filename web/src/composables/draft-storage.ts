@@ -69,7 +69,7 @@ export function readStoredDraft(key: string, now = Date.now()): StoredDraft | un
 export function writeStoredDraft(key: string, draft: Omit<StoredDraft, 'version' | 'updatedAt'>): boolean {
   const target = storage()
   if (!target) return false
-  if (!draft.text && !draft.attempts.length && !draft.attachmentsLost) { removeStoredDraft(key); return true }
+  if (!draft.text && !draft.planMode && !draft.attempts.length && !draft.attachmentsLost) { removeStoredDraft(key); return true }
   try {
     const raw = JSON.stringify({ ...draft, version: 1, updatedAt: Date.now() })
     if (raw.length > MAX_RECORD || draft.text.length > MAX_TEXT || draft.attempts.length > 20 || draft.attempts.some(a => a.text.length > MAX_TEXT)) throw new Error('oversize')

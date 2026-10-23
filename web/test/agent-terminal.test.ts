@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { useAgentTerminal } from '../src/composables/useAgentTerminal'
+import { useAgentTerminal, TERMINAL_SCREEN_LIMITS } from '../src/composables/useAgentTerminal'
+import { agentTerminalApi } from '../src/api/client'
 
 const originalFetch = globalThis.fetch
+const originalMethods = { ...agentTerminalApi }
 const mockState = {
   agtBChunks: [] as Array<{ seq: number; data: string }>,
   pauseAAfterSeq1: false,
@@ -126,6 +128,7 @@ beforeEach(() => {
 afterEach(() => {
   useAgentTerminal().clearTerminals()
   globalThis.fetch = originalFetch
+  Object.assign(agentTerminalApi, originalMethods)
 })
 
 describe('useAgentTerminal', () => {
@@ -258,4 +261,140 @@ describe('useAgentTerminal', () => {
     expect(terminal.activeScreen.value?.outputData).toBe('after-reset')
     expect(terminal.activeScreen.value?.outputResetToken).toBeUndefined()
   })
+
+  it('releases screen and terminal metadata on session exit, and restores from the server on return', async () => {
+    const terminal = useAgentTerminal()
+    const calls: Array<number | undefined> = []
+    const getBuffer = agentTerminalApi.getBuffer
+    agentTerminalApi.getBuffer = async (id, sessionID, afterSeq) => {
+      calls.push(afterSeq)
+      return getBuffer(id, sessionID, afterSeq)
+    }
+    terminal.setSessionContext('ses_a')
+    await settle()
+    terminal.handleSSEEvent({ type: 'agent-terminal.output', properties: { id: 'agt_a', sessionID: 'ses_a', seq: 1, data: 'old output' } })
+    terminal.setSessionContext(null)
+    expect(terminal.terminals.value).toEqual([])
+    expect(terminal.activeScreen.value).toBeNull()
+    expect(terminal.activeTerminalId.value).toBeNull()
+    terminal.setSessionContext('ses_a')
+    await settle()
+    expect(calls).toEqual([0, 0])
+    expect(terminal.activeScreen.value?.outputData).toBeUndefined()
+  })
+
+  it('does not repopulate cleared state from an old terminal list', async () => {
+    const terminal = useAgentTerminal()
+    let resume!: (list: Awaited<ReturnType<typeof agentTerminalApi.list>>) => void
+    agentTerminalApi.list = () => new Promise(resolve => { resume = resolve })
+    terminal.setSessionContext('ses_a')
+    terminal.clearTerminals()
+    resume([{ id: 'agt_a', name: 'A', sessionID: 'ses_a', status: 'running', rows: 24, cols: 80, createdAt: 1, lastActivity: 1 } as any])
+    await settle()
+    expect(terminal.terminals.value).toEqual([])
+    expect(terminal.activeScreen.value).toBeNull()
+    expect(terminal.isPanelOpen.value).toBe(false)
+  })
+
+  it('ignores an old recovery after switching away and back to the same session', async () => {
+    const terminal = useAgentTerminal()
+    terminal.setSessionContext('ses_a')
+    await settle()
+    mockState.pauseAAfterSeq1 = true
+    const oldRecovery = terminal.recoverTerminalOutput('agt_a', 1)
+    await settle()
+    terminal.setSessionContext('ses_b')
+    await settle()
+    terminal.setSessionContext('ses_a')
+    await settle()
+    mockState.resumeAAfterSeq1?.()
+    await oldRecovery
+    expect(terminal.activeTerminalId.value).toBe('agt_a')
+    expect(terminal.activeScreen.value?.latestSeq).toBe(0)
+    expect(terminal.activeScreen.value?.outputData).toBeUndefined()
+  })
+
+  it('does not restart queued recovery or restore a closed terminal after a late response', async () => {
+    const terminal = useAgentTerminal()
+    terminal.setSessionContext('ses_a')
+    await settle()
+    mockState.pauseAAfterSeq1 = true
+    const recovery = terminal.recoverTerminalOutput('agt_a', 1)
+    await settle()
+    await terminal.recoverTerminalOutput('agt_a', 1)
+    expect(await terminal.closeTerminal('agt_a')).toBe(true)
+    mockState.resumeAAfterSeq1?.()
+    await recovery
+    await settle()
+    expect(terminal.terminals.value).toEqual([])
+    expect(terminal.activeScreen.value).toBeNull()
+    expect(terminal.isPanelOpen.value).toBe(false)
+  })
+
+  it('keeps only the selected screen and reloads terminal output when reselected', async () => {
+    const terminal = useAgentTerminal()
+    terminal.setSessionContext('ses_a')
+    await settle()
+    const info = { id: 'agt_second', name: 'Second', sessionID: 'ses_a', status: 'exited', rows: 24, cols: 80, createdAt: 1, lastActivity: 1 }
+    agentTerminalApi.getScreen = async (id, sessionID) => ({ sessionID, screen: id, screenAnsi: id, cursor: { row: 0, col: 0 } })
+    const recovered: string[] = []
+    agentTerminalApi.getBuffer = async (id) => {
+      recovered.push(id)
+      return { buffer: id, chunks: [], latestSeq: 4, firstSeq: 1, reset: true }
+    }
+    terminal.handleSSEEvent({ type: 'agent-terminal.created', properties: { info } })
+    await settle()
+    expect(terminal.activeScreen.value?.id).toBe('agt_second')
+    terminal.selectTerminal('agt_a')
+    expect(terminal.activeScreen.value).toBeNull()
+    await settle()
+    terminal.handleSSEEvent({ type: 'agent-terminal.screen', properties: { id: 'agt_second', sessionID: 'ses_a', screen: 'hidden', screenAnsi: 'hidden', cursor: { row: 0, col: 0 } } })
+    expect(terminal.activeScreen.value?.id).toBe('agt_a')
+    terminal.selectTerminal('agt_second')
+    await settle()
+    expect(recovered).toEqual(['agt_second', 'agt_a', 'agt_second'])
+  })
+
+  it('bounds retained screen and output payloads even for oversized server messages', async () => {
+    const terminal = useAgentTerminal()
+    terminal.setSessionContext('ses_a')
+    await settle()
+    terminal.handleSSEEvent({ type: 'agent-terminal.screen', properties: {
+      id: 'agt_a', sessionID: 'ses_a', screen: 's'.repeat(1024 * 1024), screenAnsi: 'a'.repeat(1024 * 1024),
+      fullView: 'unneeded-extra-screen', cursor: { row: 0, col: 0 },
+    } })
+    terminal.handleSSEEvent({ type: 'agent-terminal.output', properties: {
+      id: 'agt_a', sessionID: 'ses_a', seq: 1, data: 'x'.repeat(3 * 1024 * 1024),
+    } })
+    const screen = terminal.activeScreen.value!
+    expect(screen.screen.length).toBe(TERMINAL_SCREEN_LIMITS.screen)
+    expect(screen.screenAnsi.length).toBe(TERMINAL_SCREEN_LIMITS.screenAnsi)
+    expect(screen.outputData!.length).toBe(TERMINAL_SCREEN_LIMITS.outputData)
+    expect(screen.outputResetToken).toBeGreaterThan(0)
+    expect('fullView' in screen).toBe(false)
+    expect(2 * (screen.screen.length + screen.screenAnsi.length + screen.outputData!.length)).toBeLessThan(6 * 1024 * 1024)
+  })
+
+
+  it('allows all 120 departed session screens to be garbage collected', async () => {
+    const terminal = useAgentTerminal()
+    agentTerminalApi.list = async sessionID => [{ id: `terminal-${sessionID}`, sessionID, name: 'audit', status: 'exited', rows: 24, cols: 80, createdAt: 1, lastActivity: 1 }] as any
+    agentTerminalApi.getScreen = async (_id, sessionID) => ({ sessionID, screen: 'done', screenAnsi: 'done', cursor: { row: 0, col: 0 } })
+    agentTerminalApi.getBuffer = async (_id, sessionID) => ({ buffer: sessionID + 'x'.repeat(64 * 1024), chunks: [], latestSeq: 1, firstSeq: 1, reset: true })
+    const screens: WeakRef<object>[] = []
+    for (let index = 0; index < 120; index++) {
+      terminal.setSessionContext(`session-${index}`)
+      await settle()
+      expect(terminal.activeScreen.value?.outputData).toBeDefined()
+      screens.push(new WeakRef(terminal.activeScreen.value!))
+    }
+    terminal.setSessionContext(null)
+    expect(terminal.activeScreen.value).toBeNull()
+    await settle()
+    Bun.gc(true)
+    await settle()
+    Bun.gc(true)
+    expect(screens.filter(screen => screen.deref()).length).toBe(0)
+  })
+
 })

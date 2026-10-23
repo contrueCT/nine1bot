@@ -8,6 +8,7 @@ import {
 } from '../src/api/client'
 import { useSession } from '../src/composables/useSession'
 import { useParallelSessions } from '../src/composables/useParallelSessions'
+import { MAX_RECOVERY_BUFFER_EVENTS } from '../src/composables/sessionEventReconciler'
 
 class FakeEventSource {
   static readonly CONNECTING = 0
@@ -130,6 +131,94 @@ describe('useSession event recovery', () => {
 
     expect(active.currentSession.value?.id).toBe(sessionB.id)
     expect(active.messages.value.map((item) => item.info.id)).toEqual(['message-b'])
+  })
+
+  it('cancels all recovery requests when navigating away and when unsubscribing', async () => {
+    const signals: AbortSignal[] = []
+    const wait = (signal?: AbortSignal) => {
+      if (signal) signals.push(signal)
+      return new Promise<never>(() => {})
+    }
+    api.getMessages = (_, signal) => wait(signal)
+    api.getSessionStatus = signal => wait(signal)
+    questionApi.list = signal => wait(signal)
+    permissionApi.list = signal => wait(signal)
+    active = useSession()
+    const selectingA = active.selectSession(session('cancel-a'))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(signals).toHaveLength(4)
+    const selectingB = active.selectSession(session('cancel-b'))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(signals.slice(0, 4).every(signal => signal.aborted)).toBe(true)
+    expect(signals.slice(4).every(signal => !signal.aborted)).toBe(true)
+    await selectingA
+    active.unsubscribe()
+    await selectingB
+    expect(signals.every(signal => signal.aborted)).toBe(true)
+    expect(active.messages.value).toEqual([])
+  })
+
+  it('restarts an overflowing recovery and applies only a fresh snapshot', async () => {
+    const selected = session('overflow-retry')
+    const stale = deferred<Message[]>()
+    const staleSignals: AbortSignal[] = []
+    let reads = 0
+    api.getMessages = async (_, signal) => {
+      reads++
+      if (reads === 1) {
+        if (signal) staleSignals.push(signal)
+        return stale.promise
+      }
+      return [message('fresh-message', selected.id)]
+    }
+    active = useSession()
+    const selecting = active.selectSession(selected)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    for (let index = 0; index <= MAX_RECOVERY_BUFFER_EVENTS; index++) {
+      FakeEventSource.latest.emit({
+        version: '1', id: `event-${index}`, sessionId: selected.id, createdAt: 1,
+        type: 'runtime.session.status', data: { status: { type: 'busy' } },
+      })
+    }
+    await selecting
+    expect(reads).toBe(2)
+    expect(staleSignals[0]?.aborted).toBe(true)
+    expect(active.messages.value.map(item => item.info.id)).toEqual(['fresh-message'])
+    expect(active.historyError.value).toBeNull()
+    expect(active.isStreaming.value).toBe(false)
+    stale.resolve([message('stale-message', selected.id)])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(active.messages.value.map(item => item.info.id)).toEqual(['fresh-message'])
+    useParallelSessions().clearSession(selected.id)
+  })
+
+  it('stops bounded retries with a visible error when every recovery overflows', async () => {
+    const selected = session('overflow-sustained')
+    let reads = 0
+    api.getMessages = async () => {
+      reads++
+      queueMicrotask(() => {
+        for (let index = 0; index <= MAX_RECOVERY_BUFFER_EVENTS; index++) {
+          FakeEventSource.latest.emit({
+            version: '1', id: `${reads}-${index}`, sessionId: selected.id, createdAt: 1,
+            type: 'runtime.session.status', data: { status: { type: 'busy' } },
+          })
+        }
+      })
+      return new Promise<never>(() => {})
+    }
+    active = useSession()
+    await active.selectSession(selected)
+    expect(reads).toBe(3)
+    expect(active.connectionState.value).toBe('offline')
+    expect(active.historyError.value).toContain('会话事件过多')
+    expect(FakeEventSource.latest.readyState).toBe(FakeEventSource.CLOSED)
+    expect(active.isLoading.value).toBe(false)
+
+    api.getMessages = async () => [message('recovered', selected.id)]
+    expect(await active.retryHistory()).toBe(true)
+    expect(active.messages.value.map(item => item.info.id)).toEqual(['recovered'])
+    useParallelSessions().clearSession(selected.id)
   })
 
   it('waits for the dedicated session event stream before posting a message', async () => {

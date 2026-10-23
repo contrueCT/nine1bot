@@ -141,7 +141,20 @@ export function useSession() {
   }
   const pendingCreations = new Map<string, Promise<Session>>()
   let sessionsLoadVersion = 0
-  const sessionEventReconciler = createSessionEventReconciler<SSEEvent>(dispatchSessionEvent)
+  let activeRecovery: { generation: number; controller: AbortController } | undefined
+  const sessionEventReconciler = createSessionEventReconciler<SSEEvent>(dispatchSessionEvent, {
+    onOverflow(generation) {
+      if (activeRecovery?.generation === generation) {
+        activeRecovery.controller.abort(new Error('会话事件过多，重新同步'))
+      }
+    },
+  })
+  function beginSessionRecovery(sessionID: string) {
+    activeRecovery?.controller.abort(new DOMException('Recovery superseded', 'AbortError'))
+    const generation = sessionEventReconciler.begin(sessionID)
+    sessionEventGeneration = generation
+    return generation
+  }
   const messagePositions = new Map<string, number>()
   const partPositions = new Map<string, number>()
   const frameDeltaBuffer = createFrameDeltaBuffer({
@@ -426,58 +439,68 @@ export function useSession() {
   }
 
   async function reconcileSession(sessionID: string, generation: number) {
-    try {
-      const snapshot = await loadSessionRecoverySnapshot(sessionID, {
-        getMessages: api.getMessages,
-        getStatuses: api.getSessionStatus,
-        getQuestions: questionApi.list,
-        getPermissions: permissionApi.list,
-        onMessages(loaded) {
-          if (!sessionEventReconciler.isCurrent(generation) || currentSession.value?.id !== sessionID) return
-          messages.value = loaded
-          isLoading.value = false
-          historyError.value = null
-        },
-      })
+    // An overflow invalidates both this snapshot and its buffered deltas. Start a
+    // fresh read after the loss, with a bounded number of retries under sustained load.
+    for (let retry = 0; retry < 3; retry++) {
+      if (!sessionEventReconciler.isCurrent(generation) || currentSession.value?.id !== sessionID) return false
+      if (sessionEventReconciler.needsResync(generation)) generation = beginSessionRecovery(sessionID)
+      const operation = { generation, controller: new AbortController() }
+      activeRecovery = operation
+      const signal = operation.controller.signal
+      try {
+        const snapshot = await loadSessionRecoverySnapshot(sessionID, {
+          getMessages: id => api.getMessages(id, signal),
+          getStatuses: () => api.getSessionStatus(signal),
+          getQuestions: () => questionApi.list(signal),
+          getPermissions: () => permissionApi.list(signal),
+          onMessages(loaded) {
+            if (!sessionEventReconciler.isCurrent(generation) || sessionEventReconciler.needsResync(generation)
+              || currentSession.value?.id !== sessionID) return
+            messages.value = loaded
+            isLoading.value = false
+            historyError.value = null
+          },
+        }, signal)
 
-      if (
-        !sessionEventReconciler.isCurrent(generation) ||
-        currentSession.value?.id !== sessionID
-      ) {
-        return false
-      }
-
-      const applied = sessionEventReconciler.applySnapshot(generation, () => {
-        // A failed history endpoint must not discard an independently known idle
-        // status or erase displayed messages. Buffered SSE still follows the snapshot.
-        if (snapshot.messages) {
-          frameDeltaBuffer.clear()
-          messages.value = snapshot.messages
-          seenUserMessageIds.clear()
-          for (const message of snapshot.messages) {
-            if (message.info.role === 'user') seenUserMessageIds.add(message.info.id)
+        if (!sessionEventReconciler.isCurrent(generation) || currentSession.value?.id !== sessionID) return false
+        if (sessionEventReconciler.needsResync(generation)) continue
+        const applied = sessionEventReconciler.applySnapshot(generation, () => {
+          // A failed history endpoint must not discard independently known state.
+          if (snapshot.messages) {
+            frameDeltaBuffer.clear()
+            messages.value = snapshot.messages
+            seenUserMessageIds.clear()
+            for (const message of snapshot.messages) {
+              if (message.info.role === 'user') seenUserMessageIds.add(message.info.id)
+            }
           }
+          if (snapshot.questions) pendingQuestions.value = snapshot.questions
+          if (snapshot.permissions) pendingPermissions.value = snapshot.permissions
+          if (snapshot.status) applyRecoveryStatus(sessionID, snapshot.status)
+          historyError.value = snapshot.messagesError ?? (snapshot.failures?.length
+            ? `${snapshot.failures.join('、')}加载失败，消息已显示，请重试同步。`
+            : null)
+        })
+        return applied && !snapshot.failures?.length
+      } catch (error) {
+        if (sessionEventReconciler.needsResync(generation)) continue
+        if (sessionEventReconciler.isCurrent(generation) && currentSession.value?.id === sessionID) {
+          console.error('Failed to reconcile session state:', error)
+          historyError.value = error instanceof Error ? error.message : '历史消息加载失败，请重试'
         }
-        if (snapshot.questions) pendingQuestions.value = snapshot.questions
-        if (snapshot.permissions) pendingPermissions.value = snapshot.permissions
-        if (snapshot.status) applyRecoveryStatus(sessionID, snapshot.status)
-        historyError.value = snapshot.messagesError ?? (snapshot.failures?.length
-          ? `${snapshot.failures.join('、')}加载失败，消息已显示，请重试同步。`
-          : null)
-      })
-      return applied && !snapshot.failures?.length
-    } catch (error) {
-      if (
-        sessionEventReconciler.isCurrent(generation) &&
-        currentSession.value?.id === sessionID
-      ) {
-        console.error('Failed to reconcile session state:', error)
-        historyError.value = error instanceof Error ? error.message : '历史消息加载失败，请重试'
+        return false
+      } finally {
+        if (activeRecovery === operation) activeRecovery = undefined
+        sessionEventReconciler.finish(generation)
       }
-      return false
-    } finally {
-      sessionEventReconciler.finish(generation)
     }
+    if (sessionEventReconciler.isCurrent(generation) && currentSession.value?.id === sessionID) {
+      unsubscribeSessionRuntimeEvents()
+      connectionState.value = 'offline'
+      historyError.value = '会话事件过多，同步暂时无法完成，请重试同步。'
+      isLoading.value = false
+    }
+    return false
   }
 
   async function openSessionEventStreamAndReconcile(sessionID: string) {
@@ -489,8 +512,7 @@ export function useSession() {
 
   async function openSessionReadiness(sessionID: string) {
     connectionState.value = 'connecting'
-    const generation = sessionEventReconciler.begin(sessionID)
-    sessionEventGeneration = generation
+    const generation = beginSessionRecovery(sessionID)
     const subscription = subscribeToSessionRuntimeEvents(sessionID, generation)
     try {
       await subscription.ready
@@ -518,8 +540,7 @@ export function useSession() {
       try { await pending.promise } catch { return false }
       return currentSession.value?.id === sessionID && pending.selection === selectionVersion && !historyError.value
     }
-    const generation = sessionEventReconciler.begin(sessionID)
-    sessionEventGeneration = generation
+    const generation = beginSessionRecovery(sessionID)
     return reconcileSession(sessionID, generation)
   }
 
@@ -1173,7 +1194,7 @@ export function useSession() {
       return sessionEventSource
     }
 
-    unsubscribeSessionRuntimeEvents()
+    unsubscribeSessionRuntimeEvents(false)
     const subscriptionVersion = ++sessionEventSubscriptionVersion
     subscribedRuntimeSessionId = sessionId
     sessionEventGeneration = generation
@@ -1195,17 +1216,14 @@ export function useSession() {
           ) {
             return
           }
-          const reconnectGeneration = sessionEventReconciler.begin(sessionId)
+          const reconnectGeneration = beginSessionRecovery(sessionId)
           connectionState.value = 'connected'
           sessionEventGeneration = reconnectGeneration
           void reconcileSession(sessionId, reconnectGeneration)
         },
         onGiveUp() {
           if (subscriptionVersion !== sessionEventSubscriptionVersion) return
-          sessionEventAlive = false
-          sessionEventSubscriptionVersion++
-          sessionEventSource?.close()
-          sessionEventReconciler.finish(sessionEventGeneration)
+          unsubscribeSessionRuntimeEvents()
           connectionState.value = 'offline'
           // 重连彻底失败：复位 running 状态，避免 runningCount 泄漏锁死新 agent
           setSessionRunning(sessionId, false)
@@ -1222,7 +1240,10 @@ export function useSession() {
     return sessionEventSource
   }
 
-  function unsubscribeSessionRuntimeEvents() {
+  function unsubscribeSessionRuntimeEvents(invalidateRecovery = true) {
+    activeRecovery?.controller.abort(new DOMException('Recovery cancelled', 'AbortError'))
+    activeRecovery = undefined
+    if (invalidateRecovery) sessionEventReconciler.clear()
     sessionEventAlive = false
     messagePositions.clear()
     partPositions.clear()

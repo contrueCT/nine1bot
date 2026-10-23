@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, ref, onBeforeUnmount, watch } from 'vue'
 import { RefreshCw, ExternalLink, Code, Eye } from 'lucide-vue-next'
 import type { FilePreviewInfo } from '../../composables/useFilePreview'
 import { decodeBase64Utf8 } from '../../utils/encoding'
+import { openPreviewInNewTab } from '../../utils/preview-window'
 
 const props = defineProps<{
   preview: FilePreviewInfo
@@ -15,14 +16,14 @@ const isLoading = ref(true)
 
 // iframe URL or srcdoc
 const iframeSrc = computed(() => {
-  if (props.preview.content) {
+  if (props.preview.content !== undefined) {
     return null // Use srcdoc
   }
-  return `/file/preview/${props.preview.id}`
+  return `/file/preview/${encodeURIComponent(props.preview.id)}`
 })
 
 const iframeSrcdoc = computed(() => {
-  if (props.preview.content) {
+  if (props.preview.content !== undefined) {
     return decodeBase64Utf8(props.preview.content)
   }
   return null
@@ -37,37 +38,47 @@ const sandboxAttr = computed(() => {
   return base.join(' ')
 })
 
-// Load source for code view
+// Cancel old source reads when changing preview or leaving the component.
+let sourceGeneration = 0
+let sourceController: AbortController | undefined
 async function loadSource() {
+  const generation = ++sourceGeneration
+  sourceController?.abort()
+  const controller = new AbortController()
+  sourceController = controller
   isLoading.value = true
+  sourceContent.value = ''
+  const timeout = setTimeout(() => controller.abort(), 30_000)
   try {
-    if (props.preview.content) {
-      sourceContent.value = decodeBase64Utf8(props.preview.content)
+    let content: string
+    if (props.preview.content !== undefined) {
+      content = decodeBase64Utf8(props.preview.content)
     } else {
-      const res = await fetch(`/file/preview/${props.preview.id}`)
-      sourceContent.value = await res.text()
+      const res = await fetch(`/file/preview/${encodeURIComponent(props.preview.id)}`, { signal: controller.signal })
+      if (!res.ok) throw new Error(`Failed to load source: ${res.status}`)
+      content = await res.text()
     }
-  } catch (e) {
-    sourceContent.value = 'Failed to load source'
+    if (generation === sourceGeneration) sourceContent.value = content
+  } catch {
+    if (generation === sourceGeneration) sourceContent.value = 'Failed to load source'
   } finally {
-    isLoading.value = false
+    clearTimeout(timeout)
+    if (generation === sourceGeneration) isLoading.value = false
   }
 }
 
-onMounted(loadSource)
-watch(() => props.preview.id, loadSource)
+watch(() => [props.preview.id, props.preview.content], loadSource, { immediate: true })
+onBeforeUnmount(() => {
+  sourceGeneration++
+  sourceController?.abort()
+})
 
 function refresh() {
   iframeKey.value++
 }
 
 function openInNewTab() {
-  if (iframeSrc.value) {
-    window.open(iframeSrc.value, '_blank')
-  } else if (iframeSrcdoc.value) {
-    const blob = new Blob([iframeSrcdoc.value], { type: 'text/html' })
-    window.open(URL.createObjectURL(blob), '_blank')
-  }
+  openPreviewInNewTab(props.preview)
 }
 
 function toggleSource() {

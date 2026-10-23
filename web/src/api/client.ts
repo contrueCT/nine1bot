@@ -5,6 +5,7 @@ import {
   type RuntimeEventEnvelope,
 } from './runtime-events'
 import type { RequestPagePayload } from './page-context'
+import { fetchJsonResponse, type JsonResponse } from './request-lifetime'
 
 const BASE_URL = ''  // 使用相对路径，由 vite proxy 或同源处理
 export interface SessionSearchResult {
@@ -33,7 +34,7 @@ export function getApiDirectory() {
   return activeDirectory
 }
 
-async function requireOk(response: Response): Promise<Response> {
+async function requireOk(response: JsonResponse): Promise<JsonResponse> {
   if (response.ok) return response
   const body = await response.json().catch(() => null)
   const message = typeof body?.error === 'string' ? body.error : body?.error?.message || body?.message || body?.data?.message
@@ -86,7 +87,7 @@ function applyDirectoryHeaders(options: RequestInit, directory = activeDirectory
 }
 
 function fetchWithDirectory(url: string, options: RequestInit = {}) {
-  return fetch(applyDirectoryToUrl(url), applyDirectoryHeaders(options))
+  return fetchWithTimeout(url, options)
 }
 
 function createEventStreamConnection(options: EventStreamOptions = {}) {
@@ -282,36 +283,15 @@ function controllerEntry(page?: RequestPagePayload) {
   }
 }
 
-// 带超时的 fetch 封装
-async function fetchWithTimeout(
+// 有限 JSON 响应的完整读取与解析共用请求超时。
+function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
   timeout: number = DEFAULT_TIMEOUT,
   appendDirectoryQuery = true,
-): Promise<Response> {
-  const controller = new AbortController()
-  let timedOut = false
-  const timeoutId = setTimeout(() => {
-    timedOut = true
-    controller.abort()
-  }, timeout)
+): Promise<JsonResponse> {
   const preparedUrl = appendDirectoryQuery ? applyDirectoryToUrl(url) : url
-  const preparedOptions = applyDirectoryHeaders(options)
-
-  try {
-    const response = await fetch(preparedUrl, {
-      ...preparedOptions,
-      signal: controller.signal
-    })
-    return response
-  } catch (error) {
-    if (timedOut || controller.signal.aborted) {
-      throw new Error(`Request timed out after ${Math.round(timeout / 1000)}s: ${preparedUrl}`)
-    }
-    throw error
-  } finally {
-    clearTimeout(timeoutId)
-  }
+  return fetchJsonResponse(preparedUrl, applyDirectoryHeaders(options), timeout)
 }
 
 // Session busy error - thrown when another client is using the session
@@ -1222,8 +1202,8 @@ export const api = {
 
   // 获取消息历史
   // 后端返回 { info: MessageInfo, parts: Part[] }[]
-  async getMessages(sessionId: string): Promise<Message[]> {
-    const res = await requireOk(await fetchWithTimeout(`${BASE_URL}/session/${sessionId}/message`))
+  async getMessages(sessionId: string, signal?: AbortSignal): Promise<Message[]> {
+    const res = await requireOk(await fetchWithTimeout(`${BASE_URL}/session/${sessionId}/message`, { signal }))
     const data = await res.json()
     const messages = Array.isArray(data) ? data : data.data
     if (!Array.isArray(messages)) throw new Error('会话历史响应格式无效')
@@ -1395,8 +1375,8 @@ export const api = {
   },
 
   // 获取所有会话状态
-  async getSessionStatus(): Promise<Record<string, SessionStatus>> {
-    const res = await fetchWithDirectory(`${BASE_URL}/session/status`)
+  async getSessionStatus(signal?: AbortSignal): Promise<Record<string, SessionStatus>> {
+    const res = await requireOk(await fetchWithDirectory(`${BASE_URL}/session/status`, { signal }))
     const data = await res.json()
     return data
   },
@@ -1492,7 +1472,7 @@ export const api = {
     const params = new URLSearchParams()
     if (path) params.set('path', path)
     if (directory) params.set('directory', directory)
-    const res = await fetch(`${BASE_URL}/file?${params}`)
+    const res = await fetchJsonResponse(`${BASE_URL}/file?${params}`)
     const data = await res.json()
     // API 直接返回数组
     return Array.isArray(data) ? data : (data.data || [])
@@ -1502,7 +1482,7 @@ export const api = {
   async getFileContent(path: string, directory?: string): Promise<FileContent> {
     const params = new URLSearchParams({ path })
     if (directory) params.set('directory', directory)
-    const res = await fetch(`${BASE_URL}/file/content?${params}`)
+    const res = await fetchJsonResponse(`${BASE_URL}/file/content?${params}`)
     if (!res.ok) {
       throw new Error(`Failed to get file content: ${res.status}`)
     }
@@ -1513,7 +1493,7 @@ export const api = {
   // 搜索文件
   async searchFiles(pattern: string): Promise<FileSearchResult[]> {
     const params = new URLSearchParams({ pattern })
-    const res = await fetch(`${BASE_URL}/find/file?${params}`)
+    const res = await fetchJsonResponse(`${BASE_URL}/find/file?${params}`)
     if (!res.ok) {
       throw new Error(`Failed to search files: ${res.status}`)
     }
@@ -1535,7 +1515,7 @@ export const api = {
     }>
   }> {
     const params = new URLSearchParams({ path })
-    const res = await fetch(`${BASE_URL}/browse?${params}`)
+    const res = await fetchJsonResponse(`${BASE_URL}/browse?${params}`)
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       throw new Error(data.error || `Failed to browse directory: ${res.status}`)
@@ -2946,8 +2926,8 @@ export const gitLabReviewApi = {
 // === Question API ===
 export const questionApi = {
   // 获取待处理的问题列表
-  async list(): Promise<QuestionRequest[]> {
-    const res = await requireOk(await fetchWithTimeout(`${BASE_URL}/question`, {}, 10000))
+  async list(signal?: AbortSignal): Promise<QuestionRequest[]> {
+    const res = await requireOk(await fetchWithTimeout(`${BASE_URL}/question`, { signal }, 10000))
     const data = await res.json()
     return Array.isArray(data) ? data : []
   },
@@ -2987,8 +2967,8 @@ export const questionApi = {
 // === Permission API ===
 export const permissionApi = {
   // 获取待处理的权限请求列表
-  async list(): Promise<PermissionRequest[]> {
-    const res = await fetchWithTimeout(`${BASE_URL}/permission`, {}, 10000)
+  async list(signal?: AbortSignal): Promise<PermissionRequest[]> {
+    const res = await fetchWithTimeout(`${BASE_URL}/permission`, { signal }, 10000)
     if (!res.ok) {
       throw new Error(`Failed to list permissions: ${res.status}`)
     }
