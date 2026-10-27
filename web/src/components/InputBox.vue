@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, shallowRef, watch, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { Send, Square, Paperclip, X, FileText, ClipboardList, Plus, ChevronDown, Check, Server, Zap, Minimize2, ListTodo, ScrollText } from 'lucide-vue-next'
-import { getComposerDraft, beginSend, finishSend, restoreAttempt, type ComposerDraft, type SendAttempt } from '../composables/composer-drafts'
+import { acquireComposerDraft, beginSend, finishSend, restoreAttempt, type ComposerDraft, type SendAttempt } from '../composables/composer-drafts'
 import type { Provider } from '../api/client'
 
 const props = defineProps<{
@@ -33,7 +33,14 @@ const emit = defineEmits<{
 }>()
 
 // Plan Mode 状态
-const draft = computed(() => getComposerDraft(props.draftKey || 'default', async () => await props.ensureSession?.() ?? null, props.directory))
+const draftLease = shallowRef(acquireComposerDraft(props.draftKey || 'default', props.ensureSession, props.directory))
+const draft = computed(() => draftLease.value.draft)
+watch(() => [props.draftKey, props.directory, props.ensureSession], () => {
+  const nextLease = acquireComposerDraft(props.draftKey || 'default', props.ensureSession, props.directory)
+  const previous = draftLease.value
+  draftLease.value = nextLease
+  previous.release()
+}, { flush: 'sync' })
 const isPlanMode = computed({ get: () => draft.value.planMode, set: value => { draft.value.planMode = value } })
 const input = computed({ get: () => draft.value.text, set: value => { draft.value.text = value } })
 const textareaRef = ref<HTMLTextAreaElement>()
@@ -107,10 +114,12 @@ function performSend(owner: ComposerDraft, attempt: SendAttempt, initial = false
 
 // Refresh recovery only checks receipts. It cannot dispatch a new original request.
 const checkedRecovery = new WeakSet<SendAttempt>()
+let unmounted = false
 watch(draft, async owner => {
   await nextTick()
+  if (unmounted) return
   for (const attempt of [...owner.attempts]) {
-    if (draft.value !== owner) return
+    if (unmounted || draft.value !== owner) return
     if (attempt.submitted && attempt.recoverySessionID && !checkedRecovery.has(attempt)) {
       checkedRecovery.add(attempt)
       await performSend(owner, attempt)
@@ -257,6 +266,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  unmounted = true
+  draftLease.value.release()
   document.removeEventListener('click', handleClickOutside)
   textareaResizeObserver?.disconnect()
 })

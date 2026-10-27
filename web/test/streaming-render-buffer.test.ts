@@ -78,4 +78,49 @@ describe('createFrameDeltaBuffer', () => {
       globalRef.cancelAnimationFrame = originalCancelRaf
     }
   })
+
+  it('drains a foreground frame even when the tab becomes hidden before it fires', async () => {
+    const original = { document: globalThis.document, requestAnimationFrame: globalThis.requestAnimationFrame, cancelAnimationFrame: globalThis.cancelAnimationFrame }
+    const frames: Array<() => void> = []
+    const applied: string[] = []
+    Object.assign(globalThis, { document: { hidden: false }, requestAnimationFrame: (callback: () => void) => frames.push(callback), cancelAnimationFrame() {} })
+    const buffer = createFrameDeltaBuffer({ apply: delta => applied.push(delta.delta) })
+    try {
+      buffer.push({ messageID: 'm', partID: 'p', field: 'text', delta: '前台' })
+      ;(document as unknown as { hidden: boolean }).hidden = true
+      buffer.push({ messageID: 'm', partID: 'p', field: 'text', delta: '后台' })
+      await new Promise(resolve => setTimeout(resolve, 150))
+      expect(applied).toEqual(['前台后台'])
+      frames[0]()
+      expect(applied).toEqual(['前台后台'])
+    } finally {
+      buffer.clear()
+      Object.assign(globalThis, original)
+    }
+  })
+
+  it('bounds queued characters without dropping or reordering output', () => {
+    const frames: Array<() => void> = []
+    const applied: string[] = []
+    const buffer = createFrameDeltaBuffer({ maxPendingCharacters: 5, schedule: callback => frames.push(callback), cancel() {}, apply: delta => applied.push(delta.delta) })
+    for (const text of ['abc', 'def', 'large delta', 'z']) buffer.push({ messageID: 'm', partID: 'p', field: 'text', delta: text })
+    expect(applied).toEqual(['abc', 'def', 'large delta'])
+    buffer.flush()
+    expect(applied.join('')).toBe('abcdeflarge deltaz')
+    frames.forEach(callback => callback())
+    expect(applied.join('')).toBe('abcdeflarge deltaz')
+  })
+
+  it('ignores canceled callbacks after clearing and reusing the buffer', () => {
+    const frames: Array<() => void> = []
+    const applied: string[] = []
+    const buffer = createFrameDeltaBuffer({ schedule: callback => frames.push(callback), cancel() {}, apply: delta => applied.push(delta.delta) })
+    buffer.push({ messageID: 'old', partID: 'p', field: 'text', delta: 'old' })
+    buffer.clear()
+    buffer.push({ messageID: 'new', partID: 'p', field: 'text', delta: 'new' })
+    frames[0]()
+    expect(applied).toEqual([])
+    frames[1]()
+    expect(applied).toEqual(['new'])
+  })
 })

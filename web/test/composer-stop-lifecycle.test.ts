@@ -50,7 +50,7 @@ function deferred<T = void>() {
   const promise = new Promise<T>(done => { resolve = done })
   return { promise, resolve }
 }
-async function mountComposer() {
+async function mountComposer(ensureSession?: () => Promise<string | null>) {
   const source = await Bun.file(new URL('../src/components/InputBox.vue', import.meta.url)).text()
   const { descriptor } = parse(source)
   const { content } = compileScript(descriptor, { id: 'InputBox', inlineTemplate: true, templateOptions: { compilerOptions: { hoistStatic: false } } })
@@ -67,6 +67,7 @@ async function mountComposer() {
   app = renderer.createApp({ render: () => Vue.h(InputBox, {
     disabled: false, draftKey: active.composerKey.value, directory: active.currentDirectory.value, isStreaming: active.isStreaming.value,
     isSummarizing: active.isSummarizing.value,
+    ensureSession,
     onSend(content: string, files: any, _plan: boolean, onResult: (success: boolean) => void, attempt: drafts.SendAttempt) {
       const sending = active.sendMessage(content, { providerID: 'p', modelID: 'slow' }, files, attempt)
       sends.push(sending)
@@ -92,6 +93,23 @@ beforeEach(async () => {
   api.abortSession = async () => {}
   active = useSession()
   await active.selectSession({ id: 'A', directory: '/workspace/A', title: 'A', time: { created: 1, updated: 1 } })
+})
+
+test('mounted composer releases its callback after navigation and its last empty draft on unmount', async () => {
+  await mountComposer(async () => 'mounted-view')
+  const original = drafts.getComposerDraft('A')
+  expect(await original.ensureSession()).toBe('mounted-view')
+  original.text = 'unfinished old conversation'
+  await active.selectSession({ id: 'B', directory: '/workspace/B', title: 'B', time: { created: 1, updated: 1 } })
+  await Vue.nextTick()
+  expect(await original.ensureSession()).toBeNull()
+  const current = drafts.getComposerDraft('B')
+  expect(await current.ensureSession()).toBe('mounted-view')
+  app!.unmount(); app = undefined
+  await Promise.resolve()
+  expect(await current.ensureSession()).toBeNull()
+  expect(drafts.getComposerDraft('B')).not.toBe(current)
+  expect(drafts.getComposerDraft('A', undefined, '/workspace/A').text).toBe('unfinished old conversation')
 })
 afterEach(() => {
   app?.unmount()

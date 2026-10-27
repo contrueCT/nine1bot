@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { api, permissionApi, questionApi, type PermissionRequest, type QuestionRequest, type SSEEvent } from '../src/api/client'
 import { useSession } from '../src/composables/useSession'
 import { useParallelSessions } from '../src/composables/useParallelSessions'
+import { MAX_RECOVERY_BUFFER_EVENTS } from '../src/composables/sessionEventReconciler'
 
 const originals = [api, permissionApi, questionApi].map(object => [object, { ...object }] as const)
 const originalFrame = globalThis.requestAnimationFrame
@@ -139,6 +140,39 @@ for (const firstResponse of ['recovery', 'list'] as const) test(`list and runtim
     newQuestions.resolve([fresh]); await listing
     oldQuestions.resolve([question]); await recovering
   }
+  expect(active.pendingQuestions.value.map(item => item.id)).toEqual([fresh.id])
+})
+
+test('overflow retry starts a newer interaction read than a list completed during the discarded recovery', async () => {
+  const history = deferred<never[]>()
+  const started = deferred<void>()
+  let historyReads = 0
+  let questionReads = 0
+  let staleSignal: AbortSignal | undefined
+  api.getMessages = (_id, signal) => {
+    if (++historyReads === 1) {
+      staleSignal = signal
+      started.resolve()
+      return history.promise
+    }
+    return Promise.resolve([])
+  }
+  const middle = { ...question, id: 'list-during-recovery' }
+  const fresh = { ...question, id: 'fresh-retry' }
+  questionApi.list = async () => [[question], [middle], [fresh]][questionReads++] ?? []
+  const recovering = active.retryHistory()
+  await started.promise
+  await active.loadPendingRequests()
+  expect(active.pendingQuestions.value.map(item => item.id)).toEqual([middle.id])
+  for (let index = 0; index <= MAX_RECOVERY_BUFFER_EVENTS; index++) {
+    receive({ type: 'session.status', properties: { sessionID: selected.id, status: { type: 'busy' } } })
+  }
+  expect(await recovering).toBe(true)
+  expect(staleSignal?.aborted).toBe(true)
+  expect(historyReads).toBe(2)
+  expect(active.pendingQuestions.value.map(item => item.id)).toEqual([fresh.id])
+  history.resolve([])
+  await Promise.resolve()
   expect(active.pendingQuestions.value.map(item => item.id)).toEqual([fresh.id])
 })
 

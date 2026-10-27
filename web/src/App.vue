@@ -111,10 +111,11 @@ const {
   handleSSEEvent: handleTerminalEvent,
   terminals: agentTerminals,
   setSessionContext: setTerminalSessionContext,
+  clearTerminals,
 } = useAgentTerminal()
 
 // 文件预览
-const { handleSSEEvent: handlePreviewEvent } = useFilePreview()
+const { handleSSEEvent: handlePreviewEvent, closeAllPreviews } = useFilePreview()
 
 const {
   files,
@@ -542,6 +543,8 @@ function openCurrentExtensionSessionInMainWeb() {
 }
 
 function stopAuthenticatedRuntime(preserveDrafts = false) {
+  clearTerminals()
+  closeAllPreviews()
   if (!authenticatedRuntimeStarted) {
     clearDrafts(undefined, preserveDrafts)
     return

@@ -94,7 +94,8 @@ defineExpose({ fit })
           :cols="activeTerminal.cols"
           :status="activeTerminal.status"
           :output-data="activeScreen.outputData"
-          :output-seq="activeScreen.outputSeq"
+          :output-offset="activeScreen.outputOffset"
+          :output-needs-recovery="(activeScreen.outputOffset ?? 0) > (activeScreen.outputSnapshotOffset ?? 0)"
           :output-reset-token="activeScreen.outputResetToken"
         />
       </template>

@@ -151,13 +151,7 @@ export const AgentTerminalRoutes = lazy(() =>
             content: {
               "application/json": {
                 schema: resolver(
-                  z.object({
-                    buffer: z.string(),
-                    chunks: z.array(AgentTerminal.OutputChunk),
-                    latestSeq: z.number(),
-                    firstSeq: z.number(),
-                    reset: z.boolean(),
-                  })
+                  AgentTerminal.BufferSnapshot
                 ),
               },
             },
