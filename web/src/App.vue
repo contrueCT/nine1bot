@@ -98,6 +98,7 @@ const {
   registerEventHandler,
   // 并行会话
   syncSessionStatus,
+  handleGlobalSessionEvent,
   runningCount,
   isSessionRunning,
   // 会话通知
@@ -328,6 +329,7 @@ let stopSessionWatch: (() => void) | null = null
 let unregisterTerminalHandler: (() => void) | null = null
 let unregisterPreviewHandler: (() => void) | null = null
 let globalEventSource: EventStreamSubscription | null = null
+let globalEventSubscriptionVersion = 0
 let projectsRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let sessionsRetryTimer: ReturnType<typeof setTimeout> | null = null
 let sessionsRetryDelayMs = 1500
@@ -421,8 +423,15 @@ function subscribeGlobalEvents() {
   }
 
   const changesConnection = changesLiveUpdates.begin()
+  const runtimeGeneration = authenticatedRuntimeGeneration
+  const subscriptionVersion = ++globalEventSubscriptionVersion
+  const isCurrent = () => authenticatedRuntimeStarted
+    && runtimeGeneration === authenticatedRuntimeGeneration
+    && subscriptionVersion === globalEventSubscriptionVersion
   const subscription = api.subscribeGlobalEvents((event: GlobalSSEEventEnvelope) => {
+    if (!isCurrent()) return
     const payload = event.payload
+    if (payload) handleGlobalSessionEvent(payload, event.directory)
     changesConnection.received(payload)
     if (payload?.type === 'session.updated') {
       applySessionTitle(payload.properties?.info)
@@ -443,7 +452,11 @@ function subscribeGlobalEvents() {
   }, {
     onDisconnect: changesConnection.disconnected,
     onGiveUp: changesConnection.disconnected,
-    onOpen: changesConnection.ready,
+    onOpen() {
+      if (!isCurrent()) return
+      changesConnection.ready()
+      void syncSessionStatus(sidebarSessions.value, isCurrent)
+    },
   })
   globalEventSource = subscription
 }
@@ -609,7 +622,6 @@ async function startAuthenticatedRuntime() {
   // These requests are independent. Start history first so a slow status,
   // project or provider request cannot keep the sidebar empty.
   const initialSessions = loadSessions()
-  void syncSessionStatus()
   if (!isBrowserExtension.value) {
     void loadFiles('.')
     const projectsLoad = loadProjects().then(() => true).catch((error) => {
@@ -631,6 +643,7 @@ async function startAuthenticatedRuntime() {
 
   await initialSessions
   if (generation !== authenticatedRuntimeGeneration) return
+  void syncSessionStatus(sidebarSessions.value, () => generation === authenticatedRuntimeGeneration)
 
   const requestedSessionId = initialSessionIdFromUrl()
 
@@ -1114,6 +1127,7 @@ function handlePromptSelect(prompt: string) {
               :savingModel="savingModel"
         :disabled="isLoading"
         :isStreaming="isStreaming"
+        :isSummarizing="isSummarizing"
         :centered="messages.length === 0"
         :ensureSession="ensureCurrentSessionId"
         :providers="providers"
@@ -1303,6 +1317,7 @@ function handlePromptSelect(prompt: string) {
               :savingModel="savingModel"
               :disabled="isLoading"
               :isStreaming="isStreaming"
+              :isSummarizing="isSummarizing"
               :centered="isEmptyState"
               :ensureSession="ensureCurrentSessionId"
               :providers="providers"

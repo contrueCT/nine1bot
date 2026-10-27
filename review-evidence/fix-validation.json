@@ -1,0 +1,74 @@
+{
+  "baseline": "4d918fd1e555c5505705014f726b0b02d1167428",
+  "branch": "review/full-ux-20261022",
+  "runtime": "Bun 1.3.14 on macOS Apple Silicon",
+  "commands": {
+    "ci:test": {
+      "invocation": "npm exec --yes --package=bun@1.3.14 -- bun run ci:test",
+      "exit_code": 0,
+      "batches": [
+        {
+          "passed": 1247,
+          "skipped": 2,
+          "failed": 0
+        }
+      ]
+    },
+    "ci:test:opencode-runtime": {
+      "invocation": "npm exec --yes --package=bun@1.3.14 -- bun run ci:test:opencode-runtime",
+      "exit_code": 0,
+      "batches": [
+        {
+          "passed": 518,
+          "skipped": 13,
+          "failed": 0
+        },
+        {
+          "passed": 1,
+          "skipped": 0,
+          "failed": 0
+        }
+      ]
+    },
+    "ci:typecheck": {
+      "invocation": "npm exec --yes --package=bun@1.3.14 -- bun run ci:typecheck",
+      "exit_code": 0,
+      "result": "passed"
+    },
+    "build:web": {
+      "invocation": "npm exec --yes --package=bun@1.3.14 -- bun run build:web",
+      "exit_code": 0,
+      "result": "passed"
+    }
+  },
+  "additional_opencode_typecheck": {
+    "status": "existing baseline errors only",
+    "error_count": 12,
+    "errors": [
+      "src/mcp/index.ts(557,20): error TS2339: Property 'on' does not exist on type 'ChildProcess'.",
+      "src/mcp/index.ts(557,33): error TS7006: Parameter 'error' implicitly has an 'any' type.",
+      "src/mcp/index.ts(561,20): error TS2339: Property 'on' does not exist on type 'ChildProcess'.",
+      "src/mcp/index.ts(561,32): error TS7006: Parameter 'code' implicitly has an 'any' type.",
+      "../sdk/js/src/server.ts(65,10): error TS2339: Property 'on' does not exist on type 'ChildProcessWithoutNullStreams'.",
+      "../sdk/js/src/server.ts(65,22): error TS7006: Parameter 'code' implicitly has an 'any' type.",
+      "../sdk/js/src/server.ts(73,10): error TS2339: Property 'on' does not exist on type 'ChildProcessWithoutNullStreams'.",
+      "../sdk/js/src/server.ts(73,23): error TS7006: Parameter 'error' implicitly has an 'any' type.",
+      "../sdk/js/src/v2/server.ts(65,10): error TS2339: Property 'on' does not exist on type 'ChildProcessWithoutNullStreams'.",
+      "../sdk/js/src/v2/server.ts(65,22): error TS7006: Parameter 'code' implicitly has an 'any' type.",
+      "../sdk/js/src/v2/server.ts(73,10): error TS2339: Property 'on' does not exist on type 'ChildProcessWithoutNullStreams'.",
+      "../sdk/js/src/v2/server.ts(73,23): error TS7006: Parameter 'error' implicitly has an 'any' type."
+    ]
+  },
+  "browser_verification": {
+    "fixture": "web/test/fixtures/docx-browser.html",
+    "proof": "review-evidence/docx-browser-verification.jpg",
+    "result": "DOCX rendered on first open and changed from document A to document B"
+  },
+  "not_executed": [
+    "Real provider OAuth login",
+    "Real LLM inference",
+    "Production deployment",
+    "Native Linux-only tests",
+    "Real Chrome/MV3 regression"
+  ]
+}

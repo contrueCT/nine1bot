@@ -1,0 +1,22 @@
+bun test v1.3.14 (0d9b296a)
+
+test/server/full-review-platform-inheritance.test.ts:
+PLATFORM_INHERITANCE {"status":200,"configAfterRead":{},"enabledAfterRead":true}
+(pass) review: reading platform list discards inherited startup configuration [19.90ms]
+
+test/server/full-review-audit.test.ts:
+AUDIT_SUMMARIZE {"status":409,"before":0,"after":1,"lastPart":"compaction"}
+(pass) AUDIT: a rejected busy summarize has already appended a compaction request [30.61ms]
+AUDIT_UPLOAD {"firstStatus":200,"secondStatus":200,"sameURL":true,"secondContentOnDisk":"FIRST"}
+(pass) AUDIT: overlapping uploads with the same filename overwrite one another [16.07ms]
+AUDIT_FORK {"forkSurvives":true,"forkAttachmentExistsAfterDeletingSource":false}
+(pass) AUDIT: deleting a source session also deletes forked attachment data [11.94ms]
+AUDIT_GIT_INIT {"projectIDChanged":true,"originalSessionStatus":404,"sessionsAfter":0,"originalDataStillStored":true}
+(pass) AUDIT: first Git commit makes existing directory sessions inaccessible after reopen [73.68ms]
+AUDIT_DIRECTORY_ALIAS {"canonicalHasSession":true,"equivalentAliasResults":0}
+(pass) AUDIT: equivalent directory query aliases hide existing sessions [2.88ms]
+
+ 6 pass
+ 0 fail
+ 25 expect() calls
+Ran 6 tests across 2 files. [429.00ms]

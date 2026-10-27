@@ -11,6 +11,7 @@ const props = defineProps<{
   modelError?: string
   savingModel?: boolean
   isStreaming: boolean
+  isSummarizing?: boolean
   centered?: boolean
   ensureSession?: () => Promise<string | null>
   providers?: Provider[]
@@ -129,6 +130,12 @@ watch(draft, async owner => {
 function togglePlanMode() {
   isPlanMode.value = !isPlanMode.value
   showPlusMenu.value = false
+}
+
+function handleCompressSession() {
+  if (props.disabled || props.isStreaming || props.isSummarizing) return
+  showPlusMenu.value = false
+  emit('compress-session')
 }
 
 /* 起手任务只填进输入框、不直接发送：用户通常还要补一句具体要求 */
@@ -400,9 +407,9 @@ function formatSize(bytes: number): string {
                 <span>技能</span>
               </button>
               <div class="plus-menu-divider"></div>
-              <button class="plus-menu-item" @click="showPlusMenu = false; emit('compress-session')">
+              <button class="plus-menu-item" :disabled="disabled || isStreaming || isSummarizing" @click="handleCompressSession">
                 <Minimize2 :size="16" />
-                <span>压缩会话</span>
+                <span>{{ isSummarizing ? '压缩中…' : '压缩会话' }}</span>
               </button>
             </div>
           </div>

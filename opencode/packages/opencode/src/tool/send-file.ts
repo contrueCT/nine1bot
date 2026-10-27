@@ -1,5 +1,6 @@
 import z from "zod"
 import * as path from "path"
+import { pathToFileURL } from "node:url"
 import { Tool } from "./tool"
 import { Identifier } from "../id/id"
 import { Instance } from "../project/instance"
@@ -83,7 +84,7 @@ Example:
           type: "file" as const,
           mime,
           filename,
-          url: `file://${filepath}`,
+          url: pathToFileURL(filepath).href,
         },
       ],
     }

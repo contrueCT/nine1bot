@@ -2254,6 +2254,32 @@ export interface AuthMethod {
   name?: string
 }
 
+export interface ProviderAuthorization {
+  url: string
+  method: 'auto' | 'code'
+  instructions: string
+}
+
+type ProviderAuthRequestOptions = { signal?: AbortSignal; directory?: string; timeoutMs?: number }
+
+async function providerAuthRequest(path: string, init: RequestInit, options: ProviderAuthRequestOptions, defaultTimeout: number) {
+  const directory = options.directory ?? getApiDirectory()
+  const url = `${BASE_URL}${path}${directory ? `?directory=${encodeURIComponent(directory)}` : ''}`
+  const headers = new Headers(init.headers)
+  if (directory) headers.set('x-opencode-directory', encodeURIComponent(directory))
+  const controller = new AbortController()
+  const abort = () => controller.abort(options.signal?.reason)
+  options.signal?.addEventListener('abort', abort, { once: true })
+  if (options.signal?.aborted) abort()
+  const timer = setTimeout(() => controller.abort(new Error('授权等待超时，请重新登录')), options.timeoutMs ?? defaultTimeout)
+  try {
+    return await requireOk(await fetch(url, { ...init, headers, signal: controller.signal }))
+  } finally {
+    clearTimeout(timer)
+    options.signal?.removeEventListener('abort', abort)
+  }
+}
+
 export interface AuthImportResult {
   sourceFound: boolean
   imported: string[]
@@ -2630,7 +2656,7 @@ export const providerApi = {
       normalized[providerId] = list
         .map((method: any) => ({
           type: method?.type === 'apiKey' ? 'api' : method?.type,
-          name: method?.name
+          name: method?.name ?? method?.label
         }))
         .filter((method: any) => method.type === 'api' || method.type === 'oauth')
     }
@@ -2638,23 +2664,26 @@ export const providerApi = {
   },
 
   // 启动 OAuth - 需要 method index
-  async startOAuth(providerId: string, methodIndex: number = 0): Promise<{ url: string }> {
-    const res = await requireOk(await fetchWithTimeout(`${BASE_URL}/provider/${encodeURIComponent(providerId)}/oauth/authorize`, {
+  async startOAuth(providerId: string, methodIndex: number = 0, options: ProviderAuthRequestOptions = {}): Promise<ProviderAuthorization> {
+    const res = await providerAuthRequest(`/provider/${encodeURIComponent(providerId)}/oauth/authorize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ method: methodIndex })
-    }))
+    }, options, DEFAULT_TIMEOUT)
     const data = await res.json()
-    return { url: data.url || data.authorizationUrl }
+    const url = data?.url || data?.authorizationUrl
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) throw new Error('授权服务未返回有效的登录地址')
+    if (data.method !== undefined && data.method !== 'auto' && data.method !== 'code') throw new Error('不支持的授权方式')
+    return { url, method: data.method ?? 'auto', instructions: typeof data.instructions === 'string' ? data.instructions : '' }
   },
 
   // 完成 OAuth 回调
-  async completeOAuth(providerId: string, code: string, methodIndex: number = 0): Promise<void> {
-    await fetchWithDirectory(`${BASE_URL}/provider/${encodeURIComponent(providerId)}/oauth/callback`, {
+  async completeOAuth(providerId: string, code?: string, methodIndex: number = 0, options: ProviderAuthRequestOptions = {}): Promise<void> {
+    await providerAuthRequest(`/provider/${encodeURIComponent(providerId)}/oauth/callback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ method: methodIndex, code })
-    })
+    }, options, 5 * 60_000)
   }
 }
 

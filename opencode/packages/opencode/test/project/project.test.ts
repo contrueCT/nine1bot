@@ -16,7 +16,7 @@ describe("Project.fromDirectory", () => {
     const { project } = await Project.fromDirectory(tmp.path)
 
     expect(project).toBeDefined()
-    expect(project.id).toBe("global")
+    expect(project.id).toBe(Project.directoryProjectID(tmp.path))
     expect(project.vcs).toBe("git")
     expect(project.worktree).toBe(tmp.path)
 

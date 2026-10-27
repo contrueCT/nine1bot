@@ -39,6 +39,8 @@ import { z } from "zod"
 import { LoadAPIKeyError } from "ai"
 import type { Event, OpencodeClient, SessionMessageResponse } from "@opencode-ai/sdk/v2"
 import { applyPatch } from "diff"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { basename } from "node:path"
 
 export namespace ACP {
   const log = Log.create({ service: "acp-agent" })
@@ -1392,8 +1394,7 @@ export namespace ACP {
   ): { type: "file"; url: string; filename: string; mime: string } | { type: "text"; text: string } {
     try {
       if (uri.startsWith("file://")) {
-        const path = uri.slice(7)
-        const name = path.split("/").pop() || path
+        const name = basename(fileURLToPath(uri))
         return {
           type: "file",
           url: uri,
@@ -1408,7 +1409,7 @@ export namespace ACP {
           const name = path.split("/").pop() || path
           return {
             type: "file",
-            url: `file://${path}`,
+            url: pathToFileURL(path).href,
             filename: name,
             mime: "text/plain",
           }

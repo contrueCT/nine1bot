@@ -321,7 +321,7 @@ describe('web config APIs', () => {
     expect(await providerApi.getAuthMethods()).toEqual({
       openai: [{ type: 'api', name: 'API Key' }, { type: 'oauth', name: 'OAuth' }],
     })
-    expect(await providerApi.startOAuth('openai', 1)).toEqual({ url: 'https://provider.example/oauth' })
+    expect(await providerApi.startOAuth('openai', 1)).toEqual({ url: 'https://provider.example/oauth', method: 'auto', instructions: '' })
     await providerApi.completeOAuth('openai', 'code-123', 1)
     expect(await nine1botConfigApi.get()).toEqual({ model: 'openai/gpt-5', configPath: 'nine1bot.config.jsonc' })
     await nine1botConfigApi.update({ model: 'openai/gpt-5' })
@@ -367,6 +367,9 @@ describe('web config APIs', () => {
   it('keeps provider and auth operations in the active project directory', async () => {
     setApiDirectory('D:/workspace/active project')
     installFetchMock((url) => {
+      if (url.includes('/oauth/authorize')) {
+        return jsonResponse({ url: 'https://provider.example/oauth', method: 'auto', instructions: 'Finish in your browser' })
+      }
       if (url.startsWith('/provider')) {
         return jsonResponse({ all: [], default: {}, connected: [] })
       }
