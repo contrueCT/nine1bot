@@ -5,6 +5,7 @@ import type { ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { agentTerminalApi } from '../api/client'
+import { useAgentTerminal } from '../composables/useAgentTerminal'
 
 const props = defineProps<{
   terminalId: string  // 终端 ID，用于调用 API
@@ -17,7 +18,8 @@ const props = defineProps<{
   status?: 'running' | 'exited'  // 终端状态
   /** 原始输出增量数据 - 用于保持滚动历史 */
   outputData?: string
-  outputSeq?: number
+  outputOffset?: number
+  outputNeedsRecovery?: boolean
   outputResetToken?: number
 }>()
 
@@ -65,12 +67,11 @@ function readTerminalTheme(): ITheme {
 // 当前后端终端的尺寸
 let currentBackendRows = props.rows || 24
 let currentBackendCols = props.cols || 120
-// 标记是否已初始化（已加载历史缓冲）
-let isInitialized = false
-let lastAppliedSeq = 0
-const pendingOutput: Array<{ seq?: number; data: string; resetToken?: number }> = []
+let outputEnd = 0
+let outputEpoch: number | undefined
+let hasOutput = false
 
-onMounted(async () => {
+onMounted(() => {
   if (!terminalRef.value) return
 
   // 根据终端状态决定是否允许输入
@@ -116,22 +117,9 @@ onMounted(async () => {
     emit('input', data)
   })
 
-  // 从后端加载完整的历史缓冲区
-  try {
-    const { buffer, latestSeq } = await agentTerminalApi.getBuffer(props.terminalId, props.sessionId)
-    if (buffer && terminal) {
-      terminal.write(buffer)
-    }
-    lastAppliedSeq = latestSeq
-    isInitialized = true
-    flushPendingOutput()
-  } catch (e) {
-    console.warn('Failed to load terminal buffer, falling back to screen:', e)
-    // 回退到屏幕内容
-    updateScreen(props.screenAnsi)
-    isInitialized = true
-    flushPendingOutput()
-  }
+  // The composable owns recovery. Its bounded output window also survives Vue
+  // batching and viewer remounts, so initialization needs no second buffer fetch.
+  syncOutput()
 
   // 适应容器大小并设置 ResizeObserver
   nextTick(() => {
@@ -205,22 +193,11 @@ async function fitAndSync() {
 }
 
 // 监听原始输出增量数据
-watch([() => props.outputSeq, () => props.outputResetToken, () => props.outputData], ([seq, resetToken, data]) => {
-  if (data === undefined && !resetToken && seq === undefined) return
-  const item = { seq, data: data || '', resetToken }
-  if (!terminal || !isInitialized) {
-    pendingOutput.push(item)
-    return
-  }
-  applyOutput(item)
-})
+watch([() => props.outputOffset, () => props.outputResetToken, () => props.outputData], syncOutput)
 
-// 监听屏幕内容变化（仅在没有 outputData 时作为回退）
-// 注意：如果使用了 outputData 模式，screenAnsi 的变化会被忽略
+// 屏幕快照只用于原始输出尚不可用时的回退。
 watch(() => props.screenAnsi, (newScreen) => {
-  // 如果已初始化并且有 outputData 支持，不再使用 screen 更新
-  // 因为 outputData 会直接追加原始数据
-  if (isInitialized && props.outputData !== undefined) return
+  if (props.outputData !== undefined) return
   updateScreen(newScreen)
 })
 
@@ -267,46 +244,26 @@ function updateScreen(screen: string) {
   }
 }
 
-function applyScreenSnapshot(screen: string) {
-  if (!terminal || !screen) return
-
-  terminal.write('\x1b[H\x1b[2J')
-  const lines = screen.split('\n')
-  for (let i = 0; i < lines.length; i++) {
-    terminal.write(lines[i])
-    if (i < lines.length - 1) {
-      terminal.write('\r\n')
-    }
-  }
-
-  if (props.cursor) {
-    terminal.write(`\x1b[${props.cursor.row + 1};${props.cursor.col + 1}H`)
-  }
-}
-
-function flushPendingOutput() {
-  while (pendingOutput.length > 0) {
-    applyOutput(pendingOutput.shift()!)
-  }
-}
-
-function applyOutput(item: { seq?: number; data: string; resetToken?: number }) {
+function syncOutput() {
   if (!terminal) return
-
-  if (item.resetToken) {
-    terminal.clear()
-    terminal.reset()
-    if (item.data) terminal.write(item.data)
-    applyScreenSnapshot(props.screenAnsi)
-    lastAppliedSeq = item.seq ?? lastAppliedSeq
+  const data = props.outputData
+  if (data === undefined) {
+    updateScreen(props.screenAnsi)
     return
   }
-
-  if (item.seq !== undefined) {
-    if (item.seq <= lastAppliedSeq) return
-    lastAppliedSeq = item.seq
-  }
-  if (item.data) terminal.write(item.data)
+  const start = props.outputOffset ?? 0
+  const end = start + data.length
+  if (!hasOutput || outputEpoch !== props.outputResetToken || outputEnd < start) {
+    terminal.clear()
+    terminal.reset()
+    terminal.write(data)
+    // Cropping can lose persistent screen state (e.g. a prompt above progress
+    // updates), both on remount and when a batch outruns the retained window.
+    if (props.outputNeedsRecovery) void useAgentTerminal().recoverTerminalOutput(props.terminalId)
+  } else if (end > outputEnd) terminal.write(data.slice(outputEnd - start))
+  hasOutput = true
+  outputEpoch = props.outputResetToken
+  outputEnd = end
 }
 
 // 聚焦终端

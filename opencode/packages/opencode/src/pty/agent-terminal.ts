@@ -9,6 +9,7 @@ import { ProjectEnvironment } from "../project/environment"
 import { lazy } from "@opencode-ai/util/lazy"
 import { Shell } from "@/shell/shell"
 import { ScreenBuffer } from "./screen-buffer"
+import { captureBufferSnapshot } from "./buffer-snapshot"
 import path from "path"
 
 /**
@@ -66,6 +67,10 @@ export namespace AgentTerminal {
     latestSeq: z.number().int().nonnegative(),
     firstSeq: z.number().int().nonnegative(),
     reset: z.boolean(),
+    screen: z.object({
+      screenAnsi: z.string(),
+      cursor: z.object({ row: z.number(), col: z.number() }),
+    }).optional(),
   })
 
   export type BufferSnapshot = z.infer<typeof BufferSnapshot>
@@ -582,27 +587,9 @@ export namespace AgentTerminal {
   export async function getBuffer(id: string, afterSeq: number | undefined, sessionID: string): Promise<BufferSnapshot | undefined> {
     const session = state().get(id)
     if (!session || !belongsToSession(session, sessionID)) return undefined
-    await flushOutput(session)
-
-    const latestSeq = session.outputSeq
-    const firstSeq = session.outputChunks[0]?.seq ?? latestSeq + 1
-    if (afterSeq !== undefined) {
-      const reset = afterSeq < firstSeq - 1
-      return {
-        buffer: reset ? session.rawBuffer : "",
-        chunks: reset ? [] : session.outputChunks.filter((chunk) => chunk.seq > afterSeq),
-        latestSeq,
-        firstSeq,
-        reset,
-      }
-    }
-
-    return {
-      buffer: session.rawBuffer,
-      chunks: [],
-      latestSeq,
-      firstSeq,
-      reset: true,
-    }
+    // flushOutput assigns the sequence synchronously. Capture the screen queue
+    // position before awaiting publication or allowing later PTY writes in.
+    void flushOutput(session)
+    return captureBufferSnapshot(session, afterSeq)
   }
 }

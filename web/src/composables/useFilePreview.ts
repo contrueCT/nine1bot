@@ -19,6 +19,8 @@ const isPanelOpen = ref(false)
 
 // base64 内容驻留内存，限制条数，FIFO 淘汰最旧预览
 const MAX_PREVIEWS = 50
+let previewGeneration = 0
+const pendingPreviews = new Set<AbortController>()
 
 function addPreview(info: FilePreviewInfo) {
   // 同 id 覆盖时先删除，保证插入顺序即新旧顺序
@@ -191,6 +193,9 @@ export function useFilePreview() {
   }
 
   function closeAllPreviews() {
+    previewGeneration++
+    for (const controller of pendingPreviews) controller.abort()
+    pendingPreviews.clear()
     previews.value.clear()
     activePreviewId.value = null
     isPanelOpen.value = false
@@ -211,19 +216,24 @@ export function useFilePreview() {
     filePath: string,
     options?: { interactive?: boolean; sessionID?: string }
   ): Promise<boolean> {
+    const generation = previewGeneration
+    const controller = new AbortController()
+    pendingPreviews.add(controller)
+    const timeout = setTimeout(() => controller.abort(), 30_000)
     try {
       const params = new URLSearchParams({ path: filePath })
       if (options?.interactive) {
         params.set('interactive', 'true')
       }
 
-      const res = await fetch(`/file/preview-by-path?${params}`)
+      const res = await fetch(`/file/preview-by-path?${params}`, { signal: controller.signal })
       if (!res.ok) {
         console.error('Failed to load preview:', await res.text())
         return false
       }
 
       const data = await res.json()
+      if (generation !== previewGeneration || controller.signal.aborted) return false
 
       // Generate a new preview ID（时间戳 + 随机后缀，避免同毫秒碰撞）
       const previewId = `preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -245,8 +255,11 @@ export function useFilePreview() {
 
       return true
     } catch (error) {
-      console.error('Failed to open preview:', error)
+      if (!controller.signal.aborted) console.error('Failed to open preview:', error)
       return false
+    } finally {
+      clearTimeout(timeout)
+      pendingPreviews.delete(controller)
     }
   }
 
